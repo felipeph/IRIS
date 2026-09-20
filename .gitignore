@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Ambientes Virtuais
+venv/
+.venv/
+env/
+.env/
+
+# Testes e Cobertura
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# IDEs / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Arquivos sensíveis e senhas
+.env
+config.yaml
+iris/config.yaml
+
+# Específicos do IRIS
+_old/
+scratch.py
+iris/docs/features_and_use_cases.md
+iris/docs/ai_system_context.md

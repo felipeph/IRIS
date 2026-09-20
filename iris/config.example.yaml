@@ -1,0 +1,25 @@
+general:
+  theme: dark
+  log_level: INFO
+  destination_root: "/caminho/para/destino"
+  default_source: "/caminho/para/origem"
+  last_project: null
+
+pipeline:
+  stages:
+    - id: ingestion
+      name: "Ingestão de Arquivos (SD -> SSD)"
+      module: "src.modules.ingestion.stage"
+      enabled: true
+    - id: cleanup
+      name: "Limpeza da Origem (Após verificação)"
+      module: "src.modules.cleanup.stage"
+      enabled: true
+
+modules:
+  dedup:
+    enabled: true
+  timelapse:
+    enabled: true
+  bird_detect:
+    enabled: true

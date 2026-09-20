@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIS - Constituição e Regras de Negócio</title>
+    
+    <!-- Google Fonts: Inter para leitura limpa e moderna -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Estilo customizado -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <header class="header">
+        <div class="container">
+            <h1>IRIS</h1>
+            <p>Painel de Arquitetura e Regras de Negócio</p>
+        </div>
+    </header>
+
+    <main class="container">
+        
+        <section class="card">
+            <div class="card-header">
+                <h2>1. Fluxo de Ingestão e Organização</h2>
+                <p>O ciclo de vida da mídia, desde o cartão SD até a estruturação cronológica no SSD.</p>
+            </div>
+            <div class="card-body">
+                <div class="mermaid">
+                    graph TD
+                        SD((Origem: Cartão SD)) -->|CLI: Ingestão| IN[1_Entrada / Staging]
+                        IN -->|Projeto: iris_YYYY-MM-DD| ORG{Motor de Classificação}
+                        ORG -->|Fotos Avulsas| AD[2_AlbunsDatas / YYYY / MM / DD]
+                        ORG -->|Vídeos Comuns| VD[3_Videos / YYYY / MM / DD]
+                        ORG -->|Sequências GoPro| TL[4_Timelapses / Camera / ...]
+                        ORG -->|Superzoom/RAW| AST[5_Astrofotografia / Lua / ...]
+                        
+                        classDef default fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#334155;
+                        classDef accent fill:#f1f5f9,stroke:#94a3b8,stroke-width:2px,color:#0f172a,font-weight:600;
+                        class IN,ORG accent;
+                </div>
+                <div class="rules-list">
+                    <strong>Regras de Ouro:</strong>
+                    <ul>
+                        <li><strong>Zero Data Loss:</strong> A exclusão da origem requer confirmação e garantia de backup.</li>
+                        <li><strong>Naming Convention:</strong> `{date}_{time}_{camera}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}`</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-header">
+                <h2>2. Processamento de Vídeo e YouTube</h2>
+                <p>Padrões de renderização e automação de publicação baseados no `timelapse_studio.py`.</p>
+            </div>
+            <div class="card-body">
+                <div class="mermaid">
+                    graph LR
+                        RAW[Clipes Brutos] --> ST[Stitching / Juntar]
+                        ST --> FF[FFmpeg Upscale 4K UHD]
+                        TSeq[Fotos GoPro] --> FF
+                        
+                        FF -->|Aceleração GPU| OUT(Vídeo Final .mp4)
+                        OUT -->|OAuth 2.0 API| YT{YouTube Upload}
+                        
+                        YT -->|Resumable Upload| U[Não Listado]
+                        YT -->|Metadados Ricos| PL[Auto Playlist]
+                        
+                        classDef default fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#334155;
+                        classDef accent fill:#f1f5f9,stroke:#94a3b8,stroke-width:2px,color:#0f172a,font-weight:600;
+                        class FF,YT accent;
+                </div>
+                <div class="rules-list">
+                    <strong>Regras de Ouro:</strong>
+                    <ul>
+                        <li><strong>Padrão Ouro:</strong> Resolução final sempre em 4K UHD (3840x2160).</li>
+                        <li><strong>Upload Resumable:</strong> Prevenir quebras durante uploads pesados, injetando metadata (GPS, Data).</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-header">
+                <h2>3. IRIS como Hub (Ferramentas Independentes)</h2>
+                <p>Mapeamento de funções fora do fluxo quente, rodadas sob demanda pelo usuário.</p>
+            </div>
+            <div class="card-body">
+                <div class="mermaid">
+                    graph TD
+                        IRIS((IRIS Hub))
+                        
+                        IRIS -->|Fluxo Quente| PIPE[Pipeline de Ingestão e Edição]
+                        IRIS -->|Offline / Manual| F2DB[folders-2-db<br>Indexação SQLite Rápida]
+                        IRIS -->|Offline / Manual| DEDUP[dedup-folder<br>Deduplicação Massiva]
+                        
+                        DEDUP -.->|Checagem Segura| HASH[Hash SHA-256 + Tamanho Arquivo]
+                        
+                        classDef default fill:#ffffff,stroke:#cbd5e1,stroke-width:1px,color:#334155;
+                        classDef hub fill:#f8fafc,stroke:#64748b,stroke-width:2px,color:#0f172a,font-weight:bold;
+                        class IRIS hub;
+                </div>
+                <div class="rules-list">
+                    <strong>Regras de Ouro:</strong>
+                    <ul>
+                        <li><strong>Deduplicação Rigorosa:</strong> O critério de igualdade não usa apenas o nome do arquivo, mas conteúdo (SHA-256).</li>
+                        <li><strong>Banco de Dados Local:</strong> `folders-2-db` viabiliza navegação off-line estruturada sobre a mídia.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
