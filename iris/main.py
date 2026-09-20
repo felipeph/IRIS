@@ -143,7 +143,7 @@ def run_pipeline_for_project(active_project):
         elif choice == "P":
             break
         elif choice == "C":
-            ConfigManagerUI().show()
+            show_config_menu()
         elif choice == "R" or choice == "":
             runner.run_project(active_project)
             Prompt.ask("\n[dim]Pressione ENTER para continuar...[/dim]")
