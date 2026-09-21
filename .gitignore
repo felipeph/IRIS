@@ -47,6 +47,11 @@ cover/
 .env
 config.yaml
 iris/config.yaml
+secrets/
+iris/secrets/
+*.json
+!iris/config.example.json
+
 
 # Específicos do IRIS
 _old/

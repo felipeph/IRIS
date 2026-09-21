@@ -30,6 +30,14 @@ def show_config_menu():
         table.add_row("5", "Padrão Nome (Vídeos)", str(config.get("naming.video_pattern")))
         table.add_row("6", "Zoom Lua (mm) Threshold", str(config.get("classification.moon_zoom_threshold_mm")))
         table.add_row("7", "Min Fotos Timelapse", str(config.get("classification.timelapse_min_photos")))
+        table.add_row("8", "FPS Timelapse", str(config.get("modules.timelapse.fps", 60)))
+        table.add_row("9", "Frames por Foto (FPI)", str(config.get("modules.timelapse.frames_per_image", 1)))
+        table.add_row("10", "Modo de Corte (Crop)", str(config.get("modules.timelapse.crop_mode", "bottom")))
+        table.add_row("11", "Fator Qualidade CRF", str(config.get("modules.timelapse.crf", 15)))
+        table.add_row("12", "Preset FFmpeg", str(config.get("modules.timelapse.preset", "ultrafast")))
+        table.add_row("13", "Privacidade YouTube", str(config.get("modules.youtube.privacy_status", "unlisted")))
+        table.add_row("14", "Playlist YouTube", str(config.get("modules.youtube.playlist", "Timelapses")))
+        table.add_row("15", "Tópico NTFY Notificações", str(config.get("modules.timelapse.ntfy_topic", "timelapse-studio-2026")))
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -76,6 +84,63 @@ def show_config_menu():
                 console.print("[green]Salvo![/green]")
             except ValueError:
                 console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "8":
+            new_val = Prompt.ask("Novo FPS para Timelapse", default=str(config.get("modules.timelapse.fps", 60)))
+            try:
+                config.set("modules.timelapse.fps", int(new_val))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "9":
+            new_val = Prompt.ask("Frames por Foto (FPI)", default=str(config.get("modules.timelapse.frames_per_image", 1)))
+            try:
+                config.set("modules.timelapse.frames_per_image", int(new_val))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "10":
+            console.print("Modos de Enquadramento: [bold]bottom[/bold] (Base), [bold]center[/bold] (Centro), [bold]top[/bold] (Topo)")
+            new_val = Prompt.ask("Novo Modo de Corte", default=str(config.get("modules.timelapse.crop_mode", "bottom"))).lower()
+            if new_val in ["bottom", "center", "top"]:
+                config.set("modules.timelapse.crop_mode", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida! Escolha bottom, center ou top.[/red]")
+            time.sleep(1)
+        elif choice == "11":
+            new_val = Prompt.ask("Fator de Qualidade CRF (0-51, menor = melhor)", default=str(config.get("modules.timelapse.crf", 15)))
+            try:
+                config.set("modules.timelapse.crf", int(new_val))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "12":
+            new_val = Prompt.ask("Preset FFmpeg (ultrafast, superfast, medium, slow)", default=str(config.get("modules.timelapse.preset", "ultrafast")))
+            config.set("modules.timelapse.preset", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "13":
+            new_val = Prompt.ask("Privacidade no YouTube (unlisted, private, public)", default=str(config.get("modules.youtube.privacy_status", "unlisted"))).lower()
+            if new_val in ["unlisted", "private", "public"]:
+                config.set("modules.youtube.privacy_status", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida![/red]")
+            time.sleep(1)
+        elif choice == "14":
+            new_val = Prompt.ask("Playlist no YouTube", default=str(config.get("modules.youtube.playlist", "Timelapses")))
+            config.set("modules.youtube.playlist", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "15":
+            new_val = Prompt.ask("Canal do NTFY", default=str(config.get("modules.timelapse.ntfy_topic", "timelapse-studio-2026")))
+            config.set("modules.timelapse.ntfy_topic", new_val)
+            config.set("modules.youtube.ntfy_topic", new_val)
+            console.print("[green]Salvo![/green]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

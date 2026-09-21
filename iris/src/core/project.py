@@ -24,6 +24,28 @@ def init_central_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS timelapses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_name TEXT,
+                sequence_dir TEXT,
+                output_video_path TEXT UNIQUE,
+                photo_count INTEGER,
+                fps INTEGER,
+                frames_per_image INTEGER,
+                resolution TEXT,
+                crop_mode TEXT,
+                encoder TEXT,
+                duration_seconds REAL,
+                speedup_factor INTEGER,
+                youtube_video_id TEXT,
+                youtube_url TEXT,
+                youtube_privacy TEXT,
+                status TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 init_central_db()
@@ -130,6 +152,28 @@ class Project:
                     extra_organized_paths_json TEXT DEFAULT '[]'
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS timelapses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_name TEXT,
+                    sequence_dir TEXT,
+                    output_video_path TEXT UNIQUE,
+                    photo_count INTEGER,
+                    fps INTEGER,
+                    frames_per_image INTEGER,
+                    resolution TEXT,
+                    crop_mode TEXT,
+                    encoder TEXT,
+                    duration_seconds REAL,
+                    speedup_factor INTEGER,
+                    youtube_video_id TEXT,
+                    youtube_url TEXT,
+                    youtube_privacy TEXT,
+                    status TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
 
     def save_metadata(self):
@@ -234,6 +278,88 @@ class Project:
         # Para compatibilidade com códigos que apenas chamavam p.save() para salvar metadados
         self.save_metadata()
 
+    def save_timelapse(self, record: dict):
+        """Salva ou atualiza um timelapse no banco do projeto e sincroniza no banco central."""
+        self._init_project_db()
+        record_copy = dict(record)
+        record_copy["project_name"] = self.name
+        
+        with sqlite3.connect(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO timelapses (
+                    project_name, sequence_dir, output_video_path, photo_count,
+                    fps, frames_per_image, resolution, crop_mode, encoder,
+                    duration_seconds, speedup_factor, youtube_video_id, youtube_url,
+                    youtube_privacy, status, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(output_video_path) DO UPDATE SET
+                    photo_count=excluded.photo_count,
+                    fps=excluded.fps,
+                    frames_per_image=excluded.frames_per_image,
+                    resolution=excluded.resolution,
+                    crop_mode=excluded.crop_mode,
+                    encoder=excluded.encoder,
+                    duration_seconds=excluded.duration_seconds,
+                    speedup_factor=excluded.speedup_factor,
+                    youtube_video_id=COALESCE(excluded.youtube_video_id, timelapses.youtube_video_id),
+                    youtube_url=COALESCE(excluded.youtube_url, timelapses.youtube_url),
+                    youtube_privacy=COALESCE(excluded.youtube_privacy, timelapses.youtube_privacy),
+                    status=excluded.status,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (
+                self.name,
+                record_copy.get("sequence_dir", ""),
+                record_copy.get("output_video_path", ""),
+                record_copy.get("photo_count", 0),
+                record_copy.get("fps", 60),
+                record_copy.get("frames_per_image", 1),
+                record_copy.get("resolution", "3840x2160"),
+                record_copy.get("crop_mode", "bottom"),
+                record_copy.get("encoder", ""),
+                record_copy.get("duration_seconds", 0.0),
+                record_copy.get("speedup_factor", 1),
+                record_copy.get("youtube_video_id", ""),
+                record_copy.get("youtube_url", ""),
+                record_copy.get("youtube_privacy", "unlisted"),
+                record_copy.get("status", "rendered")
+            ))
+            conn.commit()
+            
+        save_central_timelapse(record_copy)
+
+    def get_timelapses(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Recupera todos os timelapses do projeto (opcionalmente filtrando por status)."""
+        if not self._project_db_file.exists():
+            return []
+        self._init_project_db()
+        results = []
+        with sqlite3.connect(self._project_db_file) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            if status:
+                cursor.execute("SELECT * FROM timelapses WHERE status=? ORDER BY created_at ASC", (status,))
+            else:
+                cursor.execute("SELECT * FROM timelapses ORDER BY created_at ASC")
+            for row in cursor.fetchall():
+                results.append(dict(row))
+        return results
+
+    def update_timelapse_youtube(self, video_path: str, video_id: str, url: str):
+        """Atualiza o link/ID do YouTube do timelapse no banco do projeto e no banco central."""
+        if not self._project_db_file.exists():
+            return
+        with sqlite3.connect(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE timelapses
+                SET youtube_video_id=?, youtube_url=?, status='uploaded', updated_at=CURRENT_TIMESTAMP
+                WHERE output_video_path=?
+            """, (video_id, url, video_path))
+            conn.commit()
+        update_central_timelapse_youtube(video_path, video_id, url)
+
+
 def get_project(name: str) -> Optional[Project]:
     """Recupera um projeto existente ou retorna None."""
     p = Project(name)
@@ -263,3 +389,78 @@ def list_open_projects() -> List[str]:
         except sqlite3.OperationalError:
             pass
     return projects
+
+def save_central_timelapse(record: dict):
+    """Registra ou atualiza um timelapse no banco central."""
+    init_central_db()
+    with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO timelapses (
+                project_name, sequence_dir, output_video_path, photo_count,
+                fps, frames_per_image, resolution, crop_mode, encoder,
+                duration_seconds, speedup_factor, youtube_video_id, youtube_url,
+                youtube_privacy, status, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(output_video_path) DO UPDATE SET
+                photo_count=excluded.photo_count,
+                fps=excluded.fps,
+                frames_per_image=excluded.frames_per_image,
+                resolution=excluded.resolution,
+                crop_mode=excluded.crop_mode,
+                encoder=excluded.encoder,
+                duration_seconds=excluded.duration_seconds,
+                speedup_factor=excluded.speedup_factor,
+                youtube_video_id=COALESCE(excluded.youtube_video_id, timelapses.youtube_video_id),
+                youtube_url=COALESCE(excluded.youtube_url, timelapses.youtube_url),
+                youtube_privacy=COALESCE(excluded.youtube_privacy, timelapses.youtube_privacy),
+                status=excluded.status,
+                updated_at=CURRENT_TIMESTAMP
+        """, (
+            record.get("project_name", ""),
+            record.get("sequence_dir", ""),
+            record.get("output_video_path", ""),
+            record.get("photo_count", 0),
+            record.get("fps", 60),
+            record.get("frames_per_image", 1),
+            record.get("resolution", "3840x2160"),
+            record.get("crop_mode", "bottom"),
+            record.get("encoder", ""),
+            record.get("duration_seconds", 0.0),
+            record.get("speedup_factor", 1),
+            record.get("youtube_video_id", ""),
+            record.get("youtube_url", ""),
+            record.get("youtube_privacy", "unlisted"),
+            record.get("status", "rendered")
+        ))
+        conn.commit()
+
+def update_central_timelapse_youtube(video_path: str, video_id: str, url: str):
+    """Atualiza o link/ID do YouTube do timelapse no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        return
+    with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE timelapses
+            SET youtube_video_id=?, youtube_url=?, status='uploaded', updated_at=CURRENT_TIMESTAMP
+            WHERE output_video_path=?
+        """, (video_id, url, video_path))
+        conn.commit()
+
+def list_central_timelapses(project_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Lista timelapses cadastrados no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        return []
+    results = []
+    with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if project_name:
+            cursor.execute("SELECT * FROM timelapses WHERE project_name=? ORDER BY created_at DESC", (project_name,))
+        else:
+            cursor.execute("SELECT * FROM timelapses ORDER BY created_at DESC")
+        for row in cursor.fetchall():
+            results.append(dict(row))
+    return results
+

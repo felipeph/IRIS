@@ -21,6 +21,27 @@ modules:
     enabled: true
   timelapse:
     enabled: true
+    fps: 60
+    frames_per_image: 1
+    target_width: 3840
+    target_height: 2160
+    crop_mode: "bottom"
+    crf: 15
+    preset: "ultrafast"
+    downscale_mode: "scale"
+    test_sample_size: 120
+    auto_clean_sequence: true
+    ntfy_topic: "timelapse-studio-2026"
+    windows_toast: true
+  youtube:
+    enabled: true
+    privacy_status: "unlisted"
+    category_id: "22"
+    playlist: "Timelapses"
+    secrets_dir: "secrets"
+    stage_interval_seconds: 180
+    ntfy_topic: "timelapse-studio-2026"
+    windows_toast: true
 pipeline:
   stages:
   - enabled: true
@@ -39,3 +60,12 @@ pipeline:
     id: organize
     module: src.modules.organize.stage
     name: Organização Física (SSD)
+  - enabled: true
+    id: timelapse
+    module: src.modules.timelapse.stage
+    name: Renderização de Timelapse 4K
+  - enabled: true
+    id: youtube
+    module: src.modules.youtube.stage
+    name: Publicação de Vídeos no YouTube
+

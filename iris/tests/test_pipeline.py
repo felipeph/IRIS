@@ -20,23 +20,28 @@ def dummy_project():
 def test_pipeline_runner_initialization(mock_import_module):
     """Testa se o runner lê do config dinamicamente."""
     from src.core.config import config
-    config.config["pipeline"] = {
-        "stages": [
-            {"id": "dummy", "name": "Dummy Stage", "module": "dummy.module", "enabled": True},
-            {"id": "disabled", "name": "Disabled", "module": "disabled.module", "enabled": False}
-        ]
-    }
-    
-    # Simula o import_module
-    mock_mod = MagicMock()
-    mock_mod.get_stage.return_value = DummyStage("dummy", "Dummy Stage")
-    mock_import_module.return_value = mock_mod
-    
-    runner = PipelineRunner()
-    
-    assert len(runner.stages) == 1
-    assert runner.stages[0].stage_id == "dummy"
-    mock_import_module.assert_called_once_with("dummy.module")
+    original_config = dict(config.config)
+    try:
+        config.config["pipeline"] = {
+            "stages": [
+                {"id": "dummy", "name": "Dummy Stage", "module": "dummy.module", "enabled": True},
+                {"id": "disabled", "name": "Disabled", "module": "disabled.module", "enabled": False}
+            ]
+        }
+        
+        # Simula o import_module
+        mock_mod = MagicMock()
+        mock_mod.get_stage.return_value = DummyStage("dummy", "Dummy Stage")
+        mock_import_module.return_value = mock_mod
+        
+        runner = PipelineRunner()
+        
+        assert len(runner.stages) == 1
+        assert runner.stages[0].stage_id == "dummy"
+        mock_import_module.assert_called_once_with("dummy.module")
+    finally:
+        config.config = original_config
+
 
 def test_pipeline_execution(dummy_project):
     """Garante que a execução roda as etapas corretamente."""
