@@ -1,4 +1,5 @@
 import importlib
+import inspect
 from abc import ABC, abstractmethod
 from src.core.project import Project
 from src.core.config import config
@@ -14,12 +15,21 @@ class PipelineStage(ABC):
         self.name = name
 
     @abstractmethod
-    def run(self, project: Project) -> bool:
+    def run(self, project: Project, **kwargs) -> bool:
         """
         Executa a lógica da etapa para o projeto.
         Deve retornar True em caso de sucesso, False caso contrário.
         """
         pass
+
+def _invoke_stage(stage: PipelineStage, project: Project, kwargs: dict) -> bool:
+    """Invoca o método run do stage passando apenas argumentos aceitos por sua assinatura."""
+    sig = inspect.signature(stage.run)
+    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+    if has_var_keyword:
+        return stage.run(project, **kwargs)
+    accepted_args = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return stage.run(project, **accepted_args)
 
 class PipelineRunner:
     """Gerencia e executa as etapas configuradas no pipeline."""
@@ -54,13 +64,14 @@ class PipelineRunner:
                 
         return stages
 
-    def run_stage(self, project: Project, target_stage_id: str) -> bool:
+    def run_stage(self, project: Project, target_stage_id: str, **kwargs) -> bool:
         """Executa apenas uma etapa específica pelo seu ID."""
+        kwargs.setdefault("interactive", True)
         for stage in self.stages:
             if stage.stage_id == target_stage_id:
                 console.print(f"\n[bold blue]--- Executando Etapa: '{stage.name}' ---[/bold blue]")
                 try:
-                    success = stage.run(project)
+                    success = _invoke_stage(stage, project, kwargs)
                     if success:
                         project.current_stage_id = stage.stage_id
                         project.save()
@@ -79,9 +90,11 @@ class PipelineRunner:
         console.print(f"[red]ERRO: Etapa '{target_stage_id}' não encontrada ou não habilitada no config.[/red]")
         return False
 
-    def run_project(self, project: Project):
+    def run_project(self, project: Project, **kwargs):
         """Executa o pipeline para um projeto."""
         console.print(f"\n[bold blue]=== Executando Pipeline para '{project.name}' ===[/bold blue]")
+        call_kwargs = dict(kwargs)
+        call_kwargs.setdefault("interactive", False)
         
         start_index = 0
         if project.current_stage_id:
@@ -94,7 +107,7 @@ class PipelineRunner:
         for stage in self.stages[start_index:]:
             console.print(f"\n[bold cyan]-> Iniciando etapa: {stage.name}[/bold cyan]")
             try:
-                success = stage.run(project)
+                success = _invoke_stage(stage, project, call_kwargs)
                 if success:
                     project.current_stage_id = stage.stage_id
                     project.save()
