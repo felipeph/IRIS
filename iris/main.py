@@ -26,6 +26,10 @@ def show_config_menu():
         table.add_row("1", "Diretório Destino", str(config.get("general.destination_root")))
         table.add_row("2", "Origem Padrão", str(config.get("general.default_source")))
         table.add_row("3", "Limpar Último Projeto", str(config.get("general.last_project")))
+        table.add_row("4", "Padrão Nome (Fotos)", str(config.get("naming.photo_pattern")))
+        table.add_row("5", "Padrão Nome (Vídeos)", str(config.get("naming.video_pattern")))
+        table.add_row("6", "Zoom Lua (mm) Threshold", str(config.get("classification.moon_zoom_threshold_mm")))
+        table.add_row("7", "Min Fotos Timelapse", str(config.get("classification.timelapse_min_photos")))
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -46,6 +50,32 @@ def show_config_menu():
         elif choice == "3":
             config.set("general.last_project", None)
             console.print("[green]Último projeto limpo![/green]")
+            time.sleep(1)
+        elif choice == "4":
+            new_val = Prompt.ask("Novo Padrão de Nome (Fotos)", default=str(config.get("naming.photo_pattern")))
+            config.set("naming.photo_pattern", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "5":
+            new_val = Prompt.ask("Novo Padrão de Nome (Vídeos)", default=str(config.get("naming.video_pattern")))
+            config.set("naming.video_pattern", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "6":
+            new_val = Prompt.ask("Novo Zoom Lua (mm) Threshold", default=str(config.get("classification.moon_zoom_threshold_mm")))
+            try:
+                config.set("classification.moon_zoom_threshold_mm", float(new_val))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número![/red]")
+            time.sleep(1)
+        elif choice == "7":
+            new_val = Prompt.ask("Nova Qtd Min Fotos p/ Timelapse", default=str(config.get("classification.timelapse_min_photos")))
+            try:
+                config.set("classification.timelapse_min_photos", int(new_val))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

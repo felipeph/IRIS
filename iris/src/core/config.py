@@ -56,6 +56,18 @@ class ConfigManager:
                         "enabled": True
                     },
                     {
+                        "id": "planning",
+                        "name": "Planejamento e Metadados (Staging)",
+                        "module": "src.modules.planning.stage",
+                        "enabled": True
+                    },
+                    {
+                        "id": "organize",
+                        "name": "Organização Física (SSD)",
+                        "module": "src.modules.organize.stage",
+                        "enabled": True
+                    },
+                    {
                         "id": "cleanup",
                         "name": "Limpeza da Origem (Após verificação)",
                         "module": "src.modules.cleanup.stage",
@@ -86,12 +98,36 @@ class ConfigManager:
                         "enabled": True
                     },
                     {
+                        "id": "planning",
+                        "name": "Planejamento e Metadados (Staging)",
+                        "module": "src.modules.planning.stage",
+                        "enabled": True
+                    },
+                    {
+                        "id": "organize",
+                        "name": "Organização Física (SSD)",
+                        "module": "src.modules.organize.stage",
+                        "enabled": True
+                    },
+                    {
                         "id": "cleanup",
                         "name": "Limpeza da Origem (Após verificação)",
                         "module": "src.modules.cleanup.stage",
                         "enabled": True
                     }
                 ]
+            },
+            "naming": {
+                "photo_pattern": "{date}_{time}_{camera}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}",
+                "video_pattern": "{date}_{time}_{camera}_{resolution}_{fps}_{duration}_{original}.{ext}"
+            },
+            "classification": {
+                "moon_zoom_threshold_mm": 1000.0,
+                "timelapse_min_photos": 300,
+                "timelapse_max_interval_seconds": 60.0,
+                "timelapse_tolerance_ratio": 1.5,
+                "enable_burst_detection": False,
+                "burst_interval_seconds": 1.5
             },
             "modules": {
                 "dedup": {"enabled": True},

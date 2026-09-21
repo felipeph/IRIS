@@ -13,100 +13,14 @@ from rich.table import Table
 from src.core.pipeline import PipelineStage
 from src.core.project import Project, ProjectItem
 from src.core.config import config
+from src.core.ui import ProgressTracker, PipelineUI
 
 console = Console()
 
-class IngestionTracker:
-    def __init__(self, total_bytes):
-        self.total_bytes = total_bytes
-        self.copied_bytes = 0
-        self.start_time = time.time()
-        self.last_update_time = self.start_time
-        self.last_copied_bytes = 0
-        self.speed = 0.0
-        self.speeds = []
-
-    def update(self, bytes_added):
-        self.copied_bytes += bytes_added
-        now = time.time()
-        dt = now - self.last_update_time
-        if dt > 0.5:
-            db = self.copied_bytes - self.last_copied_bytes
-            current_speed = db / dt
-            self.speeds.append(current_speed)
-            if len(self.speeds) > 10:
-                self.speeds.pop(0)
-            self.speed = sum(self.speeds) / len(self.speeds)
-            self.last_update_time = now
-            self.last_copied_bytes = self.copied_bytes
-
-    def get_speed_str(self):
-        if self.speed > 1024**2:
-            return f"{self.speed / (1024**2):.1f} MB/s"
-        elif self.speed > 1024:
-            return f"{self.speed / 1024:.1f} KB/s"
-        else:
-            return f"{self.speed:.1f} B/s"
-
-    def get_eta_str(self):
-        if self.speed == 0:
-            return "--:--:--"
-        remaining_bytes = self.total_bytes - self.copied_bytes
-        if remaining_bytes <= 0:
-            return "0:00:00"
-        eta_seconds = remaining_bytes / self.speed
-        return str(timedelta(seconds=int(eta_seconds)))
-        
-    def get_previsao_fim_str(self):
-        if self.speed == 0:
-            return "--:--:--"
-        remaining_bytes = self.total_bytes - self.copied_bytes
-        if remaining_bytes <= 0:
-            return datetime.now().strftime("%H:%M:%S")
-        eta_seconds = remaining_bytes / self.speed
-        end_time = datetime.now() + timedelta(seconds=int(eta_seconds))
-        return end_time.strftime("%H:%M:%S")
-
-    def get_elapsed_str(self):
-        elapsed = time.time() - self.start_time
-        return str(timedelta(seconds=int(elapsed)))
-
-def generate_renderable(tracker, start_str, total_files, total_gb, current_file_name, status_msg="Ingestão SD -> SSD"):
-    info_text = (
-        f"  [bold]• Início:[/bold]    {start_str}\n"
-        f"  [bold]• Arquivos:[/bold]  {total_files:,}\n"
-        f"  [bold]• Volume:[/bold]    {total_gb:.2f} GB"
-    )
-    top_panel = Panel(info_text, title="ETAPA 1: INGESTÃO E VALIDAÇÃO (SD -> SSD)", title_align="left", border_style="blue", expand=False)
-    
-    completed = tracker.copied_bytes
-    total = tracker.total_bytes
-    percentage = (completed / total * 100) if total > 0 else 0
-    copied_gb = completed / (1024**3)
-    
-    bar = ProgressBar(total=total, completed=completed, width=40)
-    
-    progress_table = Table.grid(padding=(0, 1))
-    progress_table.add_column()
-    progress_table.add_column()
-    progress_table.add_row(bar, f"{percentage:.1f}% ({copied_gb:.2f} GB / {total_gb:.2f} GB)")
-    
-    table = Table.grid(padding=(0, 2))
-    table.add_column(style="bold blue")
-    table.add_column()
-    
-    table.add_row("Operacao:", status_msg)
-    table.add_row("Arquivo atual:", f"[yellow]{current_file_name}[/yellow]")
-    table.add_row("Progresso:", progress_table)
-    table.add_row("Velocidade:", f"[cyan]{tracker.get_speed_str()}[/cyan]")
-    table.add_row("Tempo decorrido:", tracker.get_elapsed_str())
-    table.add_row("Tempo restante:", f"[magenta]{tracker.get_eta_str()}[/magenta]")
-    table.add_row("Previsao fim:", f"[bold cyan]{tracker.get_previsao_fim_str()}[/bold cyan]")
-    
-    return Group(top_panel, "", table)
 
 
-def copy_and_verify(src_path: Path, dest_path: Path, live: Live, tracker: IngestionTracker, generate_renderable_func, render_args) -> tuple[bool, str]:
+
+def copy_and_verify(src_path: Path, dest_path: Path, live: Live, tracker: ProgressTracker, render_args) -> tuple[bool, str]:
     """Copia arquivo calculando hash on-the-fly, sincroniza no disco e verifica."""
     chunk_size = 4 * 1024 * 1024 # 4MB chunk
     hasher_src = xxhash.xxh64()
@@ -122,7 +36,7 @@ def copy_and_verify(src_path: Path, dest_path: Path, live: Live, tracker: Ingest
                 hasher_src.update(chunk)
                 f_dest.write(chunk)
                 tracker.update(len(chunk))
-                live.update(generate_renderable_func(tracker, *render_args, "Ingestão: Copiando..."))
+                live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (SD -> SSD)", *render_args, "Ingestão: Copiando..."))
                 
             # Forçar a escrita física
             f_dest.flush()
@@ -132,7 +46,7 @@ def copy_and_verify(src_path: Path, dest_path: Path, live: Live, tracker: Ingest
         
         # 2. Ler do destino para validar o hash
         hasher_dest = xxhash.xxh64()
-        live.update(generate_renderable_func(tracker, *render_args, "Ingestão: Verificando disco..."))
+        live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (SD -> SSD)", *render_args, "Ingestão: Verificando disco..."))
         
         with open(dest_path, 'rb') as f_dest:
             while True:
@@ -216,24 +130,24 @@ class IngestionStage(PipelineStage):
             console.print("[green]Todos os arquivos já foram ingeridos e verificados com sucesso![/green]")
             return True
 
-        tracker = IngestionTracker(total_bytes)
-        tracker.copied_bytes = already_copied_bytes
-        tracker.last_copied_bytes = already_copied_bytes
+        tracker = ProgressTracker(total_bytes, mode="bytes")
+        tracker.completed_units = already_copied_bytes
+        tracker.last_completed_units = already_copied_bytes
         start_str = datetime.now().strftime("%H:%M:%S")
 
-        with Live(generate_renderable(tracker, start_str, total_files, total_gb, "Preparando..."), console=console, refresh_per_second=4) as live:
+        with Live(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (SD -> SSD)", start_str, total_files, total_gb, "Preparando...", "Inicializando"), console=console, refresh_per_second=4) as live:
             for i, src_path in enumerate(files_to_copy, 1):
                 src_size = src_path.stat().st_size
                 current_file_name = src_path.name
                 
                 render_args = (start_str, total_files, total_gb, current_file_name)
-                live.update(generate_renderable(tracker, *render_args))
+                live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (SD -> SSD)", *render_args, "Iniciando arquivo..."))
                 
                 rel_path = src_path.relative_to(source_dir)
                 target_path = dest_dir / rel_path
                 orig_key = str(src_path.resolve())
                 
-                success, final_hash = copy_and_verify(src_path, target_path, live, tracker, generate_renderable, render_args)
+                success, final_hash = copy_and_verify(src_path, target_path, live, tracker, render_args)
                 
                 if success:
                     item = ProjectItem(
@@ -248,7 +162,7 @@ class IngestionStage(PipelineStage):
                     project.save_item(item)
                     
                     # Garantir que update do Live seja com velocidade "0" de arquivo parado
-                    live.update(generate_renderable(tracker, *render_args, "Verificação concluída"))
+                    live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (SD -> SSD)", *render_args, "Verificação concluída"))
                 else:
                     live.stop()
                     console.print(f"[red]Erro na cópia ou falha de verificação (hash mismatch) em {src_path.name}.[/red]")

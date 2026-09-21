@@ -1,25 +1,41 @@
 general:
-  theme: dark
+  default_source: G:\DCIM
+  destination_root: C:\IRIS
+  last_project: 2026-09-20_19-25_DCIM
   log_level: INFO
-  destination_root: "/caminho/para/destino"
-  default_source: "/caminho/para/origem"
-  last_project: null
-
-pipeline:
-  stages:
-    - id: ingestion
-      name: "Ingestão de Arquivos (SD -> SSD)"
-      module: "src.modules.ingestion.stage"
-      enabled: true
-    - id: cleanup
-      name: "Limpeza da Origem (Após verificação)"
-      module: "src.modules.cleanup.stage"
-      enabled: true
-
+  theme: dark
+naming:
+  photo_pattern: "{date}_{time}_{camera}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}"
+  video_pattern: "{date}_{time}_{camera}_{resolution}_{fps}_{duration}_{original}.{ext}"
+classification:
+  moon_zoom_threshold_mm: 1000.0
+  timelapse_min_photos: 300
+  timelapse_max_interval_seconds: 60.0
+  timelapse_tolerance_ratio: 1.5
+  enable_burst_detection: false
+  burst_interval_seconds: 1.5
 modules:
+  bird_detect:
+    enabled: true
   dedup:
     enabled: true
   timelapse:
     enabled: true
-  bird_detect:
-    enabled: true
+pipeline:
+  stages:
+  - enabled: true
+    id: ingestion
+    module: src.modules.ingestion.stage
+    name: Ingestão de Arquivos (SD -> SSD)
+  - enabled: true
+    id: cleanup
+    module: src.modules.cleanup.stage
+    name: Limpeza da Origem (Após verificação)
+  - enabled: true
+    id: planning
+    module: src.modules.planning.stage
+    name: Planejamento e Metadados (Staging)
+  - enabled: true
+    id: organize
+    module: src.modules.organize.stage
+    name: Organização Física (SSD)

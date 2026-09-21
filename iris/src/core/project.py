@@ -38,6 +38,35 @@ class ProjectItem:
     file_hash: str = ""
     verified: bool = False
     
+    # Metadata fields (Normalized)
+    meta_is_video: Optional[bool] = None
+    meta_date_str: str = ""
+    meta_time_str: str = ""
+    meta_timestamp: str = ""
+    meta_camera_model: str = ""
+    meta_camera_make: str = ""
+    meta_focal_length_equiv: Optional[float] = None
+    meta_focal_str: str = ""
+    meta_aperture_str: str = ""
+    meta_shutter_str: str = ""
+    meta_iso_str: str = ""
+    meta_resolution_str: str = ""
+    meta_fps_str: str = ""
+    meta_duration_str: str = ""
+    meta_original_stem: str = ""
+    meta_extension: str = ""
+    meta_is_raw: Optional[bool] = None
+    meta_width: Optional[int] = None
+    meta_height: Optional[int] = None
+
+    # Organization fields
+    category: str = ""
+    target_filename: str = ""
+    relative_dest_dir: str = ""
+    extra_dest_dirs_json: str = "[]"
+    organized_path: str = ""
+    extra_organized_paths_json: str = "[]"
+    
     @classmethod
     def from_dict(cls, data: dict) -> "ProjectItem":
         return cls(**data)
@@ -57,6 +86,15 @@ class Project:
     def _init_project_db(self):
         with sqlite3.connect(self._project_db_file) as conn:
             cursor = conn.cursor()
+            
+            # Destructive migration: Se houver coluna metadata_json, deleta a tabela!
+            try:
+                cursor.execute("SELECT metadata_json FROM items LIMIT 1")
+                cursor.execute("DROP TABLE items")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS items (
                     original_path TEXT PRIMARY KEY,
@@ -64,7 +102,32 @@ class Project:
                     status TEXT,
                     file_size_bytes INTEGER,
                     file_hash TEXT,
-                    verified INTEGER
+                    verified INTEGER,
+                    meta_is_video INTEGER,
+                    meta_date_str TEXT,
+                    meta_time_str TEXT,
+                    meta_timestamp TEXT,
+                    meta_camera_model TEXT,
+                    meta_camera_make TEXT,
+                    meta_focal_length_equiv REAL,
+                    meta_focal_str TEXT,
+                    meta_aperture_str TEXT,
+                    meta_shutter_str TEXT,
+                    meta_iso_str TEXT,
+                    meta_resolution_str TEXT,
+                    meta_fps_str TEXT,
+                    meta_duration_str TEXT,
+                    meta_original_stem TEXT,
+                    meta_extension TEXT,
+                    meta_is_raw INTEGER,
+                    meta_width INTEGER,
+                    meta_height INTEGER,
+                    category TEXT DEFAULT '',
+                    target_filename TEXT DEFAULT '',
+                    relative_dest_dir TEXT DEFAULT '',
+                    extra_dest_dirs_json TEXT DEFAULT '[]',
+                    organized_path TEXT DEFAULT '',
+                    extra_organized_paths_json TEXT DEFAULT '[]'
                 )
             """)
             conn.commit()
@@ -105,17 +168,15 @@ class Project:
             return []
         items = []
         with sqlite3.connect(self._project_db_file) as conn:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT original_path, staging_path, status, file_size_bytes, file_hash, verified FROM items")
+            cursor.execute("SELECT * FROM items")
             for row in cursor.fetchall():
-                items.append(ProjectItem(
-                    original_path=row[0],
-                    staging_path=row[1],
-                    status=row[2],
-                    file_size_bytes=row[3],
-                    file_hash=row[4],
-                    verified=bool(row[5])
-                ))
+                d = dict(row)
+                d['verified'] = bool(d['verified'])
+                if d['meta_is_video'] is not None: d['meta_is_video'] = bool(d['meta_is_video'])
+                if d['meta_is_raw'] is not None: d['meta_is_raw'] = bool(d['meta_is_raw'])
+                items.append(ProjectItem.from_dict(d))
         return items
 
     def save_item(self, item: ProjectItem):
@@ -123,16 +184,22 @@ class Project:
         self._init_project_db()
         with sqlite3.connect(self._project_db_file) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO items (original_path, staging_path, status, file_size_bytes, file_hash, verified)
-                VALUES (?, ?, ?, ?, ?, ?)
+            d = asdict(item)
+            d['verified'] = int(d['verified'])
+            if d['meta_is_video'] is not None: d['meta_is_video'] = int(d['meta_is_video'])
+            if d['meta_is_raw'] is not None: d['meta_is_raw'] = int(d['meta_is_raw'])
+            
+            columns = list(d.keys())
+            placeholders = ", ".join(["?"] * len(columns))
+            updates = ", ".join([f"{c}=excluded.{c}" for c in columns if c != "original_path"])
+            
+            sql = f"""
+                INSERT INTO items ({", ".join(columns)})
+                VALUES ({placeholders})
                 ON CONFLICT(original_path) DO UPDATE SET
-                    staging_path=excluded.staging_path,
-                    status=excluded.status,
-                    file_size_bytes=excluded.file_size_bytes,
-                    file_hash=excluded.file_hash,
-                    verified=excluded.verified
-            """, (item.original_path, item.staging_path, item.status, item.file_size_bytes, item.file_hash, int(item.verified)))
+                    {updates}
+            """
+            cursor.execute(sql, tuple(d.values()))
             conn.commit()
 
     def get_item(self, original_path: str) -> Optional[ProjectItem]:
@@ -140,18 +207,16 @@ class Project:
         if not self._project_db_file.exists():
             return None
         with sqlite3.connect(self._project_db_file) as conn:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT original_path, staging_path, status, file_size_bytes, file_hash, verified FROM items WHERE original_path=?", (original_path,))
+            cursor.execute("SELECT * FROM items WHERE original_path=?", (original_path,))
             row = cursor.fetchone()
             if row:
-                return ProjectItem(
-                    original_path=row[0],
-                    staging_path=row[1],
-                    status=row[2],
-                    file_size_bytes=row[3],
-                    file_hash=row[4],
-                    verified=bool(row[5])
-                )
+                d = dict(row)
+                d['verified'] = bool(d['verified'])
+                if d['meta_is_video'] is not None: d['meta_is_video'] = bool(d['meta_is_video'])
+                if d['meta_is_raw'] is not None: d['meta_is_raw'] = bool(d['meta_is_raw'])
+                return ProjectItem.from_dict(d)
         return None
             
     @property
