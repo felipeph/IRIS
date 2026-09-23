@@ -1,6 +1,7 @@
 # Projeto IRIS - TODO List
 
 ## 📌 Pendentes (A Fazer)
+- [ ] **refactor**: Avaliar e planejar a arquitetura de ingestão utilizando a operação de mover nativa do sistema operacional (SO) em vez de cópia manual, analisando integridade (hashing), comportamento cross-device/unidades e desempenho. *(Adicionado em: 21/09/2026 22:10)*
 
 ## ✅ Concluídos
 - [x] **feat**: Desenvolver sistema de renomeação e organização dos arquivos em pastas, mantendo a lógica original do 'fotos-backup-workflow'. *(Adicionado em: 20/09/2026 21:07)*
