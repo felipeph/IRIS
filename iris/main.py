@@ -6,8 +6,9 @@ from rich.table import Table
 from rich.prompt import Prompt
 
 from src.core.config import config
-from src.core.logger import log_event
-from src.core.project import list_open_projects, get_project, create_project
+from src.core.logger import log_event, bind_project_logger
+from src.core.project import list_open_projects, get_project, create_project, get_last_active_project
+from src.core.lock import ProjectLock, ProjectLockedError
 from src.core.pipeline import PipelineRunner
 
 console = Console()
@@ -25,7 +26,7 @@ def show_config_menu():
         
         table.add_row("1", "Diretório Destino", str(config.get("general.destination_root")))
         table.add_row("2", "Origem Padrão", str(config.get("general.default_source")))
-        table.add_row("3", "Limpar Último Projeto", str(config.get("general.last_project")))
+        table.add_row("3", "Nível de Log", str(config.get("general.log_level", "INFO")))
         table.add_row("4", "Padrão Nome (Fotos)", str(config.get("naming.photo_pattern")))
         table.add_row("5", "Padrão Nome (Vídeos)", str(config.get("naming.video_pattern")))
         table.add_row("6", "Zoom Lua (mm) Threshold", str(config.get("classification.moon_zoom_threshold_mm")))
@@ -56,8 +57,12 @@ def show_config_menu():
             console.print("[green]Salvo![/green]")
             time.sleep(1)
         elif choice == "3":
-            config.set("general.last_project", None)
-            console.print("[green]Último projeto limpo![/green]")
+            new_val = Prompt.ask("Novo Nível de Log (INFO, DEBUG, WARNING, ERROR)", default=str(config.get("general.log_level", "INFO"))).upper()
+            if new_val in ["INFO", "DEBUG", "WARNING", "ERROR"]:
+                config.set("general.log_level", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida![/red]")
             time.sleep(1)
         elif choice == "4":
             new_val = Prompt.ask("Novo Padrão de Nome (Fotos)", default=str(config.get("naming.photo_pattern")))
@@ -165,95 +170,118 @@ def get_project_status_text(project) -> str:
         return "Novo Projeto (Não iniciado)"
 
 def run_pipeline_for_project(active_project):
-    """Executa o pipeline para o projeto ativo e salva o estado."""
-    config.set("general.last_project", active_project.name)
+    """Executa o pipeline para o projeto ativo com bloqueio exclusivo anti-concorrência."""
+    lock = ProjectLock(active_project.name)
+    try:
+        lock.acquire()
+    except ProjectLockedError as e:
+        console.clear()
+        panel_msg = (
+            f"[bold red]❌ PROJETO JÁ EM EXECUÇÃO EM OUTRO TERMINAL[/bold red]\n\n"
+            f"[yellow]O projeto '[bold]{e.project_name}[/bold]' está em uso pelo processo PID [bold]{e.pid}[/bold][/yellow]\n"
+            f"[dim]Computador:[/dim] {e.hostname}\n"
+            f"[dim]Bloqueado desde:[/dim] {e.acquired_at}\n\n"
+            f"[white]Para garantir a integridade dos seus dados e evitar colisões físicas de arquivos,\n"
+            f"não é permitido abrir o mesmo projeto em dois terminais simultaneamente.[/white]\n\n"
+            f"[cyan]💡 Dica: Você pode abrir ou processar outro projeto em paralelo neste terminal![/cyan]"
+        )
+        console.print(Panel(panel_msg, expand=False, border_style="red"))
+        Prompt.ask("\n[dim]Pressione ENTER para voltar ao menu...[/dim]")
+        return
+
+    bind_project_logger(active_project.name)
+    active_project.touch()
     runner = PipelineRunner()
     
-    while True:
-        console.clear()
-        
-        # Cabeçalho
-        status = get_project_status_text(active_project)
-        header_text = (
-            "[bold white]:camera: IRIS - ASSISTENTE INTEGRADO DE MÍDIA :rocket:[/bold white]\n"
-            f"[dim]Projeto Ativo:[/dim] [cyan][{active_project.name}][/cyan]\n"
-            f"[dim]Status:[/dim] [yellow][{status}][/yellow]"
-        )
-        console.print(Panel(header_text, expand=False, border_style="cyan"))
-        
-        # Status do Ambiente
-        dest_root = config.get("general.destination_root", "/caminho/para/destino")
-        free_space = get_free_space_gb(dest_root)
-        
-        # Realiza scan rápido se o projeto for novo e não tiver dados de contagem
-        if active_project.total_source_files == 0:
-            from pathlib import Path
-            source_dir = Path(active_project.source_path)
-            valid_exts = {'.jpg', '.jpeg', '.png', '.mp4', '.mov', '.cr2', '.cr3', '.raw'}
-            if source_dir.exists():
-                count = 0
-                size = 0
-                for p in source_dir.rglob("*"):
-                    if p.is_file() and p.suffix.lower() in valid_exts and not p.name.startswith('.'):
-                        count += 1
-                        size += p.stat().st_size
-                active_project.total_source_files = count
-                active_project.total_source_size_bytes = size
-                active_project.save()
-        
-        total_size_gb = active_project.total_source_size_bytes / (1024**3)
-        medias_count = active_project.total_source_files
-        copied_count = len(active_project.items)
-        
-        space_status = "[green]:white_check_mark: Suficiente[/green]" if free_space > total_size_gb else "[red]:x: Insuficiente[/red]"
-        
-        env_text = (
-            "[bold]\\[STATUS DO AMBIENTE][/bold]\n"
-            f"  [dim]• Espaço Livre SSD:[/dim]   {free_space:.2f} GB\n"
-            f"  [dim]• Origem Ativa:[/dim]       {active_project.source_path}\n"
-            f"  [dim]• Mídias Mapeadas:[/dim]    {medias_count} arquivos ({total_size_gb:.2f} GB) - {copied_count} copiados\n"
-            f"  [dim]• Status de Espaço:[/dim]   {space_status}\n"
-            f"  [dim]• Raiz de Destino:[/dim]    {dest_root}"
-        )
-        console.print(Panel(env_text, expand=False, border_style="green"))
-        
-        # Ações
-        console.print("\n[bold]\\[ENTER] :rocket: EXECUTAR TUDO (Sequencial)[/bold]")
-        console.print("-" * 60)
-        
-        stages = runner.stages
-        for i, stage in enumerate(stages, 1):
-            console.print(f"  [cyan]{i}.[/cyan] :arrow_forward: Etapa {i}: {stage.name}")
+    try:
+        while True:
+            console.clear()
             
-        console.print("-" * 60)
-        console.print("  [cyan]P.[/cyan] :open_file_folder: Voltar / Selecionar Projeto")
-        console.print("  [cyan]C.[/cyan] :gear: Configurações")
-        console.print("  [cyan]0.[/cyan] :door: Sair")
-        
-        choice = Prompt.ask("\nSelecione uma opção", default="R").upper()
-        
-        if choice == "0":
-            console.print("Até logo!")
-            sys.exit(0)
-        elif choice == "P":
-            break
-        elif choice == "C":
-            show_config_menu()
-        elif choice == "R" or choice == "":
-            runner.run_project(active_project)
-            Prompt.ask("\n[dim]Pressione ENTER para continuar...[/dim]")
-        else:
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(stages):
-                    runner.run_stage(active_project, stages[idx].stage_id)
-                    Prompt.ask("\n[dim]Pressione ENTER para continuar...[/dim]")
-                else:
+            # Cabeçalho
+            status = get_project_status_text(active_project)
+            header_text = (
+                "[bold white]:camera: IRIS - ASSISTENTE INTEGRADO DE MÍDIA :rocket:[/bold white]\n"
+                f"[dim]Projeto Ativo:[/dim] [cyan][{active_project.name}][/cyan]\n"
+                f"[dim]Status:[/dim] [yellow][{status}][/yellow]"
+            )
+            console.print(Panel(header_text, expand=False, border_style="cyan"))
+            
+            # Status do Ambiente
+            dest_root = config.get("general.destination_root", "/caminho/para/destino")
+            free_space = get_free_space_gb(dest_root)
+            
+            # Realiza scan rápido se o projeto for novo e não tiver dados de contagem
+            if active_project.total_source_files == 0:
+                from pathlib import Path
+                source_dir = Path(active_project.source_path)
+                valid_exts = {'.jpg', '.jpeg', '.png', '.mp4', '.mov', '.cr2', '.cr3', '.raw'}
+                if source_dir.exists():
+                    count = 0
+                    size = 0
+                    for p in source_dir.rglob("*"):
+                        if p.is_file() and p.suffix.lower() in valid_exts and not p.name.startswith('.'):
+                            count += 1
+                            size += p.stat().st_size
+                    active_project.total_source_files = count
+                    active_project.total_source_size_bytes = size
+                    active_project.save()
+            
+            total_size_gb = active_project.total_source_size_bytes / (1024**3)
+            medias_count = active_project.total_source_files
+            copied_count = len(active_project.items)
+            
+            space_status = "[green]:white_check_mark: Suficiente[/green]" if free_space > total_size_gb else "[red]:x: Insuficiente[/red]"
+            
+            env_text = (
+                "[bold]\\[STATUS DO AMBIENTE][/bold]\n"
+                f"  [dim]• Espaço Livre SSD:[/dim]   {free_space:.2f} GB\n"
+                f"  [dim]• Origem Ativa:[/dim]       {active_project.source_path}\n"
+                f"  [dim]• Mídias Mapeadas:[/dim]    {medias_count} arquivos ({total_size_gb:.2f} GB) - {copied_count} copiados\n"
+                f"  [dim]• Status de Espaço:[/dim]   {space_status}\n"
+                f"  [dim]• Raiz de Destino:[/dim]    {dest_root}"
+            )
+            console.print(Panel(env_text, expand=False, border_style="green"))
+            
+            # Ações
+            console.print("\n[bold]\\[ENTER] :rocket: EXECUTAR TUDO (Sequencial)[/bold]")
+            console.print("-" * 60)
+            
+            stages = runner.stages
+            for i, stage in enumerate(stages, 1):
+                console.print(f"  [cyan]{i}.[/cyan] :arrow_forward: Etapa {i}: {stage.name}")
+                
+            console.print("-" * 60)
+            console.print("  [cyan]P.[/cyan] :open_file_folder: Voltar / Selecionar Projeto")
+            console.print("  [cyan]C.[/cyan] :gear: Configurações")
+            console.print("  [cyan]0.[/cyan] :door: Sair")
+            
+            choice = Prompt.ask("\nSelecione uma opção", default="R").upper()
+            
+            if choice == "0":
+                console.print("Até logo!")
+                sys.exit(0)
+            elif choice == "P":
+                break
+            elif choice == "C":
+                show_config_menu()
+            elif choice == "R" or choice == "":
+                runner.run_project(active_project)
+                Prompt.ask("\n[dim]Pressione ENTER para continuar...[/dim]")
+            else:
+                try:
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(stages):
+                        runner.run_stage(active_project, stages[idx].stage_id)
+                        Prompt.ask("\n[dim]Pressione ENTER para continuar...[/dim]")
+                    else:
+                        console.print("[red]Opção inválida.[/red]")
+                        time.sleep(1)
+                except ValueError:
                     console.print("[red]Opção inválida.[/red]")
                     time.sleep(1)
-            except ValueError:
-                console.print("[red]Opção inválida.[/red]")
-                time.sleep(1)
+    finally:
+        lock.release()
+        bind_project_logger("")
 
 def start_new_project_flow():
     """Fluxo para criar um novo projeto."""
@@ -340,7 +368,7 @@ def main_menu():
             border_style="cyan"
         ))
         
-        last_project_name = config.get("general.last_project")
+        last_project_name = get_last_active_project()
         last_project = get_project(last_project_name) if last_project_name else None
         
         # Painel do Último Projeto

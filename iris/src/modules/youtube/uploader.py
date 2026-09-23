@@ -54,6 +54,17 @@ def find_token_file() -> Path:
     default_path.parent.mkdir(parents=True, exist_ok=True)
     return default_path
 
+def save_token_atomic(token_path: Path, creds: Credentials):
+    """Salva credenciais em token_path de forma atômica."""
+    temp_path = token_path.with_suffix(f".tmp.{os.getpid()}")
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            f.write(creds.to_json())
+        os.replace(temp_path, token_path)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
 def get_authenticated_service():
     """Autentica na YouTube Data API v3 usando OAuth 2.0 e renova/gera o token.json."""
     creds = None
@@ -69,8 +80,7 @@ def get_authenticated_service():
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-                with open(token_path, "w", encoding="utf-8") as f:
-                    f.write(creds.to_json())
+                save_token_atomic(token_path, creds)
             except Exception:
                 creds = None
 
@@ -80,8 +90,7 @@ def get_authenticated_service():
                 return None
             flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets), SCOPES)
             creds = flow.run_local_server(port=0, prompt='consent')
-            with open(token_path, "w", encoding="utf-8") as f:
-                f.write(creds.to_json())
+            save_token_atomic(token_path, creds)
 
     return build("youtube", "v3", credentials=creds)
 

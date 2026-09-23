@@ -139,9 +139,16 @@ class ConfigManager:
             yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
             
     def save(self):
-        """Salva o estado atual das configurações no disco."""
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True)
+        """Salva o estado atual das configurações no disco de forma atômica."""
+        temp_file = CONFIG_FILE.with_suffix(".tmp")
+        try:
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True)
+            os.replace(temp_file, CONFIG_FILE)
+        except Exception as e:
+            if temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            raise e
 
     def get(self, key, default=None):
         """Obtém uma configuração usando navegação por pontos (ex: 'general.theme')"""

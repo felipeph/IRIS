@@ -9,9 +9,18 @@ from src.core.config import PROJECTS_DIR
 # Database Central
 CENTRAL_DB_PATH = PROJECTS_DIR / "iris_central.db"
 
+def get_db_connection(db_path: Path, timeout: float = 30.0) -> sqlite3.Connection:
+    """Cria conexão SQLite otimizada para concorrência com WAL mode e timeout configurado."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=timeout)
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
+    return conn
+
 def init_central_db():
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS projects (
@@ -20,8 +29,8 @@ def init_central_db():
                 current_stage_id TEXT,
                 total_source_files INTEGER,
                 total_source_size_bytes INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+                updated_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
             )
         """)
         cursor.execute("""
@@ -106,7 +115,7 @@ class Project:
         self._project_db_file = PROJECTS_DIR / f"{self.name}.db"
 
     def _init_project_db(self):
-        with sqlite3.connect(self._project_db_file) as conn:
+        with get_db_connection(self._project_db_file) as conn:
             cursor = conn.cursor()
             
             # Destructive migration: Se houver coluna metadata_json, deleta a tabela!
@@ -178,17 +187,18 @@ class Project:
 
     def save_metadata(self):
         """Salva metadados do projeto no banco central."""
-        with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+        init_central_db()
+        with get_db_connection(CENTRAL_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO projects (name, source_path, current_stage_id, total_source_files, total_source_size_bytes, updated_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
                 ON CONFLICT(name) DO UPDATE SET
                     source_path=excluded.source_path,
                     current_stage_id=excluded.current_stage_id,
                     total_source_files=excluded.total_source_files,
                     total_source_size_bytes=excluded.total_source_size_bytes,
-                    updated_at=CURRENT_TIMESTAMP
+                    updated_at=strftime('%Y-%m-%d %H:%M:%f', 'now')
             """, (self.name, self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes))
             conn.commit()
             
@@ -196,7 +206,7 @@ class Project:
         """Carrega metadados do banco central. Retorna True se sucesso."""
         if not CENTRAL_DB_PATH.exists():
             return False
-        with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+        with get_db_connection(CENTRAL_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT source_path, current_stage_id, total_source_files, total_source_size_bytes FROM projects WHERE name=?", (self.name,))
             row = cursor.fetchone()
@@ -211,7 +221,7 @@ class Project:
         if not self._project_db_file.exists():
             return []
         items = []
-        with sqlite3.connect(self._project_db_file) as conn:
+        with get_db_connection(self._project_db_file) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM items")
@@ -226,7 +236,7 @@ class Project:
     def save_item(self, item: ProjectItem):
         """Salva ou atualiza um item no banco do projeto atomicamente."""
         self._init_project_db()
-        with sqlite3.connect(self._project_db_file) as conn:
+        with get_db_connection(self._project_db_file) as conn:
             cursor = conn.cursor()
             d = asdict(item)
             d['verified'] = int(d['verified'])
@@ -250,7 +260,7 @@ class Project:
         """Busca um item especifico no banco pelo original_path."""
         if not self._project_db_file.exists():
             return None
-        with sqlite3.connect(self._project_db_file) as conn:
+        with get_db_connection(self._project_db_file) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM items WHERE original_path=?", (original_path,))
@@ -274,6 +284,10 @@ class Project:
         for item in value:
             self.save_item(item)
 
+    def touch(self):
+        """Atualiza a data de acesso do projeto no banco central."""
+        self.save_metadata()
+
     def save(self):
         # Para compatibilidade com códigos que apenas chamavam p.save() para salvar metadados
         self.save_metadata()
@@ -284,7 +298,7 @@ class Project:
         record_copy = dict(record)
         record_copy["project_name"] = self.name
         
-        with sqlite3.connect(self._project_db_file) as conn:
+        with get_db_connection(self._project_db_file) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO timelapses (
@@ -334,7 +348,7 @@ class Project:
             return []
         self._init_project_db()
         results = []
-        with sqlite3.connect(self._project_db_file) as conn:
+        with get_db_connection(self._project_db_file) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             if status:
@@ -349,7 +363,7 @@ class Project:
         """Atualiza o link/ID do YouTube do timelapse no banco do projeto e no banco central."""
         if not self._project_db_file.exists():
             return
-        with sqlite3.connect(self._project_db_file) as conn:
+        with get_db_connection(self._project_db_file) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE timelapses
@@ -380,7 +394,7 @@ def list_open_projects() -> List[str]:
         return []
         
     projects = []
-    with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT name FROM projects ORDER BY created_at DESC")
@@ -393,7 +407,7 @@ def list_open_projects() -> List[str]:
 def save_central_timelapse(record: dict):
     """Registra ou atualiza um timelapse no banco central."""
     init_central_db()
-    with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO timelapses (
@@ -439,7 +453,7 @@ def update_central_timelapse_youtube(video_path: str, video_id: str, url: str):
     """Atualiza o link/ID do YouTube do timelapse no banco central."""
     if not CENTRAL_DB_PATH.exists():
         return
-    with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE timelapses
@@ -453,7 +467,7 @@ def list_central_timelapses(project_name: Optional[str] = None) -> List[Dict[str
     if not CENTRAL_DB_PATH.exists():
         return []
     results = []
-    with sqlite3.connect(CENTRAL_DB_PATH) as conn:
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         if project_name:
@@ -463,4 +477,18 @@ def list_central_timelapses(project_name: Optional[str] = None) -> List[Dict[str
         for row in cursor.fetchall():
             results.append(dict(row))
     return results
+
+def get_last_active_project() -> Optional[str]:
+    """Recupera o nome do último projeto ativo/atualizado no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        return None
+    try:
+        with get_db_connection(CENTRAL_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM projects ORDER BY updated_at DESC, rowid DESC LIMIT 1")
+            row = cursor.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
 
