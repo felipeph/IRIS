@@ -3,7 +3,7 @@ import time
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
 
 from src.core.config import config
 from src.core.logger import log_event, bind_project_logger
@@ -39,6 +39,8 @@ def show_config_menu():
         table.add_row("13", "Privacidade YouTube", str(config.get("modules.youtube.privacy_status", "unlisted")))
         table.add_row("14", "Playlist YouTube", str(config.get("modules.youtube.playlist", "Timelapses")))
         table.add_row("15", "Tópico NTFY Notificações", str(config.get("modules.timelapse.ntfy_topic", "timelapse-studio-2026")))
+        auto_clean_val = config.get("modules.cleanup.auto_clean", False)
+        table.add_row("16", "Limpeza Automática SD (Global)", "[green]Sim[/green]" if auto_clean_val else "[red]Não[/red]")
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -147,6 +149,12 @@ def show_config_menu():
             config.set("modules.youtube.ntfy_topic", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
+        elif choice == "16":
+            curr = config.get("modules.cleanup.auto_clean", False)
+            new_val = Confirm.ask("Ativar limpeza automática da origem por padrão em novos projetos?", default=curr)
+            config.set("modules.cleanup.auto_clean", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
@@ -232,11 +240,13 @@ def run_pipeline_for_project(active_project):
             
             space_status = "[green]:white_check_mark: Suficiente[/green]" if free_space > total_size_gb else "[red]:x: Insuficiente[/red]"
             
+            clean_status = "[green]:wastebasket: Ativada (Sem confirmação)[/green]" if active_project.auto_cleanup else "[yellow]Desativada (Preservar origem)[/yellow]"
             env_text = (
                 "[bold]\\[STATUS DO AMBIENTE][/bold]\n"
                 f"  [dim]• Espaço Livre SSD:[/dim]   {free_space:.2f} GB\n"
                 f"  [dim]• Origem Ativa:[/dim]       {active_project.source_path}\n"
                 f"  [dim]• Mídias Mapeadas:[/dim]    {medias_count} arquivos ({total_size_gb:.2f} GB) - {copied_count} copiados\n"
+                f"  [dim]• Limpeza Automática:[/dim] {clean_status}\n"
                 f"  [dim]• Status de Espaço:[/dim]   {space_status}\n"
                 f"  [dim]• Raiz de Destino:[/dim]    {dest_root}"
             )
@@ -251,6 +261,7 @@ def run_pipeline_for_project(active_project):
                 console.print(f"  [cyan]{i}.[/cyan] :arrow_forward: Etapa {i}: {stage.name}")
                 
             console.print("-" * 60)
+            console.print("  [cyan]L.[/cyan] :wastebasket: Alternar Limpeza Automática")
             console.print("  [cyan]P.[/cyan] :open_file_folder: Voltar / Selecionar Projeto")
             console.print("  [cyan]C.[/cyan] :gear: Configurações")
             console.print("  [cyan]0.[/cyan] :door: Sair")
@@ -260,6 +271,12 @@ def run_pipeline_for_project(active_project):
             if choice == "0":
                 console.print("Até logo!")
                 sys.exit(0)
+            elif choice == "L":
+                active_project.auto_cleanup = not active_project.auto_cleanup
+                active_project.save()
+                status_txt = "[green]Ativada (arquivos verificados irão para a lixeira sem confirmação)[/green]" if active_project.auto_cleanup else "[yellow]Desativada (origem preservada no fluxo sequencial)[/yellow]"
+                console.print(f"\nLimpeza automática do projeto: {status_txt}")
+                time.sleep(1.5)
             elif choice == "P":
                 break
             elif choice == "C":

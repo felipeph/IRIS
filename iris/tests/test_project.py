@@ -60,3 +60,33 @@ def test_create_project(mock_projects_dir):
     assert p.name == "new_proj"
     assert (mock_projects_dir / "iris_central.db").exists()
     assert (mock_projects_dir / "new_proj.db").exists()
+
+def test_project_auto_cleanup_persistence(mock_projects_dir):
+    """Testa persistência e recarregamento da flag auto_cleanup."""
+    p = create_project("proj_cleanup_test", "Z:\\source", auto_cleanup=True)
+    assert p.auto_cleanup is True
+    
+    p_loaded = get_project("proj_cleanup_test")
+    assert p_loaded is not None
+    assert p_loaded.auto_cleanup is True
+    
+    # Alterna para False e salva
+    p_loaded.auto_cleanup = False
+    p_loaded.save_metadata()
+    
+    p_reloaded = get_project("proj_cleanup_test")
+    assert p_reloaded is not None
+    assert p_reloaded.auto_cleanup is False
+
+def test_create_project_inherits_global_config(mock_projects_dir):
+    """Testa se novo projeto herda a configuração global."""
+    from src.core.config import config
+    
+    with patch.object(config, "get", return_value=True):
+        p1 = create_project("proj_inherited_true", "Z:\\source")
+        assert p1.auto_cleanup is True
+        
+    with patch.object(config, "get", return_value=False):
+        p2 = create_project("proj_inherited_false", "Z:\\source")
+        assert p2.auto_cleanup is False
+

@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from datetime import datetime
 
-from src.core.config import PROJECTS_DIR
+from src.core.config import PROJECTS_DIR, config
 
 # Database Central
 CENTRAL_DB_PATH = PROJECTS_DIR / "iris_central.db"
@@ -29,10 +29,15 @@ def init_central_db():
                 current_stage_id TEXT,
                 total_source_files INTEGER,
                 total_source_size_bytes INTEGER,
+                auto_cleanup INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
                 updated_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
             )
         """)
+        try:
+            cursor.execute("ALTER TABLE projects ADD COLUMN auto_cleanup INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS timelapses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +116,7 @@ class Project:
         self.current_stage_id = ""
         self.total_source_files = 0
         self.total_source_size_bytes = 0
+        self.auto_cleanup: bool = False
         
         self._project_db_file = PROJECTS_DIR / f"{self.name}.db"
 
@@ -191,15 +197,16 @@ class Project:
         with get_db_connection(CENTRAL_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO projects (name, source_path, current_stage_id, total_source_files, total_source_size_bytes, updated_at)
-                VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+                INSERT INTO projects (name, source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
                 ON CONFLICT(name) DO UPDATE SET
                     source_path=excluded.source_path,
                     current_stage_id=excluded.current_stage_id,
                     total_source_files=excluded.total_source_files,
                     total_source_size_bytes=excluded.total_source_size_bytes,
+                    auto_cleanup=excluded.auto_cleanup,
                     updated_at=strftime('%Y-%m-%d %H:%M:%f', 'now')
-            """, (self.name, self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes))
+            """, (self.name, self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes, int(self.auto_cleanup)))
             conn.commit()
             
     def load_metadata(self) -> bool:
@@ -208,10 +215,11 @@ class Project:
             return False
         with get_db_connection(CENTRAL_DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT source_path, current_stage_id, total_source_files, total_source_size_bytes FROM projects WHERE name=?", (self.name,))
+            cursor.execute("SELECT source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup FROM projects WHERE name=?", (self.name,))
             row = cursor.fetchone()
             if row:
-                self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes = row
+                self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes = row[0], row[1], row[2], row[3]
+                self.auto_cleanup = bool(row[4]) if len(row) > 4 and row[4] is not None else False
                 self._init_project_db()
                 return True
             return False
@@ -381,9 +389,13 @@ def get_project(name: str) -> Optional[Project]:
         return p
     return None
 
-def create_project(name: str, source_path: str) -> Project:
+def create_project(name: str, source_path: str, auto_cleanup: Optional[bool] = None) -> Project:
     """Cria e salva um novo projeto."""
     p = Project(name, source_path)
+    if auto_cleanup is None:
+        p.auto_cleanup = bool(config.get("modules.cleanup.auto_clean", False))
+    else:
+        p.auto_cleanup = bool(auto_cleanup)
     p.save_metadata()
     p._init_project_db()
     return p

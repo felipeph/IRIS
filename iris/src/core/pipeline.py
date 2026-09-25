@@ -67,6 +67,8 @@ class PipelineRunner:
     def run_stage(self, project: Project, target_stage_id: str, **kwargs) -> bool:
         """Executa apenas uma etapa específica pelo seu ID."""
         kwargs.setdefault("interactive", True)
+        if target_stage_id == "cleanup":
+            kwargs.setdefault("auto_clean", getattr(project, "auto_cleanup", False))
         for stage in self.stages:
             if stage.stage_id == target_stage_id:
                 console.print(f"\n[bold blue]--- Executando Etapa: '{stage.name}' ---[/bold blue]")
@@ -105,6 +107,12 @@ class PipelineRunner:
                     break
                     
         for stage in self.stages[start_index:]:
+            if stage.stage_id == "cleanup":
+                if not getattr(project, "auto_cleanup", False):
+                    console.print(f"\n[dim]-> Pulando etapa: {stage.name} (Limpeza automática desativada no projeto)[/dim]")
+                    continue
+                call_kwargs["auto_clean"] = True
+
             console.print(f"\n[bold cyan]-> Iniciando etapa: {stage.name}[/bold cyan]")
             try:
                 success = _invoke_stage(stage, project, call_kwargs)

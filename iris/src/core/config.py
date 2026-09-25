@@ -132,7 +132,8 @@ class ConfigManager:
             "modules": {
                 "dedup": {"enabled": True},
                 "timelapse": {"enabled": True},
-                "bird_detect": {"enabled": True}
+                "bird_detect": {"enabled": True},
+                "cleanup": {"auto_clean": False}
             }
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:

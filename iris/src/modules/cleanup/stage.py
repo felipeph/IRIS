@@ -2,6 +2,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from send2trash import send2trash
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -76,7 +77,7 @@ def generate_renderable(tracker, start_str, total_files, total_gb, current_file_
         f"  [bold]• Arquivos:[/bold]  {total_files:,}\n"
         f"  [bold]• Volume:[/bold]    {total_gb:.2f} GB"
     )
-    top_panel = Panel(info_text, title="ETAPA 2: LIMPEZA DA ORIGEM (SD)", title_align="left", border_style="red", expand=False)
+    top_panel = Panel(info_text, title="ETAPA 4: LIMPEZA DA ORIGEM (SD)", title_align="left", border_style="red", expand=False)
     
     completed = tracker.deleted_bytes
     total = tracker.total_bytes
@@ -111,7 +112,7 @@ class CleanupStage(PipelineStage):
     fazendo uma verificação extra (double check) no SSD.
     """
 
-    def run(self, project: Project) -> bool:
+    def run(self, project: Project, auto_clean: bool = False, **kwargs) -> bool:
         console.print(f"[yellow]Iniciando {self.name}...[/yellow]")
         
         source_dir = Path(project.source_path)
@@ -142,12 +143,16 @@ class CleanupStage(PipelineStage):
             
         total_files = len(items_to_delete)
         total_gb = total_bytes_to_delete / (1024**3)
-        console.print(f"[cyan]Encontrados {total_files} arquivos marcados como verificados ({total_gb:.2f} GB) e prontos para exclusão no SD.[/cyan]")
+        console.print(f"[cyan]Encontrados {total_files} arquivos marcados como verificados ({total_gb:.2f} GB) e prontos para limpeza no SD.[/cyan]")
         
-        # Pede confirmação (proteção)
-        if not Confirm.ask("[bold red]Tem certeza que deseja APAGAR permanentemente estes arquivos da origem?[/bold red]"):
-            console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
-            return True
+        is_auto = auto_clean or getattr(project, "auto_cleanup", False)
+        if is_auto:
+            console.print("[bold yellow]⚡ Limpeza automática ativada: enviando arquivos verificados para a Lixeira sem confirmação...[/bold yellow]")
+        else:
+            # Pede confirmação (proteção)
+            if not Confirm.ask("[bold red]Deseja enviar estes arquivos verificados da origem para a Lixeira?[/bold red]"):
+                console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
+                return True
             
         tracker = CleanupTracker(total_bytes_to_delete)
         start_str = datetime.now().strftime("%H:%M:%S")
@@ -173,14 +178,19 @@ class CleanupStage(PipelineStage):
                     is_safe_to_delete = False
                 
                 if is_safe_to_delete:
-                    live.update(generate_renderable(tracker, *render_args, "Limpando SD: Apagando origem..."))
+                    live.update(generate_renderable(tracker, *render_args, "Limpando SD: Enviando para a lixeira..."))
                     try:
-                        orig_path.unlink()
+                        send2trash(str(orig_path))
                         deleted_count += 1
                         tracker.update(file_size)
-                    except Exception as e:
-                        skipped_count += 1
-                        tracker.update(file_size)
+                    except Exception:
+                        try:
+                            orig_path.unlink()
+                            deleted_count += 1
+                            tracker.update(file_size)
+                        except Exception:
+                            skipped_count += 1
+                            tracker.update(file_size)
                 else:
                     skipped_count += 1
                     tracker.update(file_size)
@@ -201,7 +211,7 @@ class CleanupStage(PipelineStage):
                 pass
                 
         console.print(f"\n[green]Limpeza concluída![/green]")
-        console.print(f"  • [cyan]Arquivos apagados:[/cyan] {deleted_count}")
+        console.print(f"  • [cyan]Arquivos removidos (enviados para a lixeira):[/cyan] {deleted_count}")
         console.print(f"  • [yellow]Arquivos ignorados/falhas:[/yellow] {skipped_count}")
         console.print(f"  • [cyan]Pastas vazias removidas:[/cyan] {empty_dirs_removed}")
         

@@ -87,3 +87,32 @@ def test_pipeline_resume(dummy_project):
         
         mock_run1.assert_not_called() # Pula a s1
         mock_run2.assert_called_once() # Roda a s2
+
+def test_pipeline_skips_cleanup_when_auto_cleanup_is_false(dummy_project):
+    """Garante que a etapa de cleanup é pulada quando auto_cleanup é False."""
+    runner = PipelineRunner()
+    stage1 = DummyStage("s1", "Stage 1")
+    stage_cleanup = DummyStage("cleanup", "Limpeza da Origem")
+    runner.stages = [stage1, stage_cleanup]
+    
+    dummy_project.auto_cleanup = False
+    
+    with patch.object(stage_cleanup, "run") as mock_cleanup_run:
+        runner.run_project(dummy_project)
+        mock_cleanup_run.assert_not_called()
+        assert dummy_project.current_stage_id == "s1"
+
+def test_pipeline_runs_cleanup_when_auto_cleanup_is_true(dummy_project):
+    """Garante que a etapa de cleanup roda automaticamente quando auto_cleanup é True."""
+    runner = PipelineRunner()
+    stage1 = DummyStage("s1", "Stage 1")
+    stage_cleanup = DummyStage("cleanup", "Limpeza da Origem")
+    runner.stages = [stage1, stage_cleanup]
+    
+    dummy_project.auto_cleanup = True
+    
+    with patch.object(stage_cleanup, "run", return_value=True) as mock_cleanup_run:
+        runner.run_project(dummy_project)
+        mock_cleanup_run.assert_called_once()
+        assert dummy_project.current_stage_id == "cleanup"
+
