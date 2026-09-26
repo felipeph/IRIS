@@ -26,11 +26,16 @@ RAW_EXTENSIONS = {
     ".x3f",
     ".gpr",
     ".raw",
+    ".erf", ".mef", ".mos", ".kdc", ".dcr", ".k25", ".cap", ".bay",
 }
 
 STANDARD_PHOTO_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".tif", ".tiff",
-    ".heic", ".heif", ".webp", ".bmp", ".avif",
+    ".jpg", ".jpeg", ".jpe", ".jif", ".jfif", ".jfi",
+    ".png", ".tif", ".tiff",
+    ".heic", ".heif", ".hif",
+    ".webp", ".bmp", ".dib",
+    ".avif", ".gif", ".ico",
+    ".psd", ".jp2", ".j2k", ".jpf", ".jpx", ".jpm", ".mj2",
 }
 
 PHOTO_EXTENSIONS = STANDARD_PHOTO_EXTENSIONS | RAW_EXTENSIONS
@@ -38,8 +43,13 @@ PHOTO_EXTENSIONS = STANDARD_PHOTO_EXTENSIONS | RAW_EXTENSIONS
 VIDEO_EXTENSIONS = {
     ".mp4", ".mov", ".avi", ".mkv", ".m4v",
     ".wmv", ".flv", ".webm", ".mts", ".m2ts",
-    ".ts", ".3gp", ".insv", ".lrf",
+    ".ts", ".m2t", ".3gp", ".3g2", ".insv", ".lrf",
+    ".mpg", ".mpeg", ".mpe", ".m1v", ".m2v", ".mpv",
+    ".vob", ".ogv", ".ogg", ".dv", ".mxf", ".braw",
+    ".f4v", ".asf", ".rm", ".rmvb",
 }
+
+MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 
 @dataclass
 class MediaMetadata:

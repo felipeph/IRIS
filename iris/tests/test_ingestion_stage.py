@@ -98,3 +98,134 @@ def test_ingestion_invalid_source(mock_config):
     project = Project("test", "X:\\non_existent_dir")
     stage = IngestionStage("ingest", "Ingestão")
     assert stage.run(project) is False
+
+def test_strategy_factory():
+    """Garante que a fábrica seleciona MoveStrategy ou CopyStrategy com base no config."""
+    from src.modules.ingestion.strategies import MoveStrategy, CopyStrategy
+
+    stage = IngestionStage("ingest", "Ingestão")
+
+    with patch("src.modules.ingestion.stage.config.get") as mock_get:
+        mock_get.side_effect = lambda k, default=None: "copy" if "strategy" in k else 4
+        strat = stage.get_strategy()
+        assert isinstance(strat, CopyStrategy)
+
+    with patch("src.modules.ingestion.stage.config.get") as mock_get:
+        mock_get.side_effect = lambda k, default=None: "move" if "strategy" in k else 8
+        strat = stage.get_strategy()
+        assert isinstance(strat, MoveStrategy)
+        assert strat.max_workers == 8
+
+def test_move_strategy_basic(ingestion_env, tmp_path):
+    """Garante movimentação nativa dos arquivos, remoção da origem, hash e limpeza de pastas."""
+    from src.modules.ingestion.strategies import MoveStrategy
+
+    src_dir, dest_root = ingestion_env
+    dest_dir = dest_root / "1_Entrada" / "test_move" / "raw"
+
+    # Criar subpasta na origem para testar remoção de pasta vazia
+    sub_origem = src_dir / "100CANON"
+    sub_origem.mkdir()
+    (sub_origem / "sub_foto.jpg").write_text("sub photo data")
+
+    project = Project("test_move", str(src_dir))
+    project._init_project_db()
+
+    strategy = MoveStrategy(max_workers=2)
+    success = strategy.execute(project, src_dir, dest_dir)
+
+    assert success is True
+    # Originais de mídia foram movidos (não devem mais existir na origem)
+    assert not (src_dir / "foto1.jpg").exists()
+    assert not (src_dir / "video1.mp4").exists()
+    assert not (sub_origem / "sub_foto.jpg").exists()
+    # Pasta vazia foi limpa
+    assert not sub_origem.exists()
+    # Arquivo não mídia foi preservado na origem
+    assert (src_dir / "not_media.txt").exists()
+
+    # Destino deve ter os arquivos com conteúdo íntegro
+    assert (dest_dir / "foto1.jpg").exists()
+    assert (dest_dir / "video1.mp4").exists()
+    assert (dest_dir / "100CANON" / "sub_foto.jpg").exists()
+
+    # Verifica itens salvos no banco
+    items = project.get_items()
+    assert len(items) == 3
+    for it in items:
+        assert it.status == "copied"
+        assert it.verified is True
+        assert len(it.file_hash) > 0
+
+def test_move_strategy_collision_and_duplicate(ingestion_env):
+    """Garante tratamento de colisão com sufixo e deduplicação de arquivo idêntico."""
+    from src.modules.ingestion.strategies import MoveStrategy
+
+    src_dir, dest_root = ingestion_env
+    dest_dir = dest_root / "1_Entrada" / "test_collision" / "raw"
+    dest_dir.mkdir(parents=True)
+
+    # 1. Arquivo idêntico já presente no destino (mesmo nome, mesmo tamanho)
+    foto1_dest = dest_dir / "foto1.jpg"
+    foto1_dest.write_text("dummy image content") # exatamente o mesmo texto de foto1.jpg
+
+    # 2. Arquivo com mesmo nome mas tamanho diferente no destino
+    video1_dest = dest_dir / "video1.mp4"
+    video1_dest.write_text("diferente e maior tamanho de conteudo")
+
+    project = Project("test_collision", str(src_dir))
+    project._init_project_db()
+
+    strategy = MoveStrategy(max_workers=2)
+    success = strategy.execute(project, src_dir, dest_dir)
+
+    assert success is True
+
+    # foto1 era idêntico: arquivo no destino preservado
+    assert foto1_dest.exists()
+
+    # video1 colidiu com tamanho diferente: destino deve conter video1.mp4 (original do destino)
+    # e video1_1.mp4 (movido da origem com sufixo incremental)
+    assert (dest_dir / "video1.mp4").exists()
+    assert (dest_dir / "video1_1.mp4").exists()
+    assert (dest_dir / "video1_1.mp4").read_text() == "dummy video content"
+
+def test_move_strategy_legacy_extensions(tmp_path):
+    """Garante que formatos de mídia legados e diversos são ingeridos."""
+    from src.modules.ingestion.strategies import MoveStrategy
+
+    src_dir = tmp_path / "DCIM_LEGACY"
+    dest_dir = tmp_path / "DEST_RAW"
+    src_dir.mkdir()
+    dest_dir.mkdir()
+
+    # Criar arquivos com formatos antigos e variados
+    legacy_files = [
+        "antigo.avi",
+        "video.3gp",
+        "camcorder.mts",
+        "raw_canon.cr3",
+        "iphone.heic",
+        "bitmap.bmp",
+        "anim.webp"
+    ]
+    for name in legacy_files:
+        (src_dir / name).write_text(f"content of {name}")
+
+    (src_dir / "documento.pdf").write_text("nao midia")
+
+    project = Project("test_legacy", str(src_dir))
+    project._init_project_db()
+
+    strategy = MoveStrategy(max_workers=2)
+    success = strategy.execute(project, src_dir, dest_dir)
+
+    assert success is True
+    for name in legacy_files:
+        assert (dest_dir / name).exists()
+        assert not (src_dir / name).exists()
+
+    # PDF não deve ter sido movido
+    assert (src_dir / "documento.pdf").exists()
+    assert not (dest_dir / "documento.pdf").exists()
+

@@ -121,3 +121,20 @@ def test_cleanup_stage_double_check_protects_unmatched_files(cleanup_env):
         assert success is True
         # Nenhum arquivo deve ter sido enviado para a lixeira por falha no double-check
         mock_trash.assert_not_called()
+
+def test_cleanup_stage_when_files_already_moved(cleanup_env):
+    """Garante que quando os arquivos já foram movidos na ingestão, a etapa cleanup conclui com sucesso sem erros."""
+    project = cleanup_env["project"]
+    stage = CleanupStage("cleanup", "Limpeza da Origem")
+
+    # Simula que os arquivos originais já foram movidos (não existem mais na origem)
+    cleanup_env["src_file1"].unlink()
+    cleanup_env["src_file2"].unlink()
+
+    with patch.object(project, "get_items", return_value=cleanup_env["items"]), \
+         patch("src.modules.cleanup.stage.send2trash") as mock_trash:
+
+        success = stage.run(project, auto_clean=True)
+        assert success is True
+        mock_trash.assert_not_called()
+

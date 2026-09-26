@@ -10,6 +10,7 @@ from src.core.logger import log_event, bind_project_logger
 from src.core.project import list_open_projects, get_project, create_project, get_last_active_project
 from src.core.lock import ProjectLock, ProjectLockedError
 from src.core.pipeline import PipelineRunner
+from src.core.metadata import MEDIA_EXTENSIONS
 
 console = Console()
 
@@ -44,6 +45,10 @@ def show_config_menu():
         sample_enabled = config.get("classification.enable_timelapse_album_samples", True)
         table.add_row("17", "Amostras Timelapse p/ Álbum", "[green]Sim[/green]" if sample_enabled else "[red]Não[/red]")
         table.add_row("18", "Intervalo Amostras (min)", str(config.get("classification.timelapse_sample_interval_minutes", 5.0)))
+        ingest_strat = config.get("modules.ingestion.strategy", "move")
+        strat_display = "Movimentação Nativa (Turbo)" if ingest_strat == "move" else "Cópia Segura (Hash on-the-fly)"
+        table.add_row("19", "Estratégia de Ingestão", strat_display)
+        table.add_row("20", "Workers Ingestão (Threads)", str(config.get("modules.ingestion.max_workers", 4)))
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -176,6 +181,29 @@ def show_config_menu():
             except ValueError:
                 console.print("[red]Valor deve ser um número positivo maior que zero![/red]")
             time.sleep(1)
+        elif choice == "19":
+            console.print("Estratégias disponíveis: [bold]move[/bold] (Rápida - movimentação nativa do SO), [bold]copy[/bold] (Clássica - cópia segura com fsync)")
+            curr = config.get("modules.ingestion.strategy", "move")
+            new_val = Prompt.ask("Escolha a estratégia (move/copy)", default=curr).lower()
+            if new_val in ["move", "copy"]:
+                config.set("modules.ingestion.strategy", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida! Escolha 'move' ou 'copy'.[/red]")
+            time.sleep(1)
+        elif choice == "20":
+            curr = config.get("modules.ingestion.max_workers", 4)
+            new_val = Prompt.ask("Quantidade de Workers / Threads para Ingestão (1 a 32)", default=str(curr))
+            try:
+                workers_int = int(new_val)
+                if 1 <= workers_int <= 32:
+                    config.set("modules.ingestion.max_workers", workers_int)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve ser entre 1 e 32![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
@@ -243,12 +271,11 @@ def run_pipeline_for_project(active_project):
             if active_project.total_source_files == 0:
                 from pathlib import Path
                 source_dir = Path(active_project.source_path)
-                valid_exts = {'.jpg', '.jpeg', '.png', '.mp4', '.mov', '.cr2', '.cr3', '.raw'}
                 if source_dir.exists():
                     count = 0
                     size = 0
                     for p in source_dir.rglob("*"):
-                        if p.is_file() and p.suffix.lower() in valid_exts and not p.name.startswith('.'):
+                        if p.is_file() and p.suffix.lower() in MEDIA_EXTENSIONS and not p.name.startswith('.'):
                             count += 1
                             size += p.stat().st_size
                     active_project.total_source_files = count
@@ -262,11 +289,16 @@ def run_pipeline_for_project(active_project):
             space_status = "[green]:white_check_mark: Suficiente[/green]" if free_space > total_size_gb else "[red]:x: Insuficiente[/red]"
             
             clean_status = "[green]:wastebasket: Ativada (Sem confirmação)[/green]" if active_project.auto_cleanup else "[yellow]Desativada (Preservar origem)[/yellow]"
+            ingest_strat_val = config.get("modules.ingestion.strategy", "move")
+            ingest_workers_val = config.get("modules.ingestion.max_workers", 4)
+            ingest_mode_str = f"[bold green]Movimentação Nativa ({ingest_workers_val} workers)[/bold green]" if ingest_strat_val == "move" else "[cyan]Cópia Segura (Hash on-the-fly)[/cyan]"
+
             env_text = (
                 "[bold]\\[STATUS DO AMBIENTE][/bold]\n"
                 f"  [dim]• Espaço Livre SSD:[/dim]   {free_space:.2f} GB\n"
                 f"  [dim]• Origem Ativa:[/dim]       {active_project.source_path}\n"
                 f"  [dim]• Mídias Mapeadas:[/dim]    {medias_count} arquivos ({total_size_gb:.2f} GB) - {copied_count} copiados\n"
+                f"  [dim]• Modo Ingestão:[/dim]      {ingest_mode_str}\n"
                 f"  [dim]• Limpeza Automática:[/dim] {clean_status}\n"
                 f"  [dim]• Status de Espaço:[/dim]   {space_status}\n"
                 f"  [dim]• Raiz de Destino:[/dim]    {dest_root}"

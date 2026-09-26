@@ -19,8 +19,13 @@ classification:
 modules:
   bird_detect:
     enabled: true
+  cleanup:
+    auto_clean: true
   dedup:
     enabled: true
+  ingestion:
+    strategy: "move"          # "move" (rápido nativo) ou "copy" (cópia clássica segura)
+    max_workers: 4            # número de threads para movimentação paralela
   timelapse:
     enabled: true
     fps: 60
