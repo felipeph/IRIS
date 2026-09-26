@@ -118,8 +118,8 @@ class ConfigManager:
                 ]
             },
             "naming": {
-                "photo_pattern": "{date}_{time}_{camera}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}",
-                "video_pattern": "{date}_{time}_{camera}_{resolution}_{fps}_{duration}_{original}.{ext}"
+                "photo_pattern": "{date}_{time}_{camera}_{resolution}_{dimensions}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}",
+                "video_pattern": "{date}_{time}_{camera}_{resolution}_{dimensions}_{fps}_{duration}_{original}.{ext}"
             },
             "classification": {
                 "moon_zoom_threshold_mm": 1000.0,

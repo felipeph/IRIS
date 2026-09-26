@@ -84,7 +84,10 @@ class MediaMetadata:
     def megapixels_str(self) -> str:
         if self.width and self.height and not self.is_video:
             mp = (self.width * self.height) / 1_000_000
-            return f"{round(mp)}MP" if mp >= 1 else f"{self.width}x{self.height}"
+            if mp >= 1:
+                return f"{round(mp)}MP"
+            elif mp > 0:
+                return f"{mp:.1f}MP"
         return self.resolution_str or ""
 
 def parse_camera_generic(raw_make: str, raw_model: str) -> tuple[str, str, str]:
@@ -423,7 +426,12 @@ def extract_metadata_batch(
         else:
             if width and height:
                 mp = (width * height) / 1_000_000
-                res_str = f"{round(mp)}MP" if mp >= 1 else f"{width}x{height}"
+                if mp >= 1:
+                    res_str = f"{round(mp)}MP"
+                elif mp > 0:
+                    res_str = f"{mp:.1f}MP"
+                else:
+                    res_str = ""
             else:
                 res_str = ""
 

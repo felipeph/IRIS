@@ -33,6 +33,8 @@ def test_generate_photo_filename():
     res = generate_target_filename(meta)
     assert "2026-09-06_14-25-30" in res
     assert "SX60" in res
+    assert "16MP" in res
+    assert "4608x3456" in res
     assert "1365mm" in res
     assert res.endswith(".jpg")
 
@@ -62,5 +64,6 @@ def test_generate_video_filename():
     res = generate_target_filename(meta)
     assert "2026-09-06_15-10-00" in res
     assert "1080p" in res
+    assert "1920x1080" in res
     assert "60fps" in res
     assert res.endswith(".mp4")

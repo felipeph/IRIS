@@ -29,10 +29,24 @@ def test_generate_timelapse_video_name():
         fps=60,
         fpi=1,
         target_height=2160,
+        crop_mode="center",
         is_test=False
     )
-    assert name.startswith("2026-08-17_16h55m-18h30m_Canon-PowerShot-SX60-HS_4608x3456_4K_60fps_1fpi_")
+    assert name.startswith("2026-08-17_16h55m-18h30m_Canon-PowerShot-SX60-HS_4608x3456_4K_center_60fps_1fpi_")
     assert name.endswith("_timelapse.mp4")
+
+    # Teste com outros modos de corte (top e bottom)
+    name_top = generate_timelapse_video_name(
+        first_dt=d1, last_dt=d2, camera_model="Canon", orig_w=4000, orig_h=3000,
+        total_photos=100, crop_mode="top"
+    )
+    assert "_4K_top_60fps_" in name_top
+
+    name_bottom = generate_timelapse_video_name(
+        first_dt=d1, last_dt=d2, camera_model="Canon", orig_w=4000, orig_h=3000,
+        total_photos=100, crop_mode="bottom"
+    )
+    assert "_4K_bottom_60fps_" in name_bottom
 
 def test_resolve_produced_output_path(tmp_path):
     d1 = datetime(2026, 9, 21, 10, 0, 0)

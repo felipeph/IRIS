@@ -115,6 +115,7 @@ class TimelapseStage(PipelineStage):
             fpi = max(1, tl_config.get("frames_per_image", 1))
             target_h = tl_config.get("target_height", 2160)
             target_w = tl_config.get("target_width", 3840)
+            crop_mode = tl_config.get("crop_mode", "center")
 
             video_name = generate_timelapse_video_name(
                 first_dt=first_dt,
@@ -126,6 +127,7 @@ class TimelapseStage(PipelineStage):
                 fps=fps,
                 fpi=fpi,
                 target_height=target_h,
+                crop_mode=crop_mode,
                 is_test=False
             )
 
@@ -179,7 +181,7 @@ class TimelapseStage(PipelineStage):
                     "fps": fps,
                     "frames_per_image": fpi,
                     "resolution": f"{target_w}x{target_h}",
-                    "crop_mode": tl_config.get("crop_mode", "bottom"),
+                    "crop_mode": crop_mode,
                     "encoder": encoder_used,
                     "duration_seconds": dur_sec,
                     "speedup_factor": speedup,

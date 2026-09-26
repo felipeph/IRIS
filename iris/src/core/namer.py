@@ -27,6 +27,7 @@ def clean_original_stem(original: str, meta: MediaMetadata) -> str:
     if meta.camera_make and meta.camera_make != "Cam": tokens_to_remove.append(meta.camera_make)
     if meta.dimensions_str: tokens_to_remove.append(meta.dimensions_str)
     if meta.resolution_str: tokens_to_remove.append(meta.resolution_str)
+    if meta.megapixels_str: tokens_to_remove.append(meta.megapixels_str)
     if meta.fps_str: tokens_to_remove.append(meta.fps_str)
     if meta.duration_str: tokens_to_remove.append(meta.duration_str)
     
@@ -67,9 +68,10 @@ def generate_target_filename(meta: MediaMetadata, config: dict | None = None) ->
     height_str = str(height_val) if height_val is not None else ""
     dimensions_str = getattr(meta, "dimensions_str", "") or (f"{width_str}x{height_str}" if (width_str and height_str) else "")
     megapixels_str = getattr(meta, "megapixels_str", "") or (meta.resolution_str or "")
+    photo_res = meta.resolution_str or megapixels_str or ""
 
     if meta.is_video:
-        pattern = config.get("video_pattern", "{date}_{time}_{camera}_{resolution}_{fps}_{duration}_{original}.{ext}")
+        pattern = config.get("video_pattern", "{date}_{time}_{camera}_{resolution}_{dimensions}_{fps}_{duration}_{original}.{ext}")
         res = pattern.format(
             date=meta.date_str,
             time=meta.time_str,
@@ -91,7 +93,7 @@ def generate_target_filename(meta: MediaMetadata, config: dict | None = None) ->
         )
     else:
         # Photo
-        pattern = config.get("photo_pattern", "{date}_{time}_{camera}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}")
+        pattern = config.get("photo_pattern", "{date}_{time}_{camera}_{resolution}_{dimensions}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}")
         res = pattern.format(
             date=meta.date_str,
             time=meta.time_str,
@@ -100,16 +102,16 @@ def generate_target_filename(meta: MediaMetadata, config: dict | None = None) ->
             model=model,
             camera_make=make,
             camera_model=model,
+            resolution=photo_res,
+            megapixels=megapixels_str or photo_res,
+            mp=megapixels_str or photo_res,
+            width=width_str,
+            height=height_str,
+            dimensions=dimensions_str,
             focal=meta.focal_str or "",
             aperture=meta.aperture_str or "",
             shutter=meta.shutter_str or "",
             iso=meta.iso_str or "",
-            resolution=meta.resolution_str or "",
-            megapixels=megapixels_str,
-            mp=megapixels_str,
-            width=width_str,
-            height=height_str,
-            dimensions=dimensions_str,
             original=original_clean,
             ext=meta.extension.lower(),
         )
