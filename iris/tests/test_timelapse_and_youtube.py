@@ -5,6 +5,7 @@ from datetime import datetime
 from src.core.project import Project, create_project
 from src.core.pipeline import PipelineRunner
 from src.modules.timelapse.encoder import detect_ffmpeg_encoder
+from src.modules.timelapse.renderer import build_video_filter_chain
 from src.modules.timelapse.namer import generate_timelapse_video_name, resolve_produced_output_path
 from src.modules.timelapse.sequence import prepare_numbered_sequence, clean_sequence_dir
 from src.modules.timelapse.stage import get_stage as get_timelapse_stage
@@ -138,3 +139,53 @@ def test_build_timelapse_youtube_metadata():
     assert "600" in meta["description"]
     assert meta["privacy_status"] == "unlisted"
     assert "timelapse" in meta["tags"]
+
+
+def test_build_video_filter_chain_deband_and_grain():
+    # Caso 1: Deband habilitado com grão (padrão otimizado para YouTube)
+    deband_cfg = {"enabled": True, "add_grain": True}
+    vf = build_video_filter_chain(
+        crop_mode="center",
+        target_w=3840,
+        target_h=2160,
+        deband_config=deband_cfg
+    )
+    assert "scale=3840:2160:flags=lanczos" in vf
+    assert "(iw-ow)/2" in vf
+    assert "deband=1thr=0.04:2thr=0.04:3thr=0.04:range=16:blur=true:coupling=true" in vf
+    assert "noise=alls=1:allf=t" in vf
+
+    # Caso 2: Deband habilitado sem grão
+    deband_cfg_no_grain = {"enabled": True, "add_grain": False}
+    vf_no_grain = build_video_filter_chain(
+        crop_mode="top",
+        target_w=1920,
+        target_h=1080,
+        deband_config=deband_cfg_no_grain
+    )
+    assert "scale=1920:1080:flags=lanczos" in vf_no_grain
+    assert "y='0'" in vf_no_grain
+    assert "deband=1thr=0.04:2thr=0.04:3thr=0.04:range=16:blur=true:coupling=true" in vf_no_grain
+    assert "noise=" not in vf_no_grain
+
+    # Caso 3: Deband desabilitado
+    deband_cfg_disabled = {"enabled": False, "add_grain": True}
+    vf_disabled = build_video_filter_chain(
+        crop_mode="bottom",
+        target_w=3840,
+        target_h=2160,
+        deband_config=deband_cfg_disabled
+    )
+    assert "scale=3840:2160:flags=lanczos" in vf_disabled
+    assert "deband=" not in vf_disabled
+    assert "noise=" not in vf_disabled
+
+    # Caso 4: Configuração ausente / None
+    vf_none = build_video_filter_chain(
+        crop_mode="bottom",
+        target_w=3840,
+        target_h=2160,
+        deband_config=None
+    )
+    assert "deband=" not in vf_none
+    assert "noise=" not in vf_none

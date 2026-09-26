@@ -16,6 +16,34 @@ from src.modules.timelapse.encoder import detect_ffmpeg_encoder
 
 console = Console()
 
+def build_video_filter_chain(
+    crop_mode: str = "bottom",
+    target_w: int = 3840,
+    target_h: int = 2160,
+    deband_config: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Constrói a cadeia de filtros de vídeo (-vf) para o FFmpeg.
+    Aplica crop proporcional para 16:9, scale Lanczos e filtros opcionais
+    de deband e micro-grão temporal para preservação de gradientes contra a compressão do YouTube.
+    """
+    res_scale = f"{target_w}:{target_h}"
+    if crop_mode == "center":
+        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='(ih-oh)/2',scale={res_scale}:flags=lanczos"
+    elif crop_mode == "top":
+        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='0',scale={res_scale}:flags=lanczos"
+    else:  # bottom
+        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='(ih-oh)',scale={res_scale}:flags=lanczos"
+
+    filters = [crop_filter]
+
+    if deband_config and deband_config.get("enabled", False):
+        filters.append("deband=1thr=0.04:2thr=0.04:3thr=0.04:range=16:blur=true:coupling=true")
+        if deband_config.get("add_grain", False):
+            filters.append("noise=alls=1:allf=t")
+
+    return ",".join(filters)
+
 def render_timelapse_video(
     sequence_dir: Path,
     output_video_path: Path,
@@ -35,17 +63,20 @@ def render_timelapse_video(
     target_w = config.get("target_width", 3840)
     target_h = config.get("target_height", 2160)
 
+    deband_cfg = config.get("deband")
+    if deband_cfg is None:
+        deband_cfg = {"enabled": True, "add_grain": True}
+
     # 1. Detecta acelerador
     encoder_name, encoder_args = detect_ffmpeg_encoder(preset=preset, crf=crf)
 
-    # 2. Configura filtros de Crop e Lanczos Scale
-    res_scale = f"{target_w}:{target_h}"
-    if crop_mode == "center":
-        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='(ih-oh)/2',scale={res_scale}:flags=lanczos"
-    elif crop_mode == "top":
-        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='0',scale={res_scale}:flags=lanczos"
-    else:  # bottom
-        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='(ih-oh)',scale={res_scale}:flags=lanczos"
+    # 2. Configura filtros de Crop, Lanczos Scale, Deband e Grain
+    video_filter = build_video_filter_chain(
+        crop_mode=crop_mode,
+        target_w=target_w,
+        target_h=target_h,
+        deband_config=deband_cfg
+    )
 
     input_pattern = (sequence_dir / "%06d.jpg").as_posix()
     input_fps = f"{fps}/{frames_per_image}"
@@ -64,7 +95,7 @@ def render_timelapse_video(
     cmd = [
         "ffmpeg", "-y", "-hide_banner",
         *input_args,
-        "-vf", crop_filter,
+        "-vf", video_filter,
         "-r", str(fps),
         "-pix_fmt", "yuv420p",
         "-progress", "pipe:1",
@@ -77,7 +108,12 @@ def render_timelapse_video(
     total_frames = max(1, photo_count * frames_per_image)
     start_time = time.time()
     start_str = datetime.now().strftime("%H:%M:%S")
-    resolution_label = f"{target_w}x{target_h} ({'4K UHD' if target_h >= 2160 else 'HD'})"
+
+    deband_label = ""
+    if deband_cfg.get("enabled", False):
+        deband_label = " [Deband+Grain]" if deband_cfg.get("add_grain", False) else " [Deband]"
+
+    resolution_label = f"{target_w}x{target_h} ({'4K UHD' if target_h >= 2160 else 'HD'}){deband_label}"
     output_name = output_video_path.name
 
     stderr_lines = []

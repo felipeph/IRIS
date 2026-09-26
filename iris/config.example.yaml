@@ -38,6 +38,9 @@ modules:
     downscale_mode: "scale"
     test_sample_size: 120
     auto_clean_sequence: true
+    deband:
+      enabled: true             # Suaviza faixas de cor em gradientes (céu) no FFmpeg
+      add_grain: true           # Adiciona micro-grão sutil para evitar recompressão do YouTube
     ntfy_topic: "timelapse-studio-2026"
     windows_toast: true
   youtube:
