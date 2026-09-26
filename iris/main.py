@@ -41,6 +41,9 @@ def show_config_menu():
         table.add_row("15", "Tópico NTFY Notificações", str(config.get("modules.timelapse.ntfy_topic", "timelapse-studio-2026")))
         auto_clean_val = config.get("modules.cleanup.auto_clean", False)
         table.add_row("16", "Limpeza Automática SD (Global)", "[green]Sim[/green]" if auto_clean_val else "[red]Não[/red]")
+        sample_enabled = config.get("classification.enable_timelapse_album_samples", True)
+        table.add_row("17", "Amostras Timelapse p/ Álbum", "[green]Sim[/green]" if sample_enabled else "[red]Não[/red]")
+        table.add_row("18", "Intervalo Amostras (min)", str(config.get("classification.timelapse_sample_interval_minutes", 5.0)))
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -154,6 +157,24 @@ def show_config_menu():
             new_val = Confirm.ask("Ativar limpeza automática da origem por padrão em novos projetos?", default=curr)
             config.set("modules.cleanup.auto_clean", new_val)
             console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "17":
+            curr = config.get("classification.enable_timelapse_album_samples", True)
+            new_val = Confirm.ask("Copiar automaticamente amostras de timelapses para subpastas de álbuns?", default=curr)
+            config.set("classification.enable_timelapse_album_samples", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "18":
+            curr = config.get("classification.timelapse_sample_interval_minutes", 5.0)
+            new_val = Prompt.ask("Intervalo de tempo entre amostras (minutos)", default=str(curr))
+            try:
+                val_float = float(new_val)
+                if val_float <= 0:
+                    raise ValueError
+                config.set("classification.timelapse_sample_interval_minutes", val_float)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número positivo maior que zero![/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

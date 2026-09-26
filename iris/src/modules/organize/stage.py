@@ -104,6 +104,16 @@ class OrganizeStage(PipelineStage):
         summary_table.add_row("[bold]TOTAL[/bold]", f"[bold]{dest_root}[/bold]", f"[bold]{total_files}[/bold]", f"[bold]{total_str}[/bold]")
         console.print(summary_table)
 
+        total_extra_copies = 0
+        for it in items_to_organize:
+            if it.extra_dest_dirs_json and it.extra_dest_dirs_json != "[]":
+                try:
+                    total_extra_copies += len(json.loads(it.extra_dest_dirs_json))
+                except Exception:
+                    pass
+        if total_extra_copies > 0:
+            console.print(f"[cyan]ℹ Inclui {total_extra_copies} cópia(s) extra(s) planejada(s) (ex: amostras de timelapses para álbuns).[/cyan]")
+
         # Confirmação caso modo interativo
         if interactive:
             console.print("\n[bold yellow]Atenção:[/bold yellow] Os arquivos serão movidos da staging ('1_Entrada') para os destinos definitivos.")

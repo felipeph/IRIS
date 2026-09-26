@@ -310,3 +310,46 @@ def test_organize_interactive_cancellation(organize_env):
     assert f1.exists()
     it = project.get_item("G:/DCIM/IMG.JPG")
     assert it.status == "copied"
+
+
+def test_organize_timelapse_sample_to_album(organize_env):
+    dest_root = organize_env
+    project = Project("proj_tl_sample")
+    project._init_project_db()
+
+    staging_dir = dest_root / "1_Entrada" / "proj_tl_sample" / "timelapse"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    f1 = staging_dir / "IMG_0001.JPG"
+    f1.write_bytes(b"sample photo content")
+    h = compute_file_hash(f1)
+
+    sample_album_rel = "2_AlbunsDatas/2026/09/25/timelapse_amostras_10-00-00"
+    item = ProjectItem(
+        original_path="G:/DCIM/IMG_0001.JPG",
+        staging_path=str(f1),
+        status="copied",
+        verified=True,
+        file_size_bytes=len(b"sample photo content"),
+        file_hash=h,
+        category="timelapse",
+        relative_dest_dir="4_Timelapses/Canon/2026/09/25/timelapse_10-00-00",
+        target_filename="2026-09-25_10-00-00_Canon_IMG_0001.jpg",
+        extra_dest_dirs_json=json.dumps([sample_album_rel])
+    )
+    project.save_item(item)
+
+    with patch("src.modules.organize.stage.config") as mock_config:
+        mock_config.get.return_value = str(dest_root)
+        stage = OrganizeStage("organize", "Organização")
+        success = stage.run(project, interactive=False)
+        assert success is True
+
+    # Verifica arquivo na pasta definitiva de timelapses
+    tl_file = dest_root / "4_Timelapses" / "Canon" / "2026" / "09" / "25" / "timelapse_10-00-00" / "2026-09-25_10-00-00_Canon_IMG_0001.jpg"
+    assert tl_file.exists()
+
+    # Verifica cópia de amostra no álbum
+    album_sample_file = dest_root / "2_AlbunsDatas" / "2026" / "09" / "25" / "timelapse_amostras_10-00-00" / "2026-09-25_10-00-00_Canon_IMG_0001.jpg"
+    assert album_sample_file.exists()
+    assert album_sample_file.read_bytes() == b"sample photo content"
+

@@ -130,21 +130,60 @@ def _classify_bursts_and_singles(photos: list[MediaMetadata], class_config: dict
                 target_filename=target_name,
             ))
 
-def _classify_timelapse(photos: list[MediaMetadata], name_config: dict, classified: list[ClassifiedItem]):
+def _classify_timelapse(photos: list[MediaMetadata], name_config: dict, classified: list[ClassifiedItem], class_config: dict | None = None):
     if not photos:
         return
     first = photos[0]
-    y, m, d = first.date_str.split("-")
+    parts = first.date_str.split("-")
+    if len(parts) == 3:
+        y, m, d = parts
+    else:
+        y, m, d = "SemData", "00", "00"
+
     cam_folder = first.camera_make or "Camera"
     tl_dir = Path("4_Timelapses") / cam_folder / y / m / d / f"timelapse_{first.time_str}"
 
-    for it in photos:
+    # Configuração de Amostragem para Álbuns (2_AlbunsDatas)
+    enable_samples = True
+    sample_interval_sec = 300.0  # 5 minutos padrão
+    if class_config:
+        enable_samples = class_config.get("enable_timelapse_album_samples", True)
+        interval_min = class_config.get("timelapse_sample_interval_minutes", 5.0)
+        try:
+            sample_interval_sec = max(1.0, float(interval_min) * 60.0)
+        except (ValueError, TypeError):
+            sample_interval_sec = 300.0
+
+    album_sample_dir = Path("2_AlbunsDatas") / y / m / d / f"timelapse_amostras_{first.time_str}"
+
+    sampled_indices = set()
+    if enable_samples and photos:
+        # Primeiro frame garantido
+        sampled_indices.add(0)
+        last_sampled_dt = photos[0].timestamp
+
+        # Intermediários espaçados por sample_interval_sec
+        for idx in range(1, len(photos) - 1):
+            curr_dt = photos[idx].timestamp
+            if curr_dt and last_sampled_dt:
+                delta = (curr_dt - last_sampled_dt).total_seconds()
+                if delta >= sample_interval_sec:
+                    sampled_indices.add(idx)
+                    last_sampled_dt = curr_dt
+
+        # Último frame garantido
+        if len(photos) > 1:
+            sampled_indices.add(len(photos) - 1)
+
+    for idx, it in enumerate(photos):
         target_name = generate_target_filename(it, name_config)
+        extra_dirs = [album_sample_dir] if idx in sampled_indices else []
         classified.append(ClassifiedItem(
             metadata=it,
             category="timelapse",
             relative_dest_dir=tl_dir,
             target_filename=target_name,
+            extra_dest_dirs=extra_dirs,
         ))
 
 def classify_media_batch(items: list[MediaMetadata], class_config: dict | None = None, name_config: dict | None = None) -> list[ClassifiedItem]:
@@ -232,7 +271,7 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
                 for start_idx, end_idx in segments:
                     if start_idx > cur_idx:
                         _classify_bursts_and_singles(cam_photos[cur_idx:start_idx], class_config, name_config, classified)
-                    _classify_timelapse(cam_photos[start_idx:end_idx + 1], name_config, classified)
+                    _classify_timelapse(cam_photos[start_idx:end_idx + 1], name_config, classified, class_config=class_config)
                     cur_idx = end_idx + 1
                 if cur_idx < len(cam_photos):
                     _classify_bursts_and_singles(cam_photos[cur_idx:], class_config, name_config, classified)

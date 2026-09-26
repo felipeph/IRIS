@@ -14,6 +14,8 @@ classification:
   timelapse_tolerance_ratio: 1.5
   enable_burst_detection: false
   burst_interval_seconds: 1.5
+  enable_timelapse_album_samples: true
+  timelapse_sample_interval_minutes: 5.0
 modules:
   bird_detect:
     enabled: true
