@@ -3,9 +3,9 @@
 ## 📌 Pendentes (A Fazer)
 - [ ] **feat**: Implementar módulo local de visão computacional (GPU/on-device, via YOLO ou classificador leve) para inferência em amostragem de frames e extração automática de palavras-chave/tags da cena (ex: nuvens, sol, chuva, pássaros) sem custo de tokens ou dependência de APIs externas. *(Adicionado em: 22/09/2026 22:06)*
 - [ ] **feat**: Criar módulo de geração de thumbnails para o YouTube com sobreposição discreta de metadados sobre um frame (data/hora do timelapse, velocidade em relação ao tempo real, resolução final, FPS e localização da captura). *(Adicionado em: 22/09/2026 22:02)*
-- [ ] **feat**: Enriquecer as descrições dos vídeos publicados no YouTube com informações e metadados técnicos detalhados do timelapse. *(Adicionado em: 22/09/2026 22:02)*
 
 ## ✅ Concluídos
+- [x] **feat**: Enriquecer as descrições dos vídeos publicados no YouTube com informações e metadados técnicos detalhados do timelapse (tempo real, equipamento, exposição inteligente min-max, 4K UHD Lanczos, Deband 16-bit com ruído anti-banding para VP09/AV01, taxa de compressão e rastreabilidade). *(Concluído em: 26/09/2026 14:55)*
 - [x] **feat**: Incluir o alinhamento vertical de corte (`bottom`, `center` ou `top`) no padrão de nomenclatura do arquivo de vídeo gerado para o timelapse. *(Concluído em: 25/09/2026 22:30)*
 - [x] **feat**: Padronização dos nomes de fotos com resolução em megapixels (ex: `16MP`) e dimensões (`4000x3000`), e vídeos com classificação (`4K`) e dimensões (`3840x2160`). *(Concluído em: 25/09/2026 22:30)*
 - [x] **perf**: Nova arquitetura de ingestão rápida baseada em movimentação nativa do SO (Strategy Pattern com `MoveStrategy` multithreaded em 5 fases, deduplicação prévia, `os.replace` / `shutil.move`, `xxHash64` no SSD, limpeza automática da origem e suporte exaustivo a formatos modernos e legados). *(Concluído em: 25/09/2026 21:35)*

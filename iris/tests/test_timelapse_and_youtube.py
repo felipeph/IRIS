@@ -189,3 +189,265 @@ def test_build_video_filter_chain_deband_and_grain():
     )
     assert "deband=" not in vf_none
     assert "noise=" not in vf_none
+
+
+def test_describer_duration_and_bytes_formatting():
+    from src.modules.youtube.describer import format_duration_human, format_bytes_human, calculate_aspect_ratio
+
+    # Duração
+    assert format_duration_human(0) == "0 segundos"
+    assert format_duration_human(45) == "45 segundos"
+    assert format_duration_human(60) == "1 minuto"
+    assert format_duration_human(120) == "2 minutos"
+    assert format_duration_human(135) == "2 minutos e 15 segundos"
+    assert format_duration_human(3600) == "1 hora"
+    assert format_duration_human(3665) == "1 hora, 1 minuto e 5 segundos"
+    assert format_duration_human(7325) == "2 horas, 2 minutos e 5 segundos"
+
+    # Bytes
+    assert format_bytes_human(0) == "0 MB"
+    assert format_bytes_human(500) == "500 B"
+    assert format_bytes_human(1024 * 50) == "50.0 KB"
+    assert format_bytes_human(1024**2 * 142) == "142.0 MB"
+    assert format_bytes_human(int(1024**3 * 4.82)) == "4.82 GB"
+
+    # Aspect ratio
+    assert calculate_aspect_ratio(4000, 3000) == "4:3"
+    assert calculate_aspect_ratio(4608, 3456) == "4:3"
+    assert calculate_aspect_ratio(3840, 2160) == "16:9"
+    assert calculate_aspect_ratio(6000, 4000) == "3:2"
+    assert calculate_aspect_ratio(1080, 1080) == "1:1"
+
+
+def test_describer_exposure_range_summaries():
+    from src.modules.youtube.describer import summarize_exposure_param
+
+    # Valor único
+    assert summarize_exposure_param(["f/4.0", "f/4.0", "f/4.0"], "aperture") == "f/4.0"
+    assert summarize_exposure_param(["4.0"], "aperture") == "f/4.0"
+    assert summarize_exposure_param(["ISO100", "ISO100"], "iso") == "ISO 100"
+    assert summarize_exposure_param(["100"], "iso") == "ISO 100"
+    assert summarize_exposure_param(["1/125s", "1/125s"], "shutter") == "1/125s"
+
+    # Variação / Holy Grail
+    iso_range = summarize_exposure_param(["ISO100", "ISO400", "ISO800"], "iso")
+    assert iso_range == "ISO 100 – ISO 800"
+
+    aperture_range = summarize_exposure_param(["f2.8", "f4.0", "f8.0"], "aperture")
+    assert aperture_range == "f/2.8 – f/8.0"
+
+    shutter_range = summarize_exposure_param(["1/1000s", "1/500s", "1/30s", "2s"], "shutter")
+    assert "1/1000s" in shutter_range
+    assert "2s" in shutter_range
+
+
+def test_build_rich_youtube_description_full():
+    from src.modules.youtube.describer import build_rich_youtube_description, build_youtube_tags
+
+    record = {
+        "project_name": "2026-08-17_16-55_4_Timelapses",
+        "sequence_dir": "C:/IRIS/4_Timelapses/Canon/2026/08/17/timelapse_16-55-00",
+        "output_video_path": "C:/IRIS/6_Produzidos/2026/08/2026-08-17_16h55m-18h30m_Canon_4608x3456_4K_60fps_2fpi_137x_00m41s_timelapse.mp4",
+        "photo_count": 1250,
+        "fps": 60,
+        "frames_per_image": 2,
+        "resolution": "3840x2160",
+        "crop_mode": "center",
+        "encoder": "h264_nvenc",
+        "duration_seconds": 41.7,
+        "speedup_factor": 137,
+        "metadata_json": {
+            "camera_make": "Canon",
+            "camera_model": "PowerShot SX60 HS",
+            "orig_width": 4608,
+            "orig_height": 3456,
+            "total_orig_size_bytes": int(4.82 * 1024**3),
+            "video_size_bytes": int(142.5 * 1024**2),
+            "orig_formats": ["JPG"],
+            "first_dt_formatted": "17/08/2026 às 16:55:02",
+            "last_dt_formatted": "17/08/2026 às 18:30:14",
+            "date_str": "17/08/2026",
+            "real_duration_seconds": 5712,
+            "avg_interval_seconds": 4.6,
+            "apertures": ["f/4.0"],
+            "shutters": ["1/1000s", "1/60s"],
+            "isos": ["ISO100"],
+            "focals": ["21mm"],
+            "focal_equiv_summary": "21mm",
+            "render_stats": {
+                "render_time_seconds": 38.2,
+                "avg_fps": 32.7
+            }
+        }
+    }
+
+    desc = build_rich_youtube_description(record, project_name="2026-08-17_16-55_4_Timelapses")
+
+    # Verifica blocos essenciais
+    assert "Vídeo Timelapse renderizado em alta definição 4K UHD (3840x2160) a 60 FPS." in desc
+    assert "⏱️ TEMPO E CAPTURA:" in desc
+    assert "17/08/2026 às 16:55:02 até 17/08/2026 às 18:30:14" in desc
+    assert "1.250 fotos" in desc
+    assert "137x mais rápido que a vida real" in desc
+    assert "4.6 segundos (Intervalômetro)" in desc
+    assert "30 fotos/segundo" in desc
+
+    assert "📷 EQUIPAMENTO E ARQUIVOS ORIGINAIS:" in desc
+    assert "Canon PowerShot SX60 HS" in desc
+    assert "4608x3456" in desc
+    assert "21mm equiv. 35mm" in desc
+    assert "f/4.0" in desc
+    assert "ISO 100" in desc
+    assert "4.82 GB" in desc
+
+    assert "🎞️ PROCESSAMENTO E ENGENHARIA DE VÍDEO (IRIS):" in desc
+    assert "4K UHD (3840x2160) • Proporção 16:9" in desc
+    assert "Lanczos 3" in desc
+    assert "Deband 16-bit com micro-grão temporal dither" in desc
+    assert "h264_nvenc" in desc
+    assert "Redução de" in desc
+    assert "38.2 segundos" in desc
+
+    assert "📂 RASTREABILIDADE DO PROJETO:" in desc
+    assert "2026-08-17_16-55_4_Timelapses" in desc
+    assert "timelapse_16-55-00" in desc
+
+    assert len(desc) <= 5000
+
+    tags = build_youtube_tags(record)
+    assert "timelapse" in tags
+    assert "4k" in tags
+    assert "canon" in tags
+
+
+def test_project_and_central_timelapse_metadata_json_persistence(tmp_path):
+    import uuid
+    proj_name = f"test_meta_{uuid.uuid4().hex[:10]}"
+    proj = create_project(proj_name, str(tmp_path / "source"))
+    vpath = str(tmp_path / "out_video.mp4")
+    
+    meta_dict = {
+        "camera_model": "SX60",
+        "iso_summary": "ISO 100 – ISO 400",
+        "real_duration_seconds": 3600
+    }
+    
+    record = {
+        "project_name": proj.name,
+        "sequence_dir": str(tmp_path / "seq"),
+        "output_video_path": vpath,
+        "photo_count": 500,
+        "fps": 60,
+        "frames_per_image": 1,
+        "resolution": "3840x2160",
+        "crop_mode": "center",
+        "encoder": "h264_nvenc",
+        "duration_seconds": 8.3,
+        "speedup_factor": 432,
+        "metadata_json": meta_dict
+    }
+    
+    try:
+        proj.save_timelapse(record)
+        
+        # Carregar do banco do projeto
+        tls = proj.get_timelapses()
+        assert len(tls) == 1
+        loaded_meta = tls[0]["metadata_json"]
+        assert isinstance(loaded_meta, dict)
+        assert loaded_meta["camera_model"] == "SX60"
+        assert loaded_meta["iso_summary"] == "ISO 100 – ISO 400"
+        assert loaded_meta["real_duration_seconds"] == 3600
+
+        # Carregar do banco central
+        from src.core.project import list_central_timelapses
+        central_tls = list_central_timelapses(project_name=proj.name)
+        assert len(central_tls) >= 1
+        target = [t for t in central_tls if t["output_video_path"] == vpath][0]
+        assert target["metadata_json"]["camera_model"] == "SX60"
+    finally:
+        if proj._project_db_file.exists():
+            try:
+                proj._project_db_file.unlink()
+            except Exception:
+                pass
+
+
+def test_build_timelapse_youtube_metadata_with_project_fallback(tmp_path):
+    from src.core.project import ProjectItem
+    proj_name = f"test_yt_fallback_{tmp_path.name}"
+    proj = create_project(proj_name, str(tmp_path / "source"))
+
+    seq_dir = tmp_path / "4_Timelapses" / "timelapse_10-00-00"
+    seq_dir.mkdir(parents=True, exist_ok=True)
+
+    # Criar itens simulados
+    p1 = seq_dir / "photo1.jpg"
+    p2 = seq_dir / "photo2.jpg"
+    p1.write_text("dummy1")
+    p2.write_text("dummy2")
+
+    item1 = ProjectItem(
+        original_path=str(p1),
+        staging_path=str(p1),
+        organized_path=str(p1),
+        file_size_bytes=1024 * 1024 * 4,
+        meta_camera_make="Sony",
+        meta_camera_model="A7IV",
+        meta_width=7008,
+        meta_height=4672,
+        meta_aperture_str="f/2.8",
+        meta_shutter_str="1/500s",
+        meta_iso_str="ISO 200",
+        meta_focal_str="24mm",
+        meta_focal_length_equiv=24.0,
+        meta_extension=".jpg",
+        meta_timestamp="2026-09-26T10:00:00"
+    )
+    item2 = ProjectItem(
+        original_path=str(p2),
+        staging_path=str(p2),
+        organized_path=str(p2),
+        file_size_bytes=1024 * 1024 * 4,
+        meta_camera_make="Sony",
+        meta_camera_model="A7IV",
+        meta_width=7008,
+        meta_height=4672,
+        meta_aperture_str="f/2.8",
+        meta_shutter_str="1/250s",
+        meta_iso_str="ISO 400",
+        meta_focal_str="24mm",
+        meta_focal_length_equiv=24.0,
+        meta_extension=".jpg",
+        meta_timestamp="2026-09-26T11:00:00"
+    )
+    proj.save_item(item1)
+    proj.save_item(item2)
+
+    vpath = tmp_path / "2026-09-26_10h00m-11h00m_Sony_4K_60fps_timelapse.mp4"
+    vpath.write_bytes(b"dummy_video_content")
+
+    # Registro legado sem metadata_json
+    legacy_record = {
+        "project_name": proj.name,
+        "sequence_dir": str(seq_dir),
+        "output_video_path": str(vpath),
+        "photo_count": 2,
+        "duration_seconds": 1.0,
+        "speedup_factor": 3600,
+        "encoder": "libx264",
+        "fps": 60,
+        "resolution": "3840x2160"
+    }
+
+    yt_config = {"privacy_status": "unlisted", "category_id": "22"}
+    meta = build_timelapse_youtube_metadata(vpath, legacy_record, yt_config, project=proj)
+
+    assert "Sony A7IV" in meta["description"]
+    assert "7008x4672" in meta["description"]
+    assert "24mm" in meta["description"]
+    assert "f/2.8" in meta["description"]
+    assert "ISO 200 – ISO 400" in meta["description"]
+    assert "sony" in meta["tags"]
+
+

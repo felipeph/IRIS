@@ -179,54 +179,72 @@ def add_video_to_playlist(youtube, video_id: str, playlist_name_or_id: str, priv
     except Exception:
         return False, None, None
 
+from src.modules.youtube.describer import (
+    build_rich_youtube_description,
+    build_youtube_title,
+    build_youtube_tags,
+)
+
 def build_timelapse_youtube_metadata(
     video_path: Path,
     tl_record: Dict[str, Any],
-    yt_config: Dict[str, Any]
+    yt_config: Dict[str, Any],
+    project: Optional[Any] = None
 ) -> Dict[str, Any]:
     """Compila título e descrição rica para envio ao YouTube."""
     privacy = yt_config.get("privacy_status", "unlisted")
     category_id = str(yt_config.get("category_id", "22"))
 
-    first_dt_str = None
-    last_dt_str = None
-    name = video_path.name
+    record_copy = dict(tl_record)
+    project_name = getattr(project, "name", "") if project else record_copy.get("project_name", "")
 
-    # Tenta extrair datas do nome do arquivo
-    # Ex: 2016-05-14_22h15m-22h28m_...
-    parts = name.split('_')
-    date_part = parts[0] if len(parts) > 0 else datetime.now().strftime('%Y-%m-%d')
-    time_part = parts[1] if len(parts) > 1 else ""
+    # Se metadata_json não existe ou está vazio, monta fallback a partir do nome ou items do projeto
+    meta = record_copy.get("metadata_json")
+    if not isinstance(meta, dict) or not meta:
+        meta = {}
+        # Tenta extrair dados do nome do arquivo
+        # Ex: 2016-05-14_22h15m-22h28m_Canon_4608x3456_4K_60fps_1fpi_50x_00m10s_timelapse.mp4
+        parts = video_path.name.split('_')
+        if len(parts) > 0:
+            meta["date_str"] = parts[0]
+        if len(parts) > 2 and not parts[2].startswith("timelapse") and "x" not in parts[2]:
+            meta["camera_model"] = parts[2]
+        
+        # Se houver itens do projeto correspondentes à sequência
+        seq_dir = record_copy.get("sequence_dir")
+        if project and hasattr(project, "items") and seq_dir:
+            matched_items = [
+                it for it in project.items 
+                if it.organized_path and Path(it.organized_path).parent.resolve() == Path(seq_dir).resolve()
+            ]
+            if matched_items:
+                first_it = matched_items[0]
+                meta["camera_make"] = first_it.meta_camera_make or "Cam"
+                meta["camera_model"] = first_it.meta_camera_model or meta.get("camera_model", "Camera")
+                meta["orig_width"] = first_it.meta_width or 0
+                meta["orig_height"] = first_it.meta_height or 0
+                meta["total_orig_size_bytes"] = sum(it.file_size_bytes for it in matched_items if it.file_size_bytes)
+                meta["orig_formats"] = sorted(list({it.meta_extension.upper().lstrip('.') for it in matched_items if it.meta_extension}))
+                meta["apertures"] = [it.meta_aperture_str for it in matched_items if it.meta_aperture_str]
+                meta["shutters"] = [it.meta_shutter_str for it in matched_items if it.meta_shutter_str]
+                meta["isos"] = [it.meta_iso_str for it in matched_items if it.meta_iso_str]
+                meta["focals"] = [it.meta_focal_str for it in matched_items if it.meta_focal_str]
+                if first_it.meta_focal_length_equiv:
+                    meta["focal_equiv_summary"] = f"{first_it.meta_focal_length_equiv:.0f}mm"
+                if first_it.meta_timestamp:
+                    meta["first_dt_iso"] = first_it.meta_timestamp
+                if matched_items[-1].meta_timestamp:
+                    meta["last_dt_iso"] = matched_items[-1].meta_timestamp
 
-    if "-" in time_part:
-        t1, t2 = time_part.split("-", 1)
-        t1_clean = t1.replace('h', ':').replace('m', '')
-        t2_clean = t2.replace('h', ':').replace('m', '')
-        title = f"{date_part} ({t1_clean} - {t2_clean}) - Timelapse 4K UHD"
-    else:
-        title = f"{date_part} - Timelapse 4K UHD"
+        record_copy["metadata_json"] = meta
 
-    photo_count = tl_record.get("photo_count", 0)
-    dur_sec = tl_record.get("duration_seconds", 0)
-    speedup = tl_record.get("speedup_factor", 1)
-    encoder = tl_record.get("encoder", "FFmpeg")
-    fps = tl_record.get("fps", 60)
-    res = tl_record.get("resolution", "3840x2160")
+    # Atualiza tamanho do vídeo se existir no disco e não estiver preenchido
+    if video_path.exists() and "video_size_bytes" not in record_copy["metadata_json"]:
+        record_copy["metadata_json"]["video_size_bytes"] = video_path.stat().st_size
 
-    description = f"""Vídeo Timelapse renderizado em alta definição 4K UHD ({res}) a {fps} FPS.
-
-⚙️ DADOS TÉCNICOS:
-• Data de Captura: {date_part}
-• Fotos da Sequência: {photo_count:,} fotos
-• Duração do Vídeo: {dur_sec:.1f} segundos
-• Fator de Aceleração: {speedup}x
-• Processamento: IRIS Timelapse Studio ({encoder})
-• Resolução: 4K UHD (3840x2160) - 16:9
-
-Automação completa via IRIS (Integrated Recording and Ingestion System).
-"""
-
-    tags = ["timelapse", "4k", "uhd", "60fps", "natureza", "fotografia", "iris", date_part]
+    title = build_youtube_title(video_path, record_copy)
+    description = build_rich_youtube_description(record_copy, project_name=project_name)
+    tags = build_youtube_tags(record_copy)
 
     return {
         "title": title[:100],

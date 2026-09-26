@@ -49,11 +49,11 @@ def render_timelapse_video(
     output_video_path: Path,
     photo_count: int,
     config: Dict[str, Any]
-) -> Tuple[bool, str, str]:
+) -> Tuple[bool, str, str, Dict[str, Any]]:
     """
     Renderiza vídeo timelapse 4K UHD via FFmpeg demuxer image2 com corte e escala Lanczos.
     Exibe barra de progresso Rich e captura métricas de hardware em tempo real.
-    Retorna (sucesso, encoder_utilizado, mensagem_erro).
+    Retorna (sucesso, encoder_utilizado, mensagem_erro, render_stats).
     """
     fps = config.get("fps", 60)
     frames_per_image = max(1, config.get("frames_per_image", 1))
@@ -236,10 +236,26 @@ def render_timelapse_video(
                     eta_str="0:00:00",
                     previsao_fim_str=datetime.now().strftime("%H:%M:%S")
                 ))
-                return True, encoder_name, ""
+                elapsed_sec = round(time.time() - start_time, 2)
+                render_stats = {
+                    "render_time_seconds": elapsed_sec,
+                    "total_frames": total_frames,
+                    "avg_fps": round(total_frames / max(0.001, elapsed_sec), 1),
+                    "encoder": encoder_name,
+                    "target_width": target_w,
+                    "target_height": target_h,
+                    "fps": fps,
+                    "frames_per_image": frames_per_image,
+                    "crop_mode": crop_mode,
+                    "crf": crf,
+                    "preset": preset,
+                    "deband_enabled": bool(deband_cfg.get("enabled", False)),
+                    "deband_grain": bool(deband_cfg.get("add_grain", False)),
+                }
+                return True, encoder_name, "", render_stats
             else:
                 err_detail = "".join(stderr_lines[-8:]) if stderr_lines else f"Código {process.returncode}"
-                return False, encoder_name, err_detail
+                return False, encoder_name, err_detail, {}
 
     except KeyboardInterrupt:
         console.print("\n[yellow]⚠ Renderização interrompida pelo usuário.[/yellow]")
@@ -257,7 +273,7 @@ def render_timelapse_video(
                 output_video_path.unlink()
             except Exception:
                 pass
-        return False, encoder_name, "Interrompido pelo usuário"
+        return False, encoder_name, "Interrompido pelo usuário", {}
 
     except Exception as e:
-        return False, encoder_name, str(e)
+        return False, encoder_name, str(e), {}

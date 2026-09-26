@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -56,10 +57,15 @@ def init_central_db():
                 youtube_url TEXT,
                 youtube_privacy TEXT,
                 status TEXT,
+                metadata_json TEXT DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        try:
+            cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
 init_central_db()
@@ -185,10 +191,15 @@ class Project:
                     youtube_url TEXT,
                     youtube_privacy TEXT,
                     status TEXT,
+                    metadata_json TEXT DEFAULT '{}',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            try:
+                cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     def save_metadata(self):
@@ -306,6 +317,14 @@ class Project:
         record_copy = dict(record)
         record_copy["project_name"] = self.name
         
+        raw_meta = record_copy.get("metadata_json", {})
+        if isinstance(raw_meta, (dict, list)):
+            meta_json_str = json.dumps(raw_meta, ensure_ascii=False)
+        elif isinstance(raw_meta, str):
+            meta_json_str = raw_meta
+        else:
+            meta_json_str = "{}"
+        
         with get_db_connection(self._project_db_file) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -313,8 +332,8 @@ class Project:
                     project_name, sequence_dir, output_video_path, photo_count,
                     fps, frames_per_image, resolution, crop_mode, encoder,
                     duration_seconds, speedup_factor, youtube_video_id, youtube_url,
-                    youtube_privacy, status, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    youtube_privacy, status, metadata_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(output_video_path) DO UPDATE SET
                     photo_count=excluded.photo_count,
                     fps=excluded.fps,
@@ -328,6 +347,7 @@ class Project:
                     youtube_url=COALESCE(excluded.youtube_url, timelapses.youtube_url),
                     youtube_privacy=COALESCE(excluded.youtube_privacy, timelapses.youtube_privacy),
                     status=excluded.status,
+                    metadata_json=excluded.metadata_json,
                     updated_at=CURRENT_TIMESTAMP
             """, (
                 self.name,
@@ -344,7 +364,8 @@ class Project:
                 record_copy.get("youtube_video_id", ""),
                 record_copy.get("youtube_url", ""),
                 record_copy.get("youtube_privacy", "unlisted"),
-                record_copy.get("status", "rendered")
+                record_copy.get("status", "rendered"),
+                meta_json_str
             ))
             conn.commit()
             
@@ -364,7 +385,16 @@ class Project:
             else:
                 cursor.execute("SELECT * FROM timelapses ORDER BY created_at ASC")
             for row in cursor.fetchall():
-                results.append(dict(row))
+                d = dict(row)
+                raw_meta = d.get("metadata_json")
+                if isinstance(raw_meta, str) and raw_meta:
+                    try:
+                        d["metadata_json"] = json.loads(raw_meta)
+                    except Exception:
+                        d["metadata_json"] = {}
+                elif not isinstance(raw_meta, dict):
+                    d["metadata_json"] = {}
+                results.append(d)
         return results
 
     def update_timelapse_youtube(self, video_path: str, video_id: str, url: str):
@@ -419,6 +449,15 @@ def list_open_projects() -> List[str]:
 def save_central_timelapse(record: dict):
     """Registra ou atualiza um timelapse no banco central."""
     init_central_db()
+    
+    raw_meta = record.get("metadata_json", {})
+    if isinstance(raw_meta, (dict, list)):
+        meta_json_str = json.dumps(raw_meta, ensure_ascii=False)
+    elif isinstance(raw_meta, str):
+        meta_json_str = raw_meta
+    else:
+        meta_json_str = "{}"
+
     with get_db_connection(CENTRAL_DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -426,8 +465,8 @@ def save_central_timelapse(record: dict):
                 project_name, sequence_dir, output_video_path, photo_count,
                 fps, frames_per_image, resolution, crop_mode, encoder,
                 duration_seconds, speedup_factor, youtube_video_id, youtube_url,
-                youtube_privacy, status, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                youtube_privacy, status, metadata_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(output_video_path) DO UPDATE SET
                 photo_count=excluded.photo_count,
                 fps=excluded.fps,
@@ -441,6 +480,7 @@ def save_central_timelapse(record: dict):
                 youtube_url=COALESCE(excluded.youtube_url, timelapses.youtube_url),
                 youtube_privacy=COALESCE(excluded.youtube_privacy, timelapses.youtube_privacy),
                 status=excluded.status,
+                metadata_json=excluded.metadata_json,
                 updated_at=CURRENT_TIMESTAMP
         """, (
             record.get("project_name", ""),
@@ -457,7 +497,8 @@ def save_central_timelapse(record: dict):
             record.get("youtube_video_id", ""),
             record.get("youtube_url", ""),
             record.get("youtube_privacy", "unlisted"),
-            record.get("status", "rendered")
+            record.get("status", "rendered"),
+            meta_json_str
         ))
         conn.commit()
 
@@ -487,7 +528,16 @@ def list_central_timelapses(project_name: Optional[str] = None) -> List[Dict[str
         else:
             cursor.execute("SELECT * FROM timelapses ORDER BY created_at DESC")
         for row in cursor.fetchall():
-            results.append(dict(row))
+            d = dict(row)
+            raw_meta = d.get("metadata_json")
+            if isinstance(raw_meta, str) and raw_meta:
+                try:
+                    d["metadata_json"] = json.loads(raw_meta)
+                except Exception:
+                    d["metadata_json"] = {}
+            elif not isinstance(raw_meta, dict):
+                d["metadata_json"] = {}
+            results.append(d)
     return results
 
 def get_last_active_project() -> Optional[str]:

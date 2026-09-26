@@ -155,7 +155,7 @@ class TimelapseStage(PipelineStage):
                 continue
 
             # 4. Renderizar vídeo com FFmpeg
-            render_ok, encoder_used, err_msg = render_timelapse_video(
+            render_ok, encoder_used, err_msg, render_stats = render_timelapse_video(
                 sequence_dir=temp_seq_dir,
                 output_video_path=output_video_path,
                 photo_count=len(sorted_photos),
@@ -172,6 +172,47 @@ class TimelapseStage(PipelineStage):
                 real_sec = max(1.0, (last_dt - first_dt).total_seconds())
                 speedup = max(1, int(round(real_sec / dur_sec))) if dur_sec > 0 else 1
 
+                # Compilar metadados ricos da sequência e da produção
+                total_orig_size_bytes = sum(it.file_size_bytes for it in items if it.file_size_bytes)
+                orig_formats = sorted(list({it.meta_extension.upper().lstrip('.') for it in items if it.meta_extension}))
+                video_size_bytes = output_video_path.stat().st_size if output_video_path.exists() else 0
+                apertures = [it.meta_aperture_str for it in items if it.meta_aperture_str]
+                shutters = [it.meta_shutter_str for it in items if it.meta_shutter_str]
+                isos = [it.meta_iso_str for it in items if it.meta_iso_str]
+                focals = [it.meta_focal_str for it in items if it.meta_focal_str]
+                focal_equivs = [it.meta_focal_length_equiv for it in items if it.meta_focal_length_equiv is not None]
+
+                rich_meta = {
+                    "camera_make": first_item.meta_camera_make or "Cam",
+                    "camera_model": camera_model,
+                    "orig_width": orig_w,
+                    "orig_height": orig_h,
+                    "total_orig_size_bytes": total_orig_size_bytes,
+                    "video_size_bytes": video_size_bytes,
+                    "orig_formats": orig_formats,
+                    "first_dt_iso": first_dt.isoformat() if first_dt else "",
+                    "last_dt_iso": last_dt.isoformat() if last_dt else "",
+                    "first_dt_formatted": first_dt.strftime("%d/%m/%Y às %H:%M:%S") if first_dt else "",
+                    "last_dt_formatted": last_dt.strftime("%d/%m/%Y às %H:%M:%S") if last_dt else "",
+                    "date_str": first_dt.strftime("%d/%m/%Y") if first_dt else "",
+                    "real_duration_seconds": real_sec,
+                    "avg_interval_seconds": round(real_sec / max(1, len(sorted_photos) - 1), 2) if len(sorted_photos) > 1 else 0.0,
+                    "frames_per_image": fpi,
+                    "fps": fps,
+                    "speedup_factor": speedup,
+                    "duration_seconds": dur_sec,
+                    "encoder": encoder_used,
+                    "crop_mode": crop_mode,
+                    "target_width": target_w,
+                    "target_height": target_h,
+                    "apertures": apertures,
+                    "shutters": shutters,
+                    "isos": isos,
+                    "focals": focals,
+                    "focal_equiv_summary": f"{focal_equivs[0]:.0f}mm" if focal_equivs else "",
+                    "render_stats": render_stats
+                }
+
                 # Salvar no banco do projeto e banco central
                 record = {
                     "project_name": project.name,
@@ -186,7 +227,8 @@ class TimelapseStage(PipelineStage):
                     "duration_seconds": dur_sec,
                     "speedup_factor": speedup,
                     "youtube_privacy": config.get("modules.youtube.privacy_status", "unlisted"),
-                    "status": "rendered"
+                    "status": "rendered",
+                    "metadata_json": rich_meta
                 }
                 project.save_timelapse(record)
 

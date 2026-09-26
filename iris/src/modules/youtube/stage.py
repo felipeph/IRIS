@@ -116,14 +116,22 @@ class YouTubeUploadStage(PipelineStage):
                 error_count += 1
                 continue
 
-            metadata = build_timelapse_youtube_metadata(video_path, record, yt_config)
+            metadata = build_timelapse_youtube_metadata(video_path, record, yt_config, project=project)
             file_size = video_path.stat().st_size
             file_mb = file_size / (1024**2)
+
+            meta_data = record.get("metadata_json") or {}
+            cam_desc = meta_data.get("camera_model") or "Câmera"
+            photos_desc = f"{record.get('photo_count', 0):,} fotos"
+            dur_desc = f"{record.get('duration_seconds', 0.0):.1f}s"
+            real_sec = meta_data.get("real_duration_seconds", 0.0)
+            real_desc = f" | Tempo Real: {int(round(real_sec))}s" if real_sec > 0 else ""
 
             # Exibir Card de Metadados
             card_info = (
                 f"[bold cyan]Arquivo:[/bold cyan]     {video_path.name} ({file_mb:.1f} MB)\n"
                 f"[bold cyan]Título:[/bold cyan]      {metadata['title']}\n"
+                f"[bold cyan]Ficha Técnica:[/bold cyan]{cam_desc} | {photos_desc} | {dur_desc}{real_desc}\n"
                 f"[bold cyan]Privacidade:[/bold cyan] {metadata['privacy_status'].upper()}\n"
                 f"[bold cyan]Playlist:[/bold cyan]    {yt_config.get('playlist', 'Timelapses')}"
             )
