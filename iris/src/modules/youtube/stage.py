@@ -94,9 +94,20 @@ class YouTubeUploadStage(PipelineStage):
             uploaded = project.get_timelapses(status="uploaded")
             if uploaded:
                 console.print(f"[green]Todos os vídeos do projeto '{project.name}' já foram publicados no YouTube ({len(uploaded)} vídeo(s)).[/green]")
+                force = kwargs.get("force_upload", False)
+                if not force and kwargs.get("interactive", False):
+                    from rich.prompt import Confirm
+                    force = Confirm.ask(
+                        f"[yellow]Deseja realizar novamente o upload desses {len(uploaded)} vídeo(s) para o YouTube?[/yellow]",
+                        default=False
+                    )
+                if force:
+                    pending_videos = uploaded
+                else:
+                    return True
             else:
                 console.print(f"[cyan]Nenhum vídeo pendente de upload no projeto '{project.name}'. Etapa concluída.[/cyan]")
-            return True
+                return True
 
         console.print(f"\n[bold cyan]=== Etapa 6: Publicação no YouTube ({len(pending_videos)} vídeo(s) pendente(s)) ===[/bold cyan]")
 

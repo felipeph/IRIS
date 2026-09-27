@@ -61,6 +61,21 @@ class TimelapseStage(PipelineStage):
 
         console.print(summary_table)
 
+        force_render = kwargs.get("force_render", False) or kwargs.get("force_rerender", False)
+        if not force_render and kwargs.get("interactive", False):
+            already_done = 0
+            for seq_rel in groups.keys():
+                seq_dir = dest_root / Path(seq_rel)
+                existing = [tl for tl in project.get_timelapses() if tl.get("sequence_dir") == str(seq_dir.resolve())]
+                if existing and any(Path(tl.get("output_video_path", "")).exists() for tl in existing):
+                    already_done += 1
+            if already_done > 0:
+                from rich.prompt import Confirm
+                force_render = Confirm.ask(
+                    f"\n[yellow]{already_done} timelapse(s) já existem renderizados no disco. Deseja re-renderizar e sobrescrever os vídeos?[/yellow]",
+                    default=False
+                )
+
         success_count = 0
         error_count = 0
 
@@ -135,7 +150,7 @@ class TimelapseStage(PipelineStage):
 
             # Verificar se já existe render concluído
             existing = [tl for tl in project.get_timelapses() if tl.get("output_video_path") == str(output_video_path.resolve())]
-            if existing and output_video_path.exists():
+            if existing and output_video_path.exists() and not force_render:
                 console.print(f"[green]✔ Vídeo já renderizado previamente: {output_video_path.name}[/green]")
                 success_count += 1
                 continue
@@ -210,6 +225,8 @@ class TimelapseStage(PipelineStage):
                     "isos": isos,
                     "focals": focals,
                     "focal_equiv_summary": f"{focal_equivs[0]:.0f}mm" if focal_equivs else "",
+                    "deband_enabled": bool(render_stats.get("deband_enabled", False)),
+                    "deband_grain": bool(render_stats.get("deband_grain", False)),
                     "render_stats": render_stats
                 }
 

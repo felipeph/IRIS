@@ -49,6 +49,10 @@ def show_config_menu():
         strat_display = "Movimentação Nativa (Turbo)" if ingest_strat == "move" else "Cópia Segura (Hash on-the-fly)"
         table.add_row("19", "Estratégia de Ingestão", strat_display)
         table.add_row("20", "Workers Ingestão (Threads)", str(config.get("modules.ingestion.max_workers", 4)))
+        deband_enabled = config.get("modules.timelapse.deband.enabled", True)
+        table.add_row("21", "Filtro Deband (Anti-banding)", "[green]Ativado[/green]" if deband_enabled else "[red]Desativado[/red]")
+        grain_enabled = config.get("modules.timelapse.deband.add_grain", True)
+        table.add_row("22", "Ruído Temporal (Micro-grão)", "[green]Ativado[/green]" if grain_enabled else "[red]Desativado[/red]")
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -203,6 +207,18 @@ def show_config_menu():
                     console.print("[red]Valor deve ser entre 1 e 32![/red]")
             except ValueError:
                 console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "21":
+            curr = config.get("modules.timelapse.deband.enabled", True)
+            new_val = Confirm.ask("Ativar filtro Deband 16-bit (suavização de faixas de cor em gradientes)?", default=curr)
+            config.set("modules.timelapse.deband.enabled", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "22":
+            curr = config.get("modules.timelapse.deband.add_grain", True)
+            new_val = Confirm.ask("Ativar injeção de ruído/micro-grão temporal dither (otimização para YouTube)?", default=curr)
+            config.set("modules.timelapse.deband.add_grain", new_val)
+            console.print("[green]Salvo![/green]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

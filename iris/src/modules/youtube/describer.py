@@ -356,7 +356,16 @@ def build_rich_youtube_description(record: Dict[str, Any], project_name: str = "
     elif video_bytes > 0:
         compression_line = f"\n• Tamanho do Arquivo: {format_bytes_human(video_bytes)}"
 
-    deband_desc = "Filtro Deband 16-bit com micro-grão temporal dither (calibrado para mitigar color banding na compressão VP09/AV01 do YouTube)"
+    render_stats = meta.get("render_stats") or {}
+    deband_enabled = render_stats.get("deband_enabled", meta.get("deband_enabled", True))
+    deband_grain = render_stats.get("deband_grain", meta.get("deband_grain", True))
+
+    if deband_enabled and deband_grain:
+        deband_desc = "Filtro Deband 16-bit com micro-grão temporal dither (calibrado para mitigar color banding na compressão VP09/AV01 do YouTube)"
+    elif deband_enabled:
+        deband_desc = "Filtro Deband 16-bit sem grão (suavização de faixas de cor)"
+    else:
+        deband_desc = "Desativado (Renderização Direta Lanczos)"
 
     # 4. Rastreabilidade
     proj = project_name or record.get("project_name") or "IRIS Project"

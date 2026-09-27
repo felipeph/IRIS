@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 from datetime import datetime
 
-from src.core.project import Project, create_project
+from src.core.project import Project, ProjectItem, create_project
 from src.core.pipeline import PipelineRunner
 from src.modules.timelapse.encoder import detect_ffmpeg_encoder
 from src.modules.timelapse.renderer import build_video_filter_chain
@@ -11,6 +11,7 @@ from src.modules.timelapse.sequence import prepare_numbered_sequence, clean_sequ
 from src.modules.timelapse.stage import get_stage as get_timelapse_stage
 from src.modules.youtube.stage import get_stage as get_youtube_stage
 from src.modules.youtube.uploader import build_timelapse_youtube_metadata
+from src.modules.youtube.describer import build_rich_youtube_description
 
 def test_detect_ffmpeg_encoder():
     label, args = detect_ffmpeg_encoder()
@@ -449,5 +450,102 @@ def test_build_timelapse_youtube_metadata_with_project_fallback(tmp_path):
     assert "f/2.8" in meta["description"]
     assert "ISO 200 – ISO 400" in meta["description"]
     assert "sony" in meta["tags"]
+
+
+def test_describer_dynamic_deband_options():
+    record = {
+        "project_name": "test_proj",
+        "photo_count": 100,
+        "fps": 60,
+        "metadata_json": {
+            "camera_model": "SX50",
+            "duration_seconds": 10.0,
+            "real_duration_seconds": 600.0,
+            "render_stats": {"deband_enabled": False, "deband_grain": False}
+        }
+    }
+    desc_no_deband = build_rich_youtube_description(record)
+    assert "Desativado (Renderização Direta Lanczos)" in desc_no_deband
+
+    record["metadata_json"]["render_stats"] = {"deband_enabled": True, "deband_grain": False}
+    desc_no_grain = build_rich_youtube_description(record)
+    assert "Filtro Deband 16-bit sem grão" in desc_no_grain
+
+    record["metadata_json"]["render_stats"] = {"deband_enabled": True, "deband_grain": True}
+    desc_full = build_rich_youtube_description(record)
+    assert "Deband 16-bit com micro-grão temporal dither" in desc_full
+
+
+def test_timelapse_stage_force_render(tmp_path, monkeypatch):
+    import uuid
+    proj = create_project(f"test_force_{uuid.uuid4().hex[:8]}", str(tmp_path))
+    p1 = tmp_path / "img1.jpg"
+    p1.write_bytes(b"dummy")
+    item = ProjectItem(
+        original_path=str(p1),
+        staging_path=str(p1),
+        organized_path=str(p1),
+        category="timelapse",
+        relative_dest_dir="4_Timelapses/Camera/seq1",
+        file_size_bytes=100
+    )
+    proj.save_item(item)
+
+    vpath = tmp_path / "out.mp4"
+    vpath.write_bytes(b"old_video")
+
+    proj.save_timelapse({
+        "sequence_dir": str((tmp_path / "4_Timelapses/Camera/seq1").resolve()),
+        "output_video_path": str(vpath.resolve()),
+        "status": "rendered"
+    })
+
+    stage = get_timelapse_stage("timelapse", "Render")
+
+    render_called = []
+    def fake_render(*args, **kwargs):
+        render_called.append(True)
+        return True, "libx264", "", {"deband_enabled": False, "deband_grain": False}
+
+    monkeypatch.setattr("src.modules.timelapse.stage.render_timelapse_video", fake_render)
+    monkeypatch.setattr("src.modules.timelapse.stage.resolve_produced_output_path", lambda *args: vpath)
+    monkeypatch.setattr("src.modules.timelapse.stage.prepare_numbered_sequence", lambda **kw: (True, tmp_path, [p1]))
+    monkeypatch.setattr("src.modules.timelapse.stage.clean_sequence_dir", lambda *a: None)
+
+    # Sem force_render, deve pular (arquivo já existe)
+    res = stage.run(proj, interactive=False, force_render=False)
+    assert res is True
+    assert len(render_called) == 0
+
+    # Com force_render=True, deve re-renderizar
+    res = stage.run(proj, interactive=False, force_render=True)
+    assert res is True
+    assert len(render_called) == 1
+
+
+def test_youtube_stage_force_upload(tmp_path, monkeypatch):
+    import uuid
+    proj = create_project(f"test_yt_force_{uuid.uuid4().hex[:8]}", str(tmp_path))
+    vpath = tmp_path / "vid.mp4"
+    vpath.write_bytes(b"content")
+
+    proj.save_timelapse({
+        "sequence_dir": str(tmp_path),
+        "output_video_path": str(vpath),
+        "status": "uploaded"
+    })
+
+    yt_stage = get_youtube_stage("youtube", "Upload")
+
+    # Sem force_upload, deve pular retornando True
+    res = yt_stage.run(proj, interactive=False, force_upload=False)
+    assert res is True
+
+    # Com force_upload=True e mockando auth como None, tenta iniciar o upload
+    monkeypatch.setattr("src.modules.youtube.stage.get_authenticated_service", lambda: None)
+    res_force = yt_stage.run(proj, interactive=False, force_upload=True)
+    assert res_force is False
+
+
 
 
