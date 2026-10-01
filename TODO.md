@@ -1,10 +1,12 @@
 # Projeto IRIS - TODO List
 
 ## 📌 Pendentes (A Fazer)
+- [ ] **feat**: Automação da etapa de stacking lunar no IRIS (Fase 2 de astrofotografia: integração com PlanetarySystemStacker CLI headless ou AutoStakkert! via template de sessão .as3, unificando desde os RAWs da Canon até o stack). *(Adicionado em: 30/09/2026 21:25)*
 - [ ] **feat**: Implementar módulo local de visão computacional (GPU/on-device, via YOLO ou classificador leve) para inferência em amostragem de frames e extração automática de palavras-chave/tags da cena (ex: nuvens, sol, chuva, pássaros) sem custo de tokens ou dependência de APIs externas. *(Adicionado em: 22/09/2026 22:06)*
 - [ ] **feat**: Criar módulo de geração de thumbnails para o YouTube com sobreposição discreta de metadados sobre um frame (data/hora do timelapse, velocidade em relação ao tempo real, resolução final, FPS e localização da captura). *(Adicionado em: 22/09/2026 22:02)*
 
 ## ✅ Concluídos
+- [x] **feat**: Módulo de Astrofotografia Lunar e Wavelets Autônomos (Fase 1: motor `LunarWaveletEngine` com transformada À Trous B3-spline multiescala em 5 níveis, Limb Guard para proteção de halo/ringing no limbo lunar, CLAHE em 16-bit descolado em luminância, presets automáticos 'suave', 'equilibrado', 'enfatico' e 'mineral', e CLI `iris-astro` para eliminação do RegiStax manual). *(Concluído em: 30/09/2026 21:25)*
 - [x] **feat**: Controle de Deband 16-bit e Ruído Temporal (anti-banding dither) diretamente pelo painel de configurações do IRIS (opções 21 e 22), com suporte a re-renderização/sobrescrita interativa (Etapa 5), re-upload (Etapa 6) e descrição técnica dinâmica no YouTube. *(Concluído em: 26/09/2026 23:12)*
 - [x] **feat**: Enriquecer as descrições dos vídeos publicados no YouTube com informações e metadados técnicos detalhados do timelapse (tempo real, equipamento, exposição inteligente min-max, 4K UHD Lanczos, Deband 16-bit com ruído anti-banding para VP09/AV01, taxa de compressão e rastreabilidade). *(Concluído em: 26/09/2026 14:55)*
 - [x] **feat**: Incluir o alinhamento vertical de corte (`bottom`, `center` ou `top`) no padrão de nomenclatura do arquivo de vídeo gerado para o timelapse. *(Concluído em: 25/09/2026 22:30)*

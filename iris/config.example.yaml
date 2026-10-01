@@ -17,6 +17,12 @@ classification:
   enable_timelapse_album_samples: true
   timelapse_sample_interval_minutes: 5.0
 modules:
+  astro:
+    enabled: true
+    levels: 5
+    default_preset: "all"     # "all", "suave", "equilibrado", "enfatico", "mineral"
+    enable_clahe: true        # Realce adaptativo de contraste local 16-bit
+    use_limb_guard: true      # Proteção anti-halo/ringing no limbo lunar
   bird_detect:
     enabled: true
   cleanup:
