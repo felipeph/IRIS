@@ -68,18 +68,20 @@ def cmd_sharpen(args):
         console.print(f"[red]Erro: Arquivo não encontrado:[/red] {file_path}")
         sys.exit(1)
 
-    presets_to_run: List[str] = []
-    if args.preset == "all":
-        presets_to_run = ["suave", "equilibrado", "enfatico", "mineral"]
-    else:
-        presets_to_run = [args.preset]
-
+    presets_arg = args.preset
     output_dir = Path(args.output_dir) if args.output_dir else None
 
     console.print(f"\n[bold white]Arquivo de Origem:[/bold white] [green]{file_path}[/green]")
-    console.print(f"[bold white]Presets Selecionados:[/bold white] [cyan]{', '.join(presets_to_run)}[/cyan]")
+    console.print(f"[bold white]Preset / Grupo:[/bold white] [cyan]{presets_arg}[/cyan]")
     console.print(f"[bold white]Proteção de Limbo (Limb Guard):[/bold white] {'[green]Ativado[/green]' if not args.no_limb_guard else '[yellow]Desativado[/yellow]'}")
-    console.print(f"[bold white]Realce de Relevo Local (CLAHE 16-bit):[/bold white] {'[green]Ativado[/green]' if not args.no_clahe else '[yellow]Desativado[/yellow]'}\n")
+    console.print(f"[bold white]Realce de Relevo Local (CLAHE 16-bit):[/bold white] {'[green]Ativado[/green]' if not args.no_clahe else '[yellow]Desativado[/yellow]'}")
+    if args.clarity is not None:
+        console.print(f"[bold white]Sobrescrita Clarity (Relevo):[/bold white] [magenta]{args.clarity:.2f}[/magenta]")
+    if args.deconvolve:
+        console.print(f"[bold white]Deconvolução Richardson-Lucy:[/bold white] [green]Forçada ativada[/green]")
+    if args.contrast is not None:
+        console.print(f"[bold white]Sobrescrita Contraste Curva S:[/bold white] [magenta]{args.contrast:.2f}[/magenta]")
+    console.print("")
 
     t0 = time.time()
     with Progress(
@@ -89,19 +91,22 @@ def cmd_sharpen(args):
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("[cyan]Processando wavelets multiescala...", total=len(presets_to_run))
+        task = progress.add_task("[cyan]Processando variações de wavelets e relevo...", total=100)
 
         results = process_and_export_all_presets(
             input_path=file_path,
             output_dir=output_dir,
-            presets=presets_to_run,
+            presets=[presets_arg] if presets_arg not in ("all", "craters", "classic") else [presets_arg],
             enable_clahe=not args.no_clahe,
             use_limb_guard=not args.no_limb_guard,
             export_png=not args.no_png,
             export_tiff=not args.no_tiff,
             custom_gamma=args.gamma,
+            custom_contrast=args.contrast,
+            custom_clarity=args.clarity,
+            custom_deconvolve=True if args.deconvolve else None,
         )
-        progress.update(task, completed=len(presets_to_run))
+        progress.update(task, completed=100)
 
     total_time = time.time() - t0
     console.print(f"\n[bold green][OK] Processamento concluído em {total_time:.2f} segundos![/bold green]\n")
@@ -141,19 +146,22 @@ def cmd_batch(args):
         sys.exit(0)
 
     console.print(f"Encontrados [bold green]{len(tiff_files)}[/bold green] arquivos TIFF para processamento em lote.")
-    presets_to_run = ["suave", "equilibrado", "enfatico", "mineral"] if args.preset == "all" else [args.preset]
+    presets_arg = args.preset
 
     for idx, tiff in enumerate(tiff_files, 1):
         console.print(f"\n[cyan][{idx}/{len(tiff_files)}][/cyan] Processando: [bold]{tiff.name}[/bold]")
         process_and_export_all_presets(
             input_path=tiff,
             output_dir=None,
-            presets=presets_to_run,
+            presets=[presets_arg] if presets_arg not in ("all", "craters", "classic") else [presets_arg],
             enable_clahe=not args.no_clahe,
             use_limb_guard=not args.no_limb_guard,
             export_png=not args.no_png,
             export_tiff=not args.no_tiff,
             custom_gamma=args.gamma,
+            custom_contrast=args.contrast,
+            custom_clarity=args.clarity,
+            custom_deconvolve=True if args.deconvolve else None,
         )
 
     console.print(f"\n[bold green][OK] Lote concluído com sucesso![/bold green]")
@@ -166,18 +174,23 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponíveis")
 
+    presets_choices = ["all", "craters", "classic"] + list(LunarWaveletEngine.PRESETS.keys())
+
     # Comando: sharpen
     parser_sharpen = subparsers.add_parser("sharpen", help="Processa e aprimora um arquivo TIFF empilhado")
     parser_sharpen.add_argument("file", help="Caminho do arquivo de imagem (TIFF/PNG)")
     parser_sharpen.add_argument(
         "--preset",
-        choices=["all", "suave", "equilibrado", "enfatico", "mineral"],
+        choices=presets_choices,
         default="all",
-        help="Preset de wavelets a aplicar (default: all)",
+        help="Preset ou grupo de wavelets a aplicar (default: all, opções: all, craters, classic ou preset específico)",
     )
     parser_sharpen.add_argument("--output-dir", help="Diretório personalizado de destino")
     parser_sharpen.add_argument("--no-clahe", action="store_true", help="Desativa o realce de relevo local (CLAHE)")
     parser_sharpen.add_argument("--no-limb-guard", action="store_true", help="Desativa a proteção de borda do limbo lunar")
+    parser_sharpen.add_argument("--clarity", type=float, default=None, help="Sobrescreve intensidade de relevo 3D/Clarity (ex: 0.3 a 0.8)")
+    parser_sharpen.add_argument("--contrast", type=float, default=None, help="Sobrescreve contraste da curva S (ex: 1.1 a 1.4)")
+    parser_sharpen.add_argument("--deconvolve", action="store_true", help="Força aplicação de Deconvolução Richardson-Lucy contra seeing")
     parser_sharpen.add_argument("--gamma", type=float, default=1.0, help="Ajuste de curva gama (default: 1.0)")
     parser_sharpen.add_argument("--no-png", action="store_true", help="Não exporta PNG de visualização")
     parser_sharpen.add_argument("--no-tiff", action="store_true", help="Não exporta TIFF 16-bit")
@@ -188,12 +201,15 @@ def main():
     parser_batch.add_argument("dir", help="Caminho do diretório contendo os TIFFs")
     parser_batch.add_argument(
         "--preset",
-        choices=["all", "suave", "equilibrado", "enfatico", "mineral"],
+        choices=presets_choices,
         default="all",
-        help="Preset de wavelets a aplicar (default: all)",
+        help="Preset ou grupo de wavelets a aplicar (default: all, opções: all, craters, classic ou preset específico)",
     )
     parser_batch.add_argument("--no-clahe", action="store_true", help="Desativa o CLAHE")
     parser_batch.add_argument("--no-limb-guard", action="store_true", help="Desativa o Limb Guard")
+    parser_batch.add_argument("--clarity", type=float, default=None, help="Sobrescreve intensidade de relevo 3D/Clarity")
+    parser_batch.add_argument("--contrast", type=float, default=None, help="Sobrescreve contraste da curva S")
+    parser_batch.add_argument("--deconvolve", action="store_true", help="Força aplicação de Deconvolução Richardson-Lucy")
     parser_batch.add_argument("--gamma", type=float, default=1.0, help="Ajuste de curva gama")
     parser_batch.add_argument("--no-png", action="store_true", help="Não exporta PNG")
     parser_batch.add_argument("--no-tiff", action="store_true", help="Não exporta TIFF")

@@ -173,6 +173,47 @@ def save_lunar_image(
     return out_p
 
 
+def apply_adaptive_s_curve(
+    image_float: np.ndarray,
+    contrast: float = 1.25,
+    midtone_pivot: float = 0.35,
+) -> np.ndarray:
+    """
+    Aplica uma curva S adaptativa centrada na meia-luz lunar, aumentando
+    o gradiente tonal e a profundidade de sombras projetadas por crateras.
+    """
+    if contrast <= 1.0:
+        return image_float
+
+    if image_float.ndim == 2:
+        x = image_float - midtone_pivot
+        s = np.sign(x) * (np.abs(x) ** (1.0 / contrast)) + midtone_pivot
+        return np.clip(s, 0.0, 1.0)
+
+    # Em RGB, atua no canal de luminância L para não distorcer o balanço de cores
+    lab = cv2.cvtColor(image_float, cv2.COLOR_RGB2LAB)
+    l_norm = lab[:, :, 0] / 100.0
+    x = l_norm - midtone_pivot
+    s = np.sign(x) * (np.abs(x) ** (1.0 / contrast)) + midtone_pivot
+    lab[:, :, 0] = np.clip(s, 0.0, 1.0) * 100.0
+    return np.clip(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB), 0.0, 1.0)
+
+
+def apply_dual_scale_clahe(
+    image_float: np.ndarray,
+    fine_grid: Tuple[int, int] = (16, 16),
+    coarse_grid: Tuple[int, int] = (6, 6),
+    blend_ratio: float = 0.65,
+) -> np.ndarray:
+    """
+    Aplica equalização de histograma adaptativa em dupla escala (fina para microcrateras
+    e ampla para distinção entre mares e terras altas).
+    """
+    fine_enh = apply_clahe_16bit(image_float, clip_limit=1.6, tile_grid_size=fine_grid, blend_ratio=blend_ratio)
+    coarse_enh = apply_clahe_16bit(fine_enh, clip_limit=1.2, tile_grid_size=coarse_grid, blend_ratio=0.5)
+    return coarse_enh
+
+
 def process_and_export_all_presets(
     input_path: Union[str, Path],
     output_dir: Optional[Union[str, Path]] = None,
@@ -182,25 +223,30 @@ def process_and_export_all_presets(
     export_png: bool = True,
     export_tiff: bool = True,
     custom_gamma: float = 1.0,
+    custom_contrast: Optional[float] = None,
+    custom_clarity: Optional[float] = None,
+    custom_deconvolve: Optional[bool] = None,
 ) -> Dict[str, Dict[str, Path]]:
     """
     Fluxo completo e autônomo de pós-processamento:
     Carrega o TIFF empilhado, processa cada preset de wavelets com Limb Guard,
-    aplica CLAHE e esticamento de histograma e exporta os arquivos finais.
+    aplica CLAHE (simples ou dual-scale), curvas S de relevo e esticamento dinâmico.
 
     Args:
         input_path: Caminho do TIFF empilhado original (ex: saída do AutoStakkert!).
-        output_dir: Diretório de destino. Se None, cria uma subpasta 'processado_iris' junto ao arquivo.
-        presets: Lista de presets a gerar (default: ['suave', 'equilibrado', 'enfatico', 'mineral']).
+        output_dir: Diretório de destino. Se None, cria subpasta 'processado_iris'.
+        presets: Lista de presets ou grupos ('all', 'craters', 'classic').
         enable_clahe: Se True, aplica realce adaptativo de relevo 16-bit.
-        use_limb_guard: Se True, ativa proteção de borda para evitar halos e ringing no limbo.
-        export_png: Se True, gera PNG de 8-bit com alta qualidade para compartilhamento/visualização.
-        export_tiff: Se True, gera TIFF de 16-bit master para edição ou arquivamento.
+        use_limb_guard: Se True, ativa proteção de borda no limbo.
+        export_png: Se True, gera PNG de 8-bit com alta qualidade.
+        export_tiff: Se True, gera TIFF de 16-bit master.
         custom_gamma: Fator de correção de gama tonal.
+        custom_contrast: Fator opcional para sobrescrever o contraste da curva S.
+        custom_clarity: Fator opcional para sobrescrever o micro-contraste (Clarity).
+        custom_deconvolve: Força ativação/desativação da Deconvolução Richardson-Lucy.
 
     Returns:
-        Dicionário mapeando nome do preset aos arquivos gerados:
-        {'equilibrado': {'tiff': Path(...), 'png': Path(...)}}
+        Dicionário mapeando nome do preset aos arquivos gerados.
     """
     in_file = Path(input_path)
     if not in_file.exists():
@@ -209,34 +255,61 @@ def process_and_export_all_presets(
     target_dir = Path(output_dir) if output_dir else in_file.parent / f"{in_file.stem}_processado_iris"
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    if presets is None:
-        presets = ["suave", "equilibrado", "enfatico", "mineral"]
+    # Resolução de grupos de presets
+    all_available = list(LunarWaveletEngine.PRESETS.keys())
+    craters_group = ["enfatico", "crateras_profundas", "deconvolucao_extrema", "contraste_dramatico"]
+    classic_group = ["suave", "equilibrado", "enfatico", "mineral"]
+
+    resolved_presets: List[str] = []
+    if presets is None or "all" in presets:
+        resolved_presets = all_available
+    elif "craters" in presets:
+        resolved_presets = craters_group
+    elif "classic" in presets:
+        resolved_presets = classic_group
+    else:
+        for p in presets:
+            if p in all_available and p not in resolved_presets:
+                resolved_presets.append(p)
+
+    if not resolved_presets:
+        resolved_presets = all_available
 
     engine = LunarWaveletEngine(levels=5)
     img_float, original_depth = load_lunar_image(in_file)
 
     results: Dict[str, Dict[str, Path]] = {}
 
-    for preset_name in presets:
-        # 1. Aplicação de Wavelets com Limb Guard
+    for preset_name in resolved_presets:
+        p_cfg = LunarWaveletEngine.PRESETS[preset_name]
+
+        # 1. Aplicação de Wavelets com Deconvolução, Limb Guard e Clarity
         sharpened = engine.process_preset(
             img_float,
             preset_name=preset_name,
             use_limb_guard=use_limb_guard,
+            override_deconvolve=custom_deconvolve,
+            override_clarity=custom_clarity,
         )
 
-        # 2. Realce de Relevo Local (CLAHE)
+        # 2. Realce de Relevo Local (CLAHE Simples ou Dual-Scale)
         if enable_clahe:
-            # No preset 'suave' usamos menor intensidade de CLAHE
-            ratio = 0.4 if preset_name == "suave" else 0.65
-            processed = apply_clahe_16bit(sharpened, clip_limit=1.5, blend_ratio=ratio)
+            if p_cfg.get("dual_clahe", False):
+                clahe_enhanced = apply_dual_scale_clahe(sharpened)
+            else:
+                ratio = 0.4 if preset_name == "suave" else 0.65
+                clahe_enhanced = apply_clahe_16bit(sharpened, clip_limit=1.5, blend_ratio=ratio)
         else:
-            processed = sharpened
+            clahe_enhanced = sharpened
 
-        # 3. Calibração Tonal Final
-        final_img = stretch_tonal_range(processed, gamma=custom_gamma)
+        # 3. Curva S Adaptativa para Esculpir Crateras e Terminador
+        contrast_factor = custom_contrast if custom_contrast is not None else p_cfg.get("s_curve_contrast", 1.0)
+        tonal_sculpted = apply_adaptive_s_curve(clahe_enhanced, contrast=contrast_factor)
 
-        # 4. Exportação dos formatos solicitados
+        # 4. Calibração Tonal Final (Esticamento Dinâmico)
+        final_img = stretch_tonal_range(tonal_sculpted, gamma=custom_gamma)
+
+        # 5. Exportação dos formatos solicitados
         preset_files: Dict[str, Path] = {}
         base_name = f"{in_file.stem}_{preset_name}"
 

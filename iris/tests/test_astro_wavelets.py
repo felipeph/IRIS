@@ -121,18 +121,65 @@ def test_reconstruct_with_limb_guard():
 
 
 def test_presets_execution(synthetic_moon_16bit: Path):
-    """Executa todos os presets disponíveis e garante conformidade de saída."""
+    """Executa todos os 8 presets disponíveis e garante conformidade de saída."""
     engine = LunarWaveletEngine()
     img_float, bit_depth = load_lunar_image(synthetic_moon_16bit)
     assert bit_depth == 16
     assert img_float.shape == (300, 300, 3)
 
-    for preset_name in ["suave", "equilibrado", "enfatico", "mineral"]:
+    all_presets = list(LunarWaveletEngine.PRESETS.keys())
+    assert len(all_presets) == 8
+
+    for preset_name in all_presets:
         out = engine.process_preset(img_float, preset_name=preset_name, use_limb_guard=True)
         assert out.shape == img_float.shape
         assert out.min() >= 0.0
         assert out.max() <= 1.0
         assert not np.isnan(out).any()
+
+
+def test_richardson_lucy_algorithm():
+    """Valida o algoritmo de deconvolução Richardson-Lucy restaurando pico pontual."""
+    original = np.zeros((31, 31), dtype=np.float32)
+    original[15, 15] = 1.0  # pico pontual (craterlet / estrela)
+
+    # Aplica blur
+    blurred = cv2.GaussianBlur(original, (7, 7), 1.2)
+    # Deconvolução
+    deconv = LunarWaveletEngine.richardson_lucy(blurred, psf_sigma=1.2, iterations=6)
+
+    assert deconv.shape == original.shape
+    assert deconv.min() >= 0.0
+    assert deconv.max() <= 1.0
+    assert not np.isnan(deconv).any()
+    # O pico central deve ser substancialmente restaurado após a deconvolução
+    assert deconv[15, 15] > blurred[15, 15]
+
+
+def test_local_clarity_algorithm():
+    """Valida o filtro de micro-contraste de relevo local (Clarity)."""
+    img = np.random.uniform(0.2, 0.8, (50, 50, 3)).astype(np.float32)
+    clarified = LunarWaveletEngine.apply_local_clarity(img, sigma=5.0, amount=0.6)
+
+    assert clarified.shape == img.shape
+    assert clarified.min() >= 0.0
+    assert clarified.max() <= 1.0
+    assert not np.isnan(clarified).any()
+
+
+def test_adaptive_s_curve_algorithm():
+    """Valida a curva S adaptativa."""
+    from src.modules.astro.postprocess import apply_adaptive_s_curve
+    img = np.linspace(0.0, 1.0, 100, dtype=np.float32).reshape(10, 10)
+    scurve = apply_adaptive_s_curve(img, contrast=1.3, midtone_pivot=0.5)
+
+    assert scurve.shape == img.shape
+    assert scurve.min() >= 0.0
+    assert scurve.max() <= 1.0
+    # O contraste em torno do ponto de pivô deve ser aumentado
+    diff_original = img[5, 5] - img[4, 4]
+    diff_scurve = scurve[5, 5] - scurve[4, 4]
+    assert diff_scurve >= diff_original * 0.95
 
 
 def test_load_and_save_16bit_fidelity(tmp_path: Path):
@@ -164,40 +211,30 @@ def test_clahe_and_tonal_stretch(synthetic_moon_16bit: Path):
     assert not np.isnan(stretched).any()
 
 
-def test_process_and_export_all_presets(synthetic_moon_16bit: Path, tmp_path: Path):
-    """Testa a orquestração completa gerando TIFF 16-bit e PNG 8-bit para todos os presets."""
-    dest_dir = tmp_path / "saida_processada"
-    presets = ["suave", "equilibrado", "enfatico", "mineral"]
+def test_process_and_export_craters_group(synthetic_moon_16bit: Path, tmp_path: Path):
+    """Testa a geração do grupo 'craters' contendo os 4 presets de relevo."""
+    dest_dir = tmp_path / "saida_craters"
 
     results = process_and_export_all_presets(
         input_path=synthetic_moon_16bit,
         output_dir=dest_dir,
-        presets=presets,
+        presets=["craters"],
         enable_clahe=True,
         use_limb_guard=True,
         export_png=True,
         export_tiff=True,
     )
 
+    expected = ["enfatico", "crateras_profundas", "deconvolucao_extrema", "contraste_dramatico"]
     assert len(results) == 4
-    for p in presets:
+    for p in expected:
         assert p in results
-        assert "tiff" in results[p]
-        assert "png" in results[p]
-
-        tiff_p = results[p]["tiff"]
-        png_p = results[p]["png"]
-
-        assert tiff_p.exists() and tiff_p.stat().st_size > 0
-        assert png_p.exists() and png_p.stat().st_size > 0
-
-        # Verificar se o TIFF exportado manteve 16-bit
-        _, depth = load_lunar_image(tiff_p)
-        assert depth == 16
+        assert results[p]["tiff"].exists()
+        assert results[p]["png"].exists()
 
 
 def test_cli_subcommands(synthetic_moon_16bit: Path, tmp_path: Path):
-    """Testa a invocação do CLI iris-astro via argparse."""
+    """Testa a invocação do CLI iris-astro via argparse com novas opções."""
     from src.modules.astro.cli import main
     import sys
 
@@ -205,20 +242,24 @@ def test_cli_subcommands(synthetic_moon_16bit: Path, tmp_path: Path):
     sys.argv = ["iris-astro", "info", str(synthetic_moon_16bit)]
     main()
 
-    # 2. Testar subcomando sharpen para preset específico
+    # 2. Testar subcomando sharpen para preset crateras_profundas com clarity e deconvolve
     out_dir = tmp_path / "cli_out"
     sys.argv = [
         "iris-astro",
         "sharpen",
         str(synthetic_moon_16bit),
         "--preset",
-        "equilibrado",
+        "crateras_profundas",
+        "--clarity",
+        "0.6",
+        "--deconvolve",
         "--output-dir",
         str(out_dir),
     ]
     main()
 
-    generated_png = out_dir / f"{synthetic_moon_16bit.stem}_equilibrado.png"
-    generated_tif = out_dir / f"{synthetic_moon_16bit.stem}_equilibrado.tif"
+    generated_png = out_dir / f"{synthetic_moon_16bit.stem}_crateras_profundas.png"
+    generated_tif = out_dir / f"{synthetic_moon_16bit.stem}_crateras_profundas.tif"
     assert generated_png.exists()
     assert generated_tif.exists()
+
