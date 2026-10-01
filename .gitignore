@@ -58,3 +58,7 @@ _old/
 scratch.py
 iris/docs/features_and_use_cases.md
 iris/docs/ai_system_context.md
+iris/experiments/
+*.tif
+*.tiff
+
