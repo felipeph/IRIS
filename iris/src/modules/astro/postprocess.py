@@ -259,17 +259,26 @@ def process_and_export_all_presets(
     all_available = list(LunarWaveletEngine.PRESETS.keys())
     craters_group = ["enfatico", "crateras_profundas", "deconvolucao_extrema", "contraste_dramatico"]
     classic_group = ["suave", "equilibrado", "enfatico", "mineral"]
+    registax_group = ["registax_fiel", "registax_limb_guard", "registax_plus", "registax_mineral"]
 
     resolved_presets: List[str] = []
     if presets is None or "all" in presets:
         resolved_presets = all_available
-    elif "craters" in presets:
-        resolved_presets = craters_group
-    elif "classic" in presets:
-        resolved_presets = classic_group
     else:
         for p in presets:
-            if p in all_available and p not in resolved_presets:
+            if p == "craters":
+                for g in craters_group:
+                    if g not in resolved_presets:
+                        resolved_presets.append(g)
+            elif p == "classic":
+                for g in classic_group:
+                    if g not in resolved_presets:
+                        resolved_presets.append(g)
+            elif p == "registax":
+                for g in registax_group:
+                    if g not in resolved_presets:
+                        resolved_presets.append(g)
+            elif p in all_available and p not in resolved_presets:
                 resolved_presets.append(p)
 
     if not resolved_presets:
@@ -293,7 +302,8 @@ def process_and_export_all_presets(
         )
 
         # 2. Realce de Relevo Local (CLAHE Simples ou Dual-Scale)
-        if enable_clahe:
+        is_clahe_disabled = p_cfg.get("disable_clahe", False)
+        if enable_clahe and not is_clahe_disabled:
             if p_cfg.get("dual_clahe", False):
                 clahe_enhanced = apply_dual_scale_clahe(sharpened)
             else:
@@ -307,7 +317,13 @@ def process_and_export_all_presets(
         tonal_sculpted = apply_adaptive_s_curve(clahe_enhanced, contrast=contrast_factor)
 
         # 4. Calibração Tonal Final (Esticamento Dinâmico)
-        final_img = stretch_tonal_range(tonal_sculpted, gamma=custom_gamma)
+        if p_cfg.get("disable_stretch", False):
+            if custom_gamma != 1.0 and custom_gamma > 0.0:
+                final_img = np.clip(np.power(tonal_sculpted, 1.0 / custom_gamma), 0.0, 1.0)
+            else:
+                final_img = tonal_sculpted
+        else:
+            final_img = stretch_tonal_range(tonal_sculpted, gamma=custom_gamma)
 
         # 5. Exportação dos formatos solicitados
         preset_files: Dict[str, Path] = {}

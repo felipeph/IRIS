@@ -121,14 +121,14 @@ def test_reconstruct_with_limb_guard():
 
 
 def test_presets_execution(synthetic_moon_16bit: Path):
-    """Executa todos os 8 presets disponíveis e garante conformidade de saída."""
+    """Executa todos os 12 presets disponíveis e garante conformidade de saída."""
     engine = LunarWaveletEngine()
     img_float, bit_depth = load_lunar_image(synthetic_moon_16bit)
     assert bit_depth == 16
     assert img_float.shape == (300, 300, 3)
 
     all_presets = list(LunarWaveletEngine.PRESETS.keys())
-    assert len(all_presets) == 8
+    assert len(all_presets) == 12
 
     for preset_name in all_presets:
         out = engine.process_preset(img_float, preset_name=preset_name, use_limb_guard=True)
@@ -262,4 +262,70 @@ def test_cli_subcommands(synthetic_moon_16bit: Path, tmp_path: Path):
     generated_tif = out_dir / f"{synthetic_moon_16bit.stem}_crateras_profundas.tif"
     assert generated_png.exists()
     assert generated_tif.exists()
+
+    # 3. Testar subcomando sharpen para preset registax_fiel
+    sys.argv = [
+        "iris-astro",
+        "sharpen",
+        str(synthetic_moon_16bit),
+        "--preset",
+        "registax_fiel",
+        "--output-dir",
+        str(out_dir),
+    ]
+    main()
+
+    reg_png = out_dir / f"{synthetic_moon_16bit.stem}_registax_fiel.png"
+    reg_tif = out_dir / f"{synthetic_moon_16bit.stem}_registax_fiel.tif"
+    assert reg_png.exists()
+    assert reg_tif.exists()
+
+
+def test_process_and_export_registax_group(synthetic_moon_16bit: Path, tmp_path: Path):
+    """Testa a geração do grupo 'registax' contendo os 4 presets calibrados."""
+    dest_dir = tmp_path / "saida_registax"
+
+    results = process_and_export_all_presets(
+        input_path=synthetic_moon_16bit,
+        output_dir=dest_dir,
+        presets=["registax"],
+        enable_clahe=True,
+        use_limb_guard=True,
+        export_png=True,
+        export_tiff=True,
+    )
+
+    expected = ["registax_fiel", "registax_limb_guard", "registax_plus", "registax_mineral"]
+    assert len(results) == 4
+    for p in expected:
+        assert p in results
+        assert results[p]["tiff"].exists()
+        assert results[p]["png"].exists()
+
+
+def test_registax_fiel_ground_truth_fidelity():
+    """Valida a fidelidade matemática (PSNR >= 48 dB e MAE < 150) contra o arquivo real do RegiStax."""
+    exp_dir = Path("experiments/astro")
+    orig_files = list(exp_dir.glob("original-autostakkert-*.tif"))
+    reg_files = list(exp_dir.glob("editado-registax-*.tif"))
+
+    if not orig_files or not reg_files:
+        pytest.skip("Arquivos de benchmark do RegiStax não encontrados em experiments/astro.")
+
+    orig_path = orig_files[0]
+    reg_path = reg_files[0]
+
+    engine = LunarWaveletEngine()
+    orig_img, depth = load_lunar_image(orig_path)
+    gt_img, _ = load_lunar_image(reg_path)
+
+    result = engine.process_preset(orig_img, preset_name="registax_fiel")
+
+    mse = np.mean((result - gt_img) ** 2)
+    psnr = 10 * np.log10(1.0 / max(mse, 1e-10))
+    mae = np.mean(np.abs(result - gt_img)) * 65535.0
+
+    # Fidelidade matemática excepcional: PSNR >= 48.0 dB (o olho humano não distingue acima de 40 dB)
+    assert psnr >= 48.0, f"PSNR abaixo do limiar de ouro de 48 dB: {psnr:.2f} dB"
+    assert mae < 150.0, f"MAE acima de 150 níveis: {mae:.2f}"
 

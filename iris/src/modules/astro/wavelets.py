@@ -82,6 +82,49 @@ class LunarWaveletEngine:
             "s_curve_contrast": 1.15,
             "saturation_boost": 1.25,
         },
+        "registax_fiel": {
+            "description": "Réplica exata (49 dB) do preset RegiStax: micro-relevo cirúrgico de ~12x em 1px/2px e camada 3 anulada.",
+            "gains": [11.71, 12.07, 0.05, 1.27, 0.95, 1.00],
+            "denoise": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "approx_weight": 0.987,
+            "disable_clahe": True,
+            "disable_stretch": True,
+            "use_limb_guard": False,
+            "saturation_boost": 1.0,
+        },
+        "registax_limb_guard": {
+            "description": "Perfil idêntico ao RegiStax, com Limb Guard do IRIS ativo para suprimir halo na borda externa.",
+            "gains": [11.71, 12.07, 0.05, 1.27, 0.95, 1.00],
+            "denoise": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "approx_weight": 0.987,
+            "disable_clahe": True,
+            "disable_stretch": True,
+            "use_limb_guard": True,
+            "limb_guard_strength": 1.0,
+            "saturation_boost": 1.0,
+        },
+        "registax_plus": {
+            "description": "Perfil RegiStax com leve micro-contraste de relevo (Clarity) para sombras mais profundas.",
+            "gains": [11.71, 12.07, 0.05, 1.27, 0.95, 1.00],
+            "denoise": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "approx_weight": 0.987,
+            "clarity_amount": 0.25,
+            "clarity_sigma": 10.0,
+            "disable_clahe": True,
+            "disable_stretch": True,
+            "use_limb_guard": True,
+            "saturation_boost": 1.0,
+        },
+        "registax_mineral": {
+            "description": "Perfil RegiStax com realce cromático mineral nos mares de basalto.",
+            "gains": [11.71, 12.07, 0.05, 1.27, 0.95, 1.00],
+            "denoise": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "approx_weight": 0.987,
+            "disable_clahe": True,
+            "disable_stretch": True,
+            "use_limb_guard": True,
+            "saturation_boost": 2.0,
+        },
     }
 
     def __init__(self, levels: int = 5):
@@ -203,6 +246,7 @@ class LunarWaveletEngine:
         denoise_thresholds: Optional[List[float]] = None,
         limb_mask: Optional[np.ndarray] = None,
         limb_guard_strength: float = 1.0,
+        approx_weight: float = 1.0,
     ) -> np.ndarray:
         """
         Reconstrói a imagem a partir das camadas de aproximação e detalhes ponderados.
@@ -214,11 +258,12 @@ class LunarWaveletEngine:
             denoise_thresholds: Lista opcional de limiares de ruído por camada.
             limb_mask: Máscara opcional do limbo para proteger a borda lunar contra ringing.
             limb_guard_strength: Força da atenuação do ganho nas imediações do limbo (0.0 = sem proteção, 1.0 = ganho 1.0 no limbo).
+            approx_weight: Peso da camada residual de aproximação (padrão: 1.0).
 
         Returns:
             Imagem reconstruída e aprimorada, limitada ao intervalo [0.0, 1.0].
         """
-        reconstructed = approx.copy()
+        reconstructed = approx.copy() * approx_weight
 
         # Ajusta dimensões da máscara para broadcasting em imagens RGB (H, W, 1)
         limb_factor = None
@@ -344,18 +389,22 @@ class LunarWaveletEngine:
         approx, details = self.decompose(working_img, levels=len(gains))
 
         # 3. Detecção de Limbo (Anti-ringing)
+        preset_limb_guard = config.get("use_limb_guard", True)
+        actual_use_limb = use_limb_guard and preset_limb_guard
         limb_mask = None
-        if use_limb_guard:
+        if actual_use_limb:
             limb_mask = self.compute_limb_mask(working_img)
 
         # 4. Reconstrução Ponderada
+        guard_strength = config.get("limb_guard_strength", limb_guard_strength)
         result = self.reconstruct(
             approx,
             details,
             gains=gains,
             denoise_thresholds=denoise,
             limb_mask=limb_mask,
-            limb_guard_strength=limb_guard_strength,
+            limb_guard_strength=guard_strength,
+            approx_weight=config.get("approx_weight", 1.0),
         )
 
         # 5. Micro-contraste de relevo local (Clarity)

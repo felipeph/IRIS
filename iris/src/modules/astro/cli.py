@@ -96,7 +96,7 @@ def cmd_sharpen(args):
         results = process_and_export_all_presets(
             input_path=file_path,
             output_dir=output_dir,
-            presets=[presets_arg] if presets_arg not in ("all", "craters", "classic") else [presets_arg],
+            presets=[presets_arg],
             enable_clahe=not args.no_clahe,
             use_limb_guard=not args.no_limb_guard,
             export_png=not args.no_png,
@@ -153,7 +153,7 @@ def cmd_batch(args):
         process_and_export_all_presets(
             input_path=tiff,
             output_dir=None,
-            presets=[presets_arg] if presets_arg not in ("all", "craters", "classic") else [presets_arg],
+            presets=[presets_arg],
             enable_clahe=not args.no_clahe,
             use_limb_guard=not args.no_limb_guard,
             export_png=not args.no_png,
@@ -174,7 +174,7 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponíveis")
 
-    presets_choices = ["all", "craters", "classic"] + list(LunarWaveletEngine.PRESETS.keys())
+    presets_choices = ["all", "craters", "classic", "registax"] + list(LunarWaveletEngine.PRESETS.keys())
 
     # Comando: sharpen
     parser_sharpen = subparsers.add_parser("sharpen", help="Processa e aprimora um arquivo TIFF empilhado")
@@ -183,7 +183,7 @@ def main():
         "--preset",
         choices=presets_choices,
         default="all",
-        help="Preset ou grupo de wavelets a aplicar (default: all, opções: all, craters, classic ou preset específico)",
+        help="Preset ou grupo de wavelets a aplicar (default: all, opções: all, craters, classic, registax ou preset específico)",
     )
     parser_sharpen.add_argument("--output-dir", help="Diretório personalizado de destino")
     parser_sharpen.add_argument("--no-clahe", action="store_true", help="Desativa o realce de relevo local (CLAHE)")
@@ -203,7 +203,7 @@ def main():
         "--preset",
         choices=presets_choices,
         default="all",
-        help="Preset ou grupo de wavelets a aplicar (default: all, opções: all, craters, classic ou preset específico)",
+        help="Preset ou grupo de wavelets a aplicar (default: all, opções: all, craters, classic, registax ou preset específico)",
     )
     parser_batch.add_argument("--no-clahe", action="store_true", help="Desativa o CLAHE")
     parser_batch.add_argument("--no-limb-guard", action="store_true", help="Desativa o Limb Guard")
