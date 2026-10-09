@@ -152,6 +152,7 @@ class ConfigManager:
                 "timelapse": {"enabled": True},
                 "video_edit": {
                     "enabled": True,
+                    "render_profile": "fast",
                     "mode": "individual",
                     "speed": 1.0,
                     "target_fps": 60,

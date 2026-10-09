@@ -21,7 +21,7 @@ from src.modules.video_edit.session import (
     parse_item_datetime,
     parse_duration_seconds
 )
-from src.modules.video_edit.renderer import build_atempo_chain
+from src.modules.video_edit.renderer import build_atempo_chain, build_render_cmd
 from src.modules.video_edit.stage import get_stage as get_video_edit_stage
 from src.modules.youtube.describer import build_edited_video_youtube_metadata
 
@@ -353,3 +353,149 @@ def test_build_edited_video_youtube_metadata(tmp_path):
     assert "RASTREABILIDADE IRIS" in desc
     assert "Lanczos" in desc
     assert "#4k" in desc
+
+
+def test_build_render_cmd_profiles(tmp_path):
+    clip1 = tmp_path / "clip1.mp4"
+    clip2 = tmp_path / "clip2.mp4"
+    clip1.write_bytes(b"dummy1")
+    clip2.write_bytes(b"dummy2")
+    out = tmp_path / "out.mp4"
+    
+    infos = [
+        {"duration": 10.0, "has_audio": True},
+        {"duration": 10.0, "has_audio": True}
+    ]
+    
+    # 1. Teste Perfil FAST com QSV (Hardware Acceleration)
+    cmd_fast_qsv, unsharp_f, deband_f = build_render_cmd(
+        clip_paths=[clip1, clip2],
+        clip_infos=infos,
+        output_video_path=out,
+        trim_starts=[2.0, 2.0],
+        trimmed_durs=[6.0, 6.0],
+        speed=1.0,
+        target_fps=60,
+        target_w=3840,
+        target_h=2160,
+        render_profile="fast",
+        encoder_name="h264_qsv (Intel Quick Sync)",
+        encoder_args=["-c:v", "h264_qsv"],
+        has_any_audio=True
+    )
+    cmd_fast_qsv_str = " ".join(cmd_fast_qsv)
+    assert "-hwaccel qsv" in cmd_fast_qsv_str
+    assert "vpp_qsv=w=3840:h=2160:scale_mode=hq:framerate=60" in cmd_fast_qsv_str
+    assert "unsharp" not in cmd_fast_qsv_str
+    assert "deband" not in cmd_fast_qsv_str
+    assert unsharp_f is False
+    assert deband_f is False
+
+    # 2. Teste Perfil FAST com CPU (Sem QSV)
+    cmd_fast_cpu, _, _ = build_render_cmd(
+        clip_paths=[clip1],
+        clip_infos=[infos[0]],
+        output_video_path=out,
+        trim_starts=[0.0],
+        trimmed_durs=[10.0],
+        speed=1.0,
+        target_fps=60,
+        target_w=3840,
+        target_h=2160,
+        render_profile="fast",
+        encoder_name="libx264 (CPU)",
+        encoder_args=["-c:v", "libx264"],
+        has_any_audio=False
+    )
+    cmd_fast_cpu_str = " ".join(cmd_fast_cpu)
+    assert "scale=3840:2160:flags=bicubic" in cmd_fast_cpu_str
+    assert "unsharp" not in cmd_fast_cpu_str
+    assert "deband" not in cmd_fast_cpu_str
+
+    # 3. Teste Perfil BALANCED
+    cmd_bal, unsharp_b, deband_b = build_render_cmd(
+        clip_paths=[clip1],
+        clip_infos=[infos[0]],
+        output_video_path=out,
+        trim_starts=[0.0],
+        trimmed_durs=[10.0],
+        speed=1.0,
+        target_fps=60,
+        target_w=3840,
+        target_h=2160,
+        render_profile="balanced",
+        encoder_name="h264_qsv (Intel Quick Sync)",
+        encoder_args=["-c:v", "h264_qsv"],
+        has_any_audio=False
+    )
+    cmd_bal_str = " ".join(cmd_bal)
+    assert "unsharp=luma_msize_x=3" in cmd_bal_str
+    assert "scale=3840:2160:flags=bicubic+accurate_rnd" in cmd_bal_str
+    assert "deband" not in cmd_bal_str
+    assert unsharp_b is True
+    assert deband_b is False
+
+    # 4. Teste Perfil QUALITY
+    cmd_qual, unsharp_q, deband_q = build_render_cmd(
+        clip_paths=[clip1],
+        clip_infos=[infos[0]],
+        output_video_path=out,
+        trim_starts=[0.0],
+        trimmed_durs=[10.0],
+        speed=1.0,
+        target_fps=60,
+        target_w=3840,
+        target_h=2160,
+        render_profile="quality",
+        encoder_name="h264_qsv (Intel Quick Sync)",
+        encoder_args=["-c:v", "h264_qsv"],
+        has_any_audio=False
+    )
+    cmd_qual_str = " ".join(cmd_qual)
+    assert "unsharp=luma_msize_x=5" in cmd_qual_str
+    assert "deband=" in cmd_qual_str
+    assert "scale=3840:2160:flags=lanczos+accurate_rnd+full_chroma_int" in cmd_qual_str
+    assert unsharp_q is True
+    assert deband_q is True
+
+
+def test_build_edited_video_youtube_metadata_profiles(tmp_path):
+    vid_path = tmp_path / "sample_video_editado.mp4"
+    vid_path.write_bytes(b"dummy")
+    yt_cfg = {"video_playlist": "Natureza 4K UHD", "privacy_status": "unlisted"}
+
+    # Fast Profile
+    rec_fast = {
+        "output_video_path": str(vid_path),
+        "camera_model": "PowerShot SX60 HS",
+        "clip_count": 1,
+        "metadata_json": {"render_profile": "fast"}
+    }
+    meta_fast = build_edited_video_youtube_metadata(vid_path, rec_fast, yt_cfg)
+    assert "Perfil Rápido" in meta_fast["description"]
+    assert "Intel QSV VPP" in meta_fast["description"]
+    assert "Intel QSV" in meta_fast["tags"]
+
+    # Balanced Profile
+    rec_bal = {
+        "output_video_path": str(vid_path),
+        "camera_model": "PowerShot SX60 HS",
+        "clip_count": 1,
+        "metadata_json": {"render_profile": "balanced"}
+    }
+    meta_bal = build_edited_video_youtube_metadata(vid_path, rec_bal, yt_cfg)
+    assert "Perfil Balanceado" in meta_bal["description"]
+    assert "Bicúbica" in meta_bal["description"]
+    assert "Bicubic" in meta_bal["tags"]
+
+    # Quality Profile
+    rec_qual = {
+        "output_video_path": str(vid_path),
+        "camera_model": "PowerShot SX60 HS",
+        "clip_count": 1,
+        "metadata_json": {"render_profile": "quality"}
+    }
+    meta_qual = build_edited_video_youtube_metadata(vid_path, rec_qual, yt_cfg)
+    assert "Perfil Qualidade Máxima" in meta_qual["description"]
+    assert "Lanczos" in meta_qual["description"]
+    assert "Lanczos" in meta_qual["tags"]

@@ -49,6 +49,22 @@ modules:
       add_grain: true           # Adiciona micro-grão sutil para evitar recompressão do YouTube
     ntfy_topic: "timelapse-studio-2026"
     windows_toast: true
+  video_edit:
+    enabled: true
+    render_profile: fast            # Perfis: 'fast' (Intel QSV hardware), 'balanced' (unsharp 3x3), 'quality' (Lanczos + deband 16-bit)
+    mode: "individual"              # 'individual' (1:1) ou 'joined' (junção de sessão contígua)
+    speed: 1.0                      # Multiplicador de velocidade (ex: 1.0, 2.0, 0.5)
+    target_fps: 60                  # Teto de FPS (ex: 30, 60)
+    target_width: 3840              # 4K UHD Largura
+    target_height: 2160             # 4K UHD Altura
+    crf: 16
+    preset: "slow"
+    unsharp_filter: true
+    deband_enabled: true
+    trim_enabled: true
+    trim_seconds: 2.0
+    strip_audio: false
+    session_interval_minutes: 10.0
   youtube:
     enabled: true
     privacy_status: "unlisted"

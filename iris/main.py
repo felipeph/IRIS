@@ -65,6 +65,9 @@ def show_config_menu():
         table.add_row("27", "Remover Áudio Vídeos (Mudo)", "[red]Sim (Mudo)[/red]" if ve_strip else "[green]Não (Preservar)[/green]")
         ve_pl = config.get("modules.youtube.video_playlist", "Natureza 4K UHD")
         table.add_row("28", "Playlist Vídeos YouTube", str(ve_pl))
+        ve_profile = config.get("modules.video_edit.render_profile", "fast")
+        prof_desc = "Fast (Intel QSV HW)" if ve_profile == "fast" else ("Balanced (Bicúbico/3x3)" if ve_profile == "balanced" else "Quality (Lanczos/16-bit)")
+        table.add_row("29", "Perfil Renderização Vídeo", prof_desc)
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -289,6 +292,16 @@ def show_config_menu():
             new_val = Prompt.ask("Nome da Playlist no YouTube para Vídeos Editados", default=curr)
             config.set("modules.youtube.video_playlist", new_val)
             console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "29":
+            curr = config.get("modules.video_edit.render_profile", "fast")
+            console.print("Perfis disponíveis: [bold]fast[/bold] (Intel QSV hardware / máxima eficiência), [bold]balanced[/bold] (Equilibrado / unsharp 3x3), [bold]quality[/bold] (Máxima qualidade / Lanczos 4K)")
+            new_val = Prompt.ask("Escolha o perfil (fast/balanced/quality)", default=str(curr)).lower().strip()
+            if new_val in ["fast", "balanced", "quality"]:
+                config.set("modules.video_edit.render_profile", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida! Escolha 'fast', 'balanced' ou 'quality'.[/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

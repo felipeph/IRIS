@@ -508,6 +508,23 @@ def build_edited_video_youtube_metadata(
     else:
         src_display = "Mapeamento interno IRIS"
 
+    profile = str(meta.get("render_profile") or record.get("render_profile") or "quality").lower()
+    if profile == "fast":
+        profile_desc = "Perfil Rápido (Aceleração por Hardware Intel QSV VPP)"
+        upscale_desc = "Aceleração por Hardware Intel QSV VPP (3840x2160 UHD @ 60 FPS)"
+        filter_desc = "Filtros de Software Desativados (Foco em Alta Eficiência Energética e Velocidade)"
+        profile_tag = "Intel QSV"
+    elif profile == "balanced":
+        profile_desc = "Perfil Balanceado (Equilíbrio entre Nitidez e Desempenho)"
+        upscale_desc = "Interpolação Bicúbica Suave com Realce 1080p Nativo (3840x2160 UHD)"
+        filter_desc = "Unsharp Mask Leve 3x3 em 1080p Nativo Pré-Upscale"
+        profile_tag = "Bicubic"
+    else:
+        profile_desc = "Perfil Qualidade Máxima (Preservação de Texturas e Gradientes)"
+        upscale_desc = "Interpolação Lanczos de Alta Precisão (3840x2160 UHD)"
+        filter_desc = "Unsharp Mask 5x5 + Deband 16-bit com micro-dither em 1080p Nativo Pré-Upscale"
+        profile_tag = "Lanczos"
+
     description = f"""Vídeo capturado e masterizado em altíssima definição 4K UHD ({target_res}) a {target_fps} FPS.
 Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Integrated Recording and Ingestion System).
 
@@ -526,9 +543,9 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
 • Áudio: {audio_desc}
 
 🛠️ PROCESSAMENTO E ENGENHARIA DE VÍDEO (MASTERIZAÇÃO 4K):
-• Motor de Upscale: Interpolação Lanczos de Alta Precisão (3840x2160 UHD)
-• Realce de Textura: Unsharp Mask adaptativo para recuperação de micro-contraste
-• Mitigação de Banding: Filtro Deband 16-bit com micro-dither temporal (calibrado para mitigar color banding na compressão VP09/AV01 do YouTube)
+• Perfil de Renderização: {profile_desc}
+• Motor de Upscale: {upscale_desc}
+• Tratamento de Imagem: {filter_desc}
 • Acelerador de Codificação: {encoder}
 • Tamanho do Vídeo Master: {size_desc}{render_line}
 
@@ -542,7 +559,7 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
 """.replace("\r\n", "\n")
 
     tags = [
-        "4K UHD", "Natureza", "Vídeo 4K", "60 FPS", "Lanczos",
+        "4K UHD", "Natureza", "Vídeo 4K", "60 FPS", profile_tag,
         camera_name, cam_make or "Câmera", "IRIS", "Nature"
     ]
 

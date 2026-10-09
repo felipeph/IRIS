@@ -57,6 +57,10 @@ class VideoEditStage(PipelineStage):
             ve_config["trim_enabled"] = bool(kwargs["trim_enabled"])
         if "target_fps" in kwargs and kwargs["target_fps"] is not None:
             ve_config["target_fps"] = int(kwargs["target_fps"])
+        if "render_profile" in kwargs and kwargs["render_profile"]:
+            ve_config["render_profile"] = str(kwargs["render_profile"]).lower().strip()
+        else:
+            ve_config["render_profile"] = str(ve_config.get("render_profile", "fast")).lower().strip()
 
         # 1. Buscar vídeos do projeto
         all_items = project.items
@@ -75,8 +79,9 @@ class VideoEditStage(PipelineStage):
         speed_factor = ve_config.get("speed", 1.0)
         target_fps = ve_config.get("target_fps", 60)
         speed_label = f"{speed_factor}x"
+        render_profile = ve_config.get("render_profile", "fast")
 
-        console.print(f"\n[bold cyan]=== Etapa 6: Edição e Upscale de Vídeos 4K ({len(video_items)} clipe(s) em {total_sessions} lote(s) | Modo: {mode.upper()} | Velocidade: {speed_label} | FPS Alvo: {target_fps}) ===[/bold cyan]")
+        console.print(f"\n[bold cyan]=== Etapa 6: Edição e Upscale de Vídeos 4K ({len(video_items)} clipe(s) em {total_sessions} lote(s) | Modo: {mode.upper()} | Perfil: {render_profile.upper()} | Velocidade: {speed_label} | FPS Alvo: {target_fps}) ===[/bold cyan]")
 
         # 3. Exibir Tabela Rich com resumo dos itens e status
         summary_table = Table(title="Vídeos Detectados para Edição e Upscale 4K", show_header=True, header_style="bold magenta")
@@ -275,8 +280,9 @@ class VideoEditStage(PipelineStage):
                     "last_dt_formatted": last_dt.strftime("%d/%m/%Y às %H:%M:%S") if last_dt else "",
                     "date_str": first_dt.strftime("%d/%m/%Y") if first_dt else "",
                     "encoder": encoder_used,
-                    "deband_enabled": render_stats.get("deband_enabled", True),
-                    "unsharp_enabled": render_stats.get("unsharp_enabled", True),
+                    "render_profile": ve_config.get("render_profile", "fast"),
+                    "deband_enabled": render_stats.get("deband_enabled", False),
+                    "unsharp_enabled": render_stats.get("unsharp_enabled", False),
                     "render_stats": render_stats
                 }
 
@@ -286,6 +292,7 @@ class VideoEditStage(PipelineStage):
                     "source_video_paths": [str(p.resolve()) for p in clip_paths],
                     "output_video_path": str(out_path.resolve()),
                     "mode": mode,
+                    "render_profile": ve_config.get("render_profile", "fast"),
                     "clip_count": len(clip_paths),
                     "speed_factor": speed_factor,
                     "orig_fps": fps_val,
@@ -307,16 +314,17 @@ class VideoEditStage(PipelineStage):
                 topic = config.get("modules.timelapse.ntfy_topic", "timelapse-studio-2026")
                 enable_toast = config.get("modules.timelapse.windows_toast", True)
 
+                profile_tag = ve_config.get("render_profile", "fast").upper()
                 if enable_toast:
                     send_windows_toast(
                         "IRIS - Vídeo 4K Renderizado!",
-                        f"Vídeo: {out_path.name}\nEncoder: {encoder_used} | Speed: {speed_label}"
+                        f"Vídeo: {out_path.name}\nPerfil: {profile_tag} | Encoder: {encoder_used} | Speed: {speed_label}"
                     )
                 if topic:
                     send_ntfy_notification(
                         topic=topic,
                         title="🎬 IRIS: Vídeo 4K Renderizado com Sucesso!",
-                        message=f"📁 Projeto: {project.name}\n🎞️ Vídeo: {out_path.name}\n⚡ Speed: {speed_label} | FPS: {target_fps}",
+                        message=f"📁 Projeto: {project.name}\n🎞️ Vídeo: {out_path.name}\n⚡ Perfil: {profile_tag} | Speed: {speed_label} | FPS: {target_fps}",
                         tags=["film_projector", "clapper", "sparkles"],
                         priority="default"
                     )
