@@ -53,6 +53,18 @@ def show_config_menu():
         table.add_row("21", "Filtro Deband (Anti-banding)", "[green]Ativado[/green]" if deband_enabled else "[red]Desativado[/red]")
         grain_enabled = config.get("modules.timelapse.deband.add_grain", True)
         table.add_row("22", "Ruído Temporal (Micro-grão)", "[green]Ativado[/green]" if grain_enabled else "[red]Desativado[/red]")
+        ve_mode = config.get("modules.video_edit.mode", "individual")
+        table.add_row("23", "Modo Edição Vídeo", "Individual (1:1)" if ve_mode == "individual" else "Junção de Sessão")
+        ve_speed = config.get("modules.video_edit.speed", 1.0)
+        table.add_row("24", "Velocidade Vídeo (--speed)", f"{ve_speed}x")
+        ve_fps = config.get("modules.video_edit.target_fps", 60)
+        table.add_row("25", "FPS Alvo Saída Vídeos", str(ve_fps))
+        ve_trim = config.get("modules.video_edit.trim_seconds", 2.0)
+        table.add_row("26", "Trimming Início/Fim (s)", f"{ve_trim}s")
+        ve_strip = config.get("modules.video_edit.strip_audio", False)
+        table.add_row("27", "Remover Áudio Vídeos (Mudo)", "[red]Sim (Mudo)[/red]" if ve_strip else "[green]Não (Preservar)[/green]")
+        ve_pl = config.get("modules.youtube.video_playlist", "Natureza 4K UHD")
+        table.add_row("28", "Playlist Vídeos YouTube", str(ve_pl))
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -218,6 +230,64 @@ def show_config_menu():
             curr = config.get("modules.timelapse.deband.add_grain", True)
             new_val = Confirm.ask("Ativar injeção de ruído/micro-grão temporal dither (otimização para YouTube)?", default=curr)
             config.set("modules.timelapse.deband.add_grain", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "23":
+            console.print("Modos de Edição: [bold]individual[/bold] (1:1 independente), [bold]joined[/bold] (Junção de sessão contígua)")
+            curr = config.get("modules.video_edit.mode", "individual")
+            new_val = Prompt.ask("Escolha o modo (individual/joined)", default=curr).lower()
+            if new_val in ["individual", "joined"]:
+                config.set("modules.video_edit.mode", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida! Escolha 'individual' ou 'joined'.[/red]")
+            time.sleep(1)
+        elif choice == "24":
+            curr = config.get("modules.video_edit.speed", 1.0)
+            new_val = Prompt.ask("Velocidade do vídeo (ex: 1.0, 2.0, 0.5)", default=str(curr))
+            try:
+                val_float = float(new_val.lower().replace("x", ""))
+                if val_float <= 0:
+                    raise ValueError
+                config.set("modules.video_edit.speed", val_float)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um multiplicador positivo (ex: 1.0, 2.0, 0.5)![/red]")
+            time.sleep(1)
+        elif choice == "25":
+            curr = config.get("modules.video_edit.target_fps", 60)
+            new_val = Prompt.ask("FPS Alvo de Saída (ex: 30, 60)", default=str(curr))
+            try:
+                val_int = int(new_val)
+                if val_int <= 0:
+                    raise ValueError
+                config.set("modules.video_edit.target_fps", val_int)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro positivo (ex: 30, 60)![/red]")
+            time.sleep(1)
+        elif choice == "26":
+            curr = config.get("modules.video_edit.trim_seconds", 2.0)
+            new_val = Prompt.ask("Segundos a cortar no início e fim de cada clipe", default=str(curr))
+            try:
+                val_float = float(new_val)
+                if val_float < 0:
+                    raise ValueError
+                config.set("modules.video_edit.trim_seconds", val_float)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser zero ou um número positivo![/red]")
+            time.sleep(1)
+        elif choice == "27":
+            curr = config.get("modules.video_edit.strip_audio", False)
+            new_val = Confirm.ask("Remover áudio dos vídeos editados (produzir vídeo mudo)?", default=curr)
+            config.set("modules.video_edit.strip_audio", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "28":
+            curr = config.get("modules.youtube.video_playlist", "Natureza 4K UHD")
+            new_val = Prompt.ask("Nome da Playlist no YouTube para Vídeos Editados", default=curr)
+            config.set("modules.youtube.video_playlist", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
         else:

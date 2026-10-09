@@ -66,6 +66,33 @@ def init_central_db():
             cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
         except sqlite3.OperationalError:
             pass
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS edited_videos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_name TEXT,
+                source_video_paths TEXT,
+                output_video_path TEXT UNIQUE,
+                mode TEXT,
+                clip_count INTEGER DEFAULT 1,
+                speed_factor REAL DEFAULT 1.0,
+                orig_fps REAL,
+                target_fps REAL,
+                orig_resolution TEXT,
+                target_resolution TEXT,
+                trim_start_sec REAL DEFAULT 0.0,
+                trim_end_sec REAL DEFAULT 0.0,
+                audio_stripped INTEGER DEFAULT 0,
+                duration_seconds REAL,
+                encoder TEXT,
+                youtube_video_id TEXT,
+                youtube_url TEXT,
+                youtube_privacy TEXT,
+                status TEXT DEFAULT 'rendered',
+                metadata_json TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 init_central_db()
@@ -200,6 +227,33 @@ class Project:
                 cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
             except sqlite3.OperationalError:
                 pass
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS edited_videos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_name TEXT,
+                    source_video_paths TEXT,
+                    output_video_path TEXT UNIQUE,
+                    mode TEXT,
+                    clip_count INTEGER DEFAULT 1,
+                    speed_factor REAL DEFAULT 1.0,
+                    orig_fps REAL,
+                    target_fps REAL,
+                    orig_resolution TEXT,
+                    target_resolution TEXT,
+                    trim_start_sec REAL DEFAULT 0.0,
+                    trim_end_sec REAL DEFAULT 0.0,
+                    audio_stripped INTEGER DEFAULT 0,
+                    duration_seconds REAL,
+                    encoder TEXT,
+                    youtube_video_id TEXT,
+                    youtube_url TEXT,
+                    youtube_privacy TEXT,
+                    status TEXT DEFAULT 'rendered',
+                    metadata_json TEXT DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
 
     def save_metadata(self):
@@ -411,6 +465,128 @@ class Project:
             conn.commit()
         update_central_timelapse_youtube(video_path, video_id, url)
 
+    def save_edited_video(self, record: Dict[str, Any]):
+        """Salva ou atualiza um vídeo editado no banco do projeto e no banco central."""
+        self._init_project_db()
+        record_copy = dict(record)
+        record_copy["project_name"] = self.name
+        
+        meta = record_copy.get("metadata_json", {})
+        meta_json_str = json.dumps(meta) if isinstance(meta, dict) else str(meta)
+        src_paths = record_copy.get("source_video_paths", record_copy.get("source_files", []))
+        src_paths_str = json.dumps(src_paths) if isinstance(src_paths, list) else str(src_paths)
+        
+        speed_val = record_copy.get("speed_factor", record_copy.get("speed", 1.0))
+        res_val = record_copy.get("target_resolution", record_copy.get("resolution", "3840x2160"))
+        trim_start = record_copy.get("trim_start_sec", record_copy.get("trim_seconds", 0.0))
+        trim_end = record_copy.get("trim_end_sec", record_copy.get("trim_seconds", 0.0))
+        audio_strip = record_copy.get("audio_stripped", not record_copy.get("has_audio", True))
+
+        with get_db_connection(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO edited_videos (
+                    project_name, source_video_paths, output_video_path, mode, clip_count,
+                    speed_factor, orig_fps, target_fps, orig_resolution, target_resolution,
+                    trim_start_sec, trim_end_sec, audio_stripped, duration_seconds, encoder,
+                    youtube_video_id, youtube_url, youtube_privacy, status, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(output_video_path) DO UPDATE SET
+                    mode=excluded.mode,
+                    clip_count=excluded.clip_count,
+                    speed_factor=excluded.speed_factor,
+                    orig_fps=excluded.orig_fps,
+                    target_fps=excluded.target_fps,
+                    orig_resolution=excluded.orig_resolution,
+                    target_resolution=excluded.target_resolution,
+                    trim_start_sec=excluded.trim_start_sec,
+                    trim_end_sec=excluded.trim_end_sec,
+                    audio_stripped=excluded.audio_stripped,
+                    duration_seconds=excluded.duration_seconds,
+                    encoder=excluded.encoder,
+                    youtube_video_id=COALESCE(excluded.youtube_video_id, edited_videos.youtube_video_id),
+                    youtube_url=COALESCE(excluded.youtube_url, edited_videos.youtube_url),
+                    youtube_privacy=COALESCE(excluded.youtube_privacy, edited_videos.youtube_privacy),
+                    status=excluded.status,
+                    metadata_json=excluded.metadata_json,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (
+                self.name,
+                src_paths_str,
+                record_copy.get("output_video_path", ""),
+                record_copy.get("mode", "individual"),
+                record_copy.get("clip_count", 1),
+                speed_val,
+                record_copy.get("orig_fps", 30.0),
+                record_copy.get("target_fps", 60.0),
+                record_copy.get("orig_resolution", "1920x1080"),
+                res_val,
+                trim_start,
+                trim_end,
+                1 if audio_strip else 0,
+                record_copy.get("duration_seconds", 0.0),
+                record_copy.get("encoder", ""),
+                record_copy.get("youtube_video_id", ""),
+                record_copy.get("youtube_url", ""),
+                record_copy.get("youtube_privacy", "unlisted"),
+                record_copy.get("status", "rendered"),
+                meta_json_str
+            ))
+            conn.commit()
+            
+        save_central_edited_video(record_copy)
+
+    def get_edited_videos(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Recupera todos os vídeos editados do projeto (opcionalmente filtrando por status)."""
+        if not self._project_db_file.exists():
+            return []
+        self._init_project_db()
+        results = []
+        with get_db_connection(self._project_db_file) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            if status:
+                cursor.execute("SELECT * FROM edited_videos WHERE status=? ORDER BY created_at ASC", (status,))
+            else:
+                cursor.execute("SELECT * FROM edited_videos ORDER BY created_at ASC")
+            for row in cursor.fetchall():
+                d = dict(row)
+                d["speed"] = d.get("speed_factor", 1.0)
+                d["resolution"] = d.get("target_resolution", "3840x2160")
+                d["trim_seconds"] = d.get("trim_start_sec", 0.0)
+                d["has_audio"] = 1 if not d.get("audio_stripped", 0) else 0
+                raw_meta = d.get("metadata_json")
+                if isinstance(raw_meta, str) and raw_meta:
+                    try:
+                        d["metadata_json"] = json.loads(raw_meta)
+                    except Exception:
+                        d["metadata_json"] = {}
+                elif not isinstance(raw_meta, dict):
+                    d["metadata_json"] = {}
+                
+                raw_src = d.get("source_video_paths")
+                if isinstance(raw_src, str) and raw_src:
+                    try:
+                        d["source_video_paths"] = json.loads(raw_src)
+                    except Exception:
+                        d["source_video_paths"] = [raw_src]
+                results.append(d)
+        return results
+
+    def update_edited_video_youtube(self, video_path: str, video_id: str, url: str):
+        """Atualiza o link/ID do YouTube do vídeo editado no banco do projeto e no banco central."""
+        if not self._project_db_file.exists():
+            return
+        with get_db_connection(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE edited_videos
+                SET youtube_video_id=?, youtube_url=?, status='uploaded', updated_at=CURRENT_TIMESTAMP
+                WHERE output_video_path=?
+            """, (video_id, url, video_path))
+            conn.commit()
+        update_central_edited_video_youtube(video_path, video_id, url)
+
 
 def get_project(name: str) -> Optional[Project]:
     """Recupera um projeto existente ou retorna None."""
@@ -537,6 +713,124 @@ def list_central_timelapses(project_name: Optional[str] = None) -> List[Dict[str
                     d["metadata_json"] = {}
             elif not isinstance(raw_meta, dict):
                 d["metadata_json"] = {}
+            results.append(d)
+    return results
+
+def save_central_edited_video(record: Dict[str, Any]):
+    """Salva ou atualiza um vídeo editado no banco central de dados."""
+    init_central_db()
+    meta = record.get("metadata_json", {})
+    meta_json_str = json.dumps(meta) if isinstance(meta, dict) else str(meta)
+    src_paths = record.get("source_video_paths", [])
+    src_paths_str = json.dumps(src_paths) if isinstance(src_paths, list) else str(src_paths)
+    
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        cursor = conn.cursor()
+        src_paths = record.get("source_video_paths", record.get("source_files", []))
+        src_paths_str = json.dumps(src_paths) if isinstance(src_paths, list) else str(src_paths)
+        
+        speed_val = record.get("speed_factor", record.get("speed", 1.0))
+        res_val = record.get("target_resolution", record.get("resolution", "3840x2160"))
+        trim_start = record.get("trim_start_sec", record.get("trim_seconds", 0.0))
+        trim_end = record.get("trim_end_sec", record.get("trim_seconds", 0.0))
+        audio_strip = record.get("audio_stripped", not record.get("has_audio", True))
+
+        cursor.execute("""
+            INSERT INTO edited_videos (
+                project_name, source_video_paths, output_video_path, mode, clip_count,
+                speed_factor, orig_fps, target_fps, orig_resolution, target_resolution,
+                trim_start_sec, trim_end_sec, audio_stripped, duration_seconds, encoder,
+                youtube_video_id, youtube_url, youtube_privacy, status, metadata_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(output_video_path) DO UPDATE SET
+                mode=excluded.mode,
+                clip_count=excluded.clip_count,
+                speed_factor=excluded.speed_factor,
+                orig_fps=excluded.orig_fps,
+                target_fps=excluded.target_fps,
+                orig_resolution=excluded.orig_resolution,
+                target_resolution=excluded.target_resolution,
+                trim_start_sec=excluded.trim_start_sec,
+                trim_end_sec=excluded.trim_end_sec,
+                audio_stripped=excluded.audio_stripped,
+                duration_seconds=excluded.duration_seconds,
+                encoder=excluded.encoder,
+                youtube_video_id=COALESCE(excluded.youtube_video_id, edited_videos.youtube_video_id),
+                youtube_url=COALESCE(excluded.youtube_url, edited_videos.youtube_url),
+                youtube_privacy=COALESCE(excluded.youtube_privacy, edited_videos.youtube_privacy),
+                status=excluded.status,
+                metadata_json=excluded.metadata_json,
+                updated_at=CURRENT_TIMESTAMP
+        """, (
+            record.get("project_name", ""),
+            src_paths_str,
+            record.get("output_video_path", ""),
+            record.get("mode", "individual"),
+            record.get("clip_count", 1),
+            speed_val,
+            record.get("orig_fps", 30.0),
+            record.get("target_fps", 60.0),
+            record.get("orig_resolution", "1920x1080"),
+            res_val,
+            trim_start,
+            trim_end,
+            1 if audio_strip else 0,
+            record.get("duration_seconds", 0.0),
+            record.get("encoder", ""),
+            record.get("youtube_video_id", ""),
+            record.get("youtube_url", ""),
+            record.get("youtube_privacy", "unlisted"),
+            record.get("status", "rendered"),
+            meta_json_str
+        ))
+        conn.commit()
+
+def update_central_edited_video_youtube(video_path: str, video_id: str, url: str):
+    """Atualiza o link/ID do YouTube do vídeo editado no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        return
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE edited_videos
+            SET youtube_video_id=?, youtube_url=?, status='uploaded', updated_at=CURRENT_TIMESTAMP
+            WHERE output_video_path=?
+        """, (video_id, url, video_path))
+        conn.commit()
+
+def list_central_edited_videos(project_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Lista vídeos editados cadastrados no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        return []
+    results = []
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if project_name:
+            cursor.execute("SELECT * FROM edited_videos WHERE project_name=? ORDER BY created_at DESC", (project_name,))
+        else:
+            cursor.execute("SELECT * FROM edited_videos ORDER BY created_at DESC")
+        for row in cursor.fetchall():
+            d = dict(row)
+            d["speed"] = d.get("speed_factor", 1.0)
+            d["resolution"] = d.get("target_resolution", "3840x2160")
+            d["trim_seconds"] = d.get("trim_start_sec", 0.0)
+            d["has_audio"] = 1 if not d.get("audio_stripped", 0) else 0
+            raw_meta = d.get("metadata_json")
+            if isinstance(raw_meta, str) and raw_meta:
+                try:
+                    d["metadata_json"] = json.loads(raw_meta)
+                except Exception:
+                    d["metadata_json"] = {}
+            elif not isinstance(raw_meta, dict):
+                d["metadata_json"] = {}
+            
+            raw_src = d.get("source_video_paths")
+            if isinstance(raw_src, str) and raw_src:
+                try:
+                    d["source_video_paths"] = json.loads(raw_src)
+                except Exception:
+                    d["source_video_paths"] = [raw_src]
             results.append(d)
     return results
 

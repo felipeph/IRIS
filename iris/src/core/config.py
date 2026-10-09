@@ -114,6 +114,24 @@ class ConfigManager:
                         "name": "Limpeza da Origem (Após verificação)",
                         "module": "src.modules.cleanup.stage",
                         "enabled": True
+                    },
+                    {
+                        "id": "timelapse",
+                        "name": "Renderização de Timelapses (Fotos -> 4K)",
+                        "module": "src.modules.timelapse.stage",
+                        "enabled": True
+                    },
+                    {
+                        "id": "video_edit",
+                        "name": "Edição e Upscale 4K de Vídeos (Lanczos/GPU)",
+                        "module": "src.modules.video_edit.stage",
+                        "enabled": True
+                    },
+                    {
+                        "id": "youtube",
+                        "name": "Publicação no YouTube (Timelapses e Vídeos)",
+                        "module": "src.modules.youtube.stage",
+                        "enabled": True
                     }
                 ]
             },
@@ -132,6 +150,28 @@ class ConfigManager:
             "modules": {
                 "dedup": {"enabled": True},
                 "timelapse": {"enabled": True},
+                "video_edit": {
+                    "enabled": True,
+                    "mode": "individual",
+                    "speed": 1.0,
+                    "target_fps": 60,
+                    "target_width": 3840,
+                    "target_height": 2160,
+                    "crf": 16,
+                    "preset": "slow",
+                    "unsharp_filter": True,
+                    "deband_enabled": True,
+                    "trim_enabled": True,
+                    "trim_seconds": 2.0,
+                    "strip_audio": False,
+                    "session_interval_minutes": 10.0
+                },
+                "youtube": {
+                    "enabled": True,
+                    "playlist": "Timelapses",
+                    "video_playlist": "Natureza 4K UHD",
+                    "privacy_status": "unlisted"
+                },
                 "bird_detect": {"enabled": True},
                 "cleanup": {"auto_clean": False}
             }

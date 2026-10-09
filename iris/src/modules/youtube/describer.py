@@ -429,3 +429,128 @@ Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IR
 """.replace("\r\n", "\n")
 
     return description[:5000]
+
+
+def build_edited_video_youtube_metadata(
+    video_path: Path,
+    record: Dict[str, Any],
+    yt_config: Dict[str, Any],
+    project: Optional[Any] = None
+) -> Dict[str, Any]:
+    """
+    Compila os metadados oficiais e a ficha técnica completa para vídeos editados/upscalados no YouTube.
+    """
+    meta = record.get("metadata_json") or {}
+    
+    # 1. Título
+    # Inicia com data e hora da captura e depois "Vídeo 4K UHD - {camera}"
+    first_dt_str = meta.get("first_dt_formatted")
+    dt_prefix = ""
+    if first_dt_str:
+        # Ex: "17/08/2026 às 14:30:22" -> "17/08/2026 14:30"
+        parts = first_dt_str.split(" às ")
+        if len(parts) == 2:
+            time_part = ":".join(parts[1].split(":")[:2])
+            dt_prefix = f"{parts[0]} {time_part}"
+        else:
+            dt_prefix = first_dt_str
+    elif meta.get("date_str"):
+        dt_prefix = meta.get("date_str")
+    else:
+        dt_prefix = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    cam_make = meta.get("camera_make", "")
+    cam_model = meta.get("camera_model", "")
+    if cam_make and cam_model and not cam_model.startswith(cam_make):
+        camera_name = f"{cam_make} {cam_model}".strip()
+    else:
+        camera_name = cam_model or cam_make or "Câmera"
+
+    title = f"{dt_prefix} - Vídeo 4K UHD - {camera_name}"
+    title = title[:100]
+
+    # 2. Informações Técnicas
+    orig_w = meta.get("orig_width") or record.get("orig_resolution", "1920x1080").split("x")[0]
+    orig_h = meta.get("orig_height") or record.get("orig_resolution", "1920x1080").split("x")[-1]
+    target_res = record.get("target_resolution", "3840x2160")
+    orig_fps = record.get("orig_fps") or meta.get("orig_fps", 30.0)
+    target_fps = int(record.get("target_fps") or meta.get("target_fps", 60))
+    speed = float(record.get("speed_factor") or meta.get("speed_factor", 1.0))
+    clip_count = int(record.get("clip_count") or meta.get("clip_count", 1))
+    trim_sec = float(record.get("trim_start_sec") or meta.get("trim_seconds", 0.0))
+    audio_stripped = bool(record.get("audio_stripped") or meta.get("audio_stripped", False))
+    dur_sec = float(record.get("duration_seconds") or meta.get("final_duration_seconds", 0.0))
+    orig_dur = float(meta.get("total_orig_duration_seconds", dur_sec * speed))
+    encoder = record.get("encoder") or meta.get("encoder", "FFmpeg")
+    video_bytes = meta.get("video_size_bytes") or (video_path.stat().st_size if video_path.exists() else 0)
+    proj = record.get("project_name") or (project.name if project else "IRIS Project")
+
+    # Formatações
+    speed_desc = f"{speed:.1f}x (Aceleração com preservação temporal)" if speed > 1.0 else (
+        f"{speed:.1f}x (Câmera lenta com interpolação de quadros)" if speed < 1.0 else "1.0x (Velocidade Normal)"
+    )
+    fps_desc = f"{orig_fps:.1f} FPS original ➔ {target_fps} FPS final (Normalização até {target_fps} FPS)"
+    trim_desc = f"{trim_sec:.1f}s no início e {trim_sec:.1f}s no fim (remoção de instabilidade de obturador)" if trim_sec > 0 else "Desativado (duração integral preservada)"
+    audio_desc = "Descartado / Mudo (-an)" if audio_stripped else f"Estéreo AAC 320 kbps (Sincronizado via atempo {speed:.1f}x)"
+    clip_desc = f"{clip_count} clipe unitário" if clip_count == 1 else f"{clip_count} tomadas fundidas em sessão contígua"
+    size_desc = format_bytes_human(video_bytes)
+
+    render_stats = meta.get("render_stats") or {}
+    render_sec = render_stats.get("render_time_seconds", 0.0)
+    render_fps = render_stats.get("avg_fps", 0.0)
+    render_line = f"\n• Tempo de Renderização: {format_duration_human(render_sec)} (média de {render_fps:.1f} FPS de codificação)" if render_sec > 0 else ""
+
+    src_paths = record.get("source_video_paths", [])
+    if len(src_paths) == 1:
+        src_display = src_paths[0]
+    elif len(src_paths) > 1:
+        src_display = f"{len(src_paths)} arquivos ({src_paths[0]} ...)"
+    else:
+        src_display = "Mapeamento interno IRIS"
+
+    description = f"""Vídeo capturado e masterizado em altíssima definição 4K UHD ({target_res}) a {target_fps} FPS.
+Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Integrated Recording and Ingestion System).
+
+⏱️ TEMPO, CAPTURA E VELOCIDADE:
+• Data e Hora de Captura: {dt_prefix}
+• Duração Original da Gravação: {format_duration_human(orig_dur)} ({orig_dur:.1f}s)
+• Trimming Aplicado: {trim_desc}
+• Duração do Vídeo Master: {format_duration_human(dur_sec)} ({dur_sec:.1f}s)
+• Multiplicador de Velocidade: {speed_desc}
+• Taxa de Quadros (FPS): {fps_desc}
+• Composição da Cena: {clip_desc}
+
+📷 EQUIPAMENTO E ARQUIVO ORIGINAL:
+• Câmera: {camera_name}
+• Resolução Nativa Original: {orig_w}x{orig_h} (Proporção 16:9)
+• Áudio: {audio_desc}
+
+🛠️ PROCESSAMENTO E ENGENHARIA DE VÍDEO (MASTERIZAÇÃO 4K):
+• Motor de Upscale: Interpolação Lanczos de Alta Precisão (3840x2160 UHD)
+• Realce de Textura: Unsharp Mask adaptativo para recuperação de micro-contraste
+• Mitigação de Banding: Filtro Deband 16-bit com micro-dither temporal (calibrado para mitigar color banding na compressão VP09/AV01 do YouTube)
+• Acelerador de Codificação: {encoder}
+• Tamanho do Vídeo Master: {size_desc}{render_line}
+
+📁 RASTREABILIDADE IRIS:
+• Projeto: {proj}
+• Arquivo Gerado: {video_path.name}
+• Origem: {src_display}
+• Pipeline: IRIS v2.0 - Video Mastering Stage
+
+#natureza #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
+""".replace("\r\n", "\n")
+
+    tags = [
+        "4K UHD", "Natureza", "Vídeo 4K", "60 FPS", "Lanczos",
+        camera_name, cam_make or "Câmera", "IRIS", "Nature"
+    ]
+
+    return {
+        "title": title,
+        "description": description[:5000],
+        "tags": [t for t in tags if t],
+        "category_id": yt_config.get("category_id", "22"),
+        "privacy_status": record.get("youtube_privacy") or yt_config.get("privacy_status", "unlisted")
+    }
+

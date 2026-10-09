@@ -21,6 +21,7 @@ from src.modules.youtube.uploader import (
     build_timelapse_youtube_metadata,
     add_video_to_playlist
 )
+from src.modules.youtube.describer import build_edited_video_youtube_metadata
 
 console = Console()
 
@@ -76,9 +77,10 @@ def wait_countdown(seconds: int, item_name: str) -> bool:
 
 class YouTubeUploadStage(PipelineStage):
     """
-    Etapa 6: Publicação oficial de vídeos gerados no canal do YouTube.
+    Etapa 7: Publicação oficial de vídeos gerados no canal do YouTube.
     Executa upload resumable em blocos com acompanhamento Rich em tempo real
-    e registra o link/ID no banco de dados do projeto e banco central.
+    para Timelapses e Vídeos Editados 4K nas suas respectivas playlists,
+    registrando o link/ID no banco de dados do projeto e banco central.
     """
 
     def run(self, project: Project, interactive: bool = True, **kwargs) -> bool:
@@ -87,29 +89,50 @@ class YouTubeUploadStage(PipelineStage):
             console.print("[dim]Módulo do YouTube desativado no config.yaml. Etapa ignorada.[/dim]")
             return True
 
-        # 1. Buscar vídeos prontos para upload neste projeto
-        pending_videos = project.get_timelapses(status="rendered")
+        # 1. Buscar vídeos prontos para upload neste projeto (Timelapses + Vídeos Editados)
+        pending_tl = project.get_timelapses(status="rendered")
+        pending_ve = project.get_edited_videos(status="rendered")
 
-        if not pending_videos:
-            uploaded = project.get_timelapses(status="uploaded")
-            if uploaded:
-                console.print(f"[green]Todos os vídeos do projeto '{project.name}' já foram publicados no YouTube ({len(uploaded)} vídeo(s)).[/green]")
-                force = kwargs.get("force_upload", False)
+        force = kwargs.get("force_upload", False)
+        if not (pending_tl or pending_ve):
+            uploaded_tl = project.get_timelapses(status="uploaded")
+            uploaded_ve = project.get_edited_videos(status="uploaded")
+            total_uploaded = len(uploaded_tl) + len(uploaded_ve)
+            if total_uploaded > 0:
+                console.print(f"[green]Todos os vídeos do projeto '{project.name}' já foram publicados no YouTube ({total_uploaded} vídeo(s): {len(uploaded_tl)} timelapses, {len(uploaded_ve)} vídeos editados).[/green]")
                 if not force and kwargs.get("interactive", False):
                     from rich.prompt import Confirm
                     force = Confirm.ask(
-                        f"[yellow]Deseja realizar novamente o upload desses {len(uploaded)} vídeo(s) para o YouTube?[/yellow]",
+                        f"[yellow]Deseja realizar novamente o upload desses {total_uploaded} vídeo(s) para o YouTube?[/yellow]",
                         default=False
                     )
                 if force:
-                    pending_videos = uploaded
+                    pending_tl = uploaded_tl
+                    pending_ve = uploaded_ve
                 else:
                     return True
             else:
                 console.print(f"[cyan]Nenhum vídeo pendente de upload no projeto '{project.name}'. Etapa concluída.[/cyan]")
                 return True
 
-        console.print(f"\n[bold cyan]=== Etapa 6: Publicação no YouTube ({len(pending_videos)} vídeo(s) pendente(s)) ===[/bold cyan]")
+        # Montar lista consolidada de jobs de upload
+        pending_jobs = []
+        for tl in pending_tl:
+            pending_jobs.append({
+                "type": "timelapse",
+                "record": tl,
+                "video_path": Path(tl["output_video_path"]),
+                "playlist": yt_config.get("playlist", "Timelapses")
+            })
+        for ve in pending_ve:
+            pending_jobs.append({
+                "type": "edited_video",
+                "record": ve,
+                "video_path": Path(ve["output_video_path"]),
+                "playlist": yt_config.get("video_playlist", "Natureza 4K UHD")
+            })
+
+        console.print(f"\n[bold cyan]=== Etapa 7: Publicação no YouTube ({len(pending_jobs)} vídeo(s) pendente(s): {len(pending_tl)} timelapses, {len(pending_ve)} vídeos editados) ===[/bold cyan]")
 
         # 2. Autenticação na API
         youtube = get_authenticated_service()
@@ -120,33 +143,49 @@ class YouTubeUploadStage(PipelineStage):
         success_count = 0
         error_count = 0
 
-        for idx, record in enumerate(pending_videos, 1):
-            video_path = Path(record["output_video_path"])
+        for idx, job in enumerate(pending_jobs, 1):
+            video_path = job["video_path"]
+            record = job["record"]
+            job_type = job["type"]
+            target_playlist = job["playlist"]
+
             if not video_path.exists():
                 console.print(f"[red]Arquivo de vídeo não encontrado no disco: {video_path}[/red]")
                 error_count += 1
                 continue
 
-            metadata = build_timelapse_youtube_metadata(video_path, record, yt_config, project=project)
+            if job_type == "timelapse":
+                metadata = build_timelapse_youtube_metadata(video_path, record, yt_config, project=project)
+                meta_data = record.get("metadata_json") or {}
+                cam_desc = meta_data.get("camera_model") or "Câmera"
+                photos_desc = f"{record.get('photo_count', 0):,} fotos"
+                dur_desc = f"{record.get('duration_seconds', 0.0):.1f}s"
+                real_sec = meta_data.get("real_duration_seconds", 0.0)
+                real_desc = f" | Tempo Real: {int(round(real_sec))}s" if real_sec > 0 else ""
+                tech_sheet = f"{cam_desc} | {photos_desc} | {dur_desc}{real_desc}"
+            else:
+                metadata = build_edited_video_youtube_metadata(video_path, record, yt_config, project=project)
+                meta_data = record.get("metadata_json") or {}
+                cam_desc = meta_data.get("camera_model") or "Câmera"
+                speed = record.get("speed_factor", 1.0)
+                fps_val = record.get("target_fps", 60)
+                res_val = record.get("target_resolution", "3840x2160")
+                dur_desc = f"{record.get('duration_seconds', 0.0):.1f}s"
+                tech_sheet = f"{cam_desc} | {res_val} 4K UHD @ {fps_val:.0f} FPS | Speed: {speed:.1f}x | Duração: {dur_desc}"
+
             file_size = video_path.stat().st_size
             file_mb = file_size / (1024**2)
-
-            meta_data = record.get("metadata_json") or {}
-            cam_desc = meta_data.get("camera_model") or "Câmera"
-            photos_desc = f"{record.get('photo_count', 0):,} fotos"
-            dur_desc = f"{record.get('duration_seconds', 0.0):.1f}s"
-            real_sec = meta_data.get("real_duration_seconds", 0.0)
-            real_desc = f" | Tempo Real: {int(round(real_sec))}s" if real_sec > 0 else ""
 
             # Exibir Card de Metadados
             card_info = (
                 f"[bold cyan]Arquivo:[/bold cyan]     {video_path.name} ({file_mb:.1f} MB)\n"
+                f"[bold cyan]Tipo:[/bold cyan]        {'Timelapse 4K UHD' if job_type == 'timelapse' else 'Vídeo Editado 4K UHD'}\n"
                 f"[bold cyan]Título:[/bold cyan]      {metadata['title']}\n"
-                f"[bold cyan]Ficha Técnica:[/bold cyan]{cam_desc} | {photos_desc} | {dur_desc}{real_desc}\n"
+                f"[bold cyan]Ficha Técnica:[/bold cyan]{tech_sheet}\n"
                 f"[bold cyan]Privacidade:[/bold cyan] {metadata['privacy_status'].upper()}\n"
-                f"[bold cyan]Playlist:[/bold cyan]    {yt_config.get('playlist', 'Timelapses')}"
+                f"[bold cyan]Playlist:[/bold cyan]    {target_playlist}"
             )
-            console.print(Panel(card_info, title=f"Upload [{idx}/{len(pending_videos)}]", border_style="red"))
+            console.print(Panel(card_info, title=f"Upload [{idx}/{len(pending_jobs)}]", border_style="red"))
 
             # Controle de countdown / confirmação
             if interactive:
@@ -156,6 +195,7 @@ class YouTubeUploadStage(PipelineStage):
                     continue
             else:
                 time.sleep(2.0)
+
 
             # Preparar upload resumable
             body = {
@@ -260,11 +300,13 @@ class YouTubeUploadStage(PipelineStage):
                 video_url = f"https://youtu.be/{video_id}"
 
                 # Adicionar à playlist configurada
-                playlist_target = yt_config.get("playlist", "Timelapses")
-                add_video_to_playlist(youtube, video_id, playlist_target, privacy=metadata["privacy_status"])
+                add_video_to_playlist(youtube, video_id, target_playlist, privacy=metadata["privacy_status"])
 
                 # Atualizar banco do projeto e banco central
-                project.update_timelapse_youtube(str(video_path.resolve()), video_id, video_url)
+                if job_type == "timelapse":
+                    project.update_timelapse_youtube(str(video_path.resolve()), video_id, video_url)
+                else:
+                    project.update_edited_video_youtube(str(video_path.resolve()), video_id, video_url)
 
                 # Notificações
                 topic = yt_config.get("ntfy_topic", "timelapse-studio-2026")
