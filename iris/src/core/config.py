@@ -149,7 +149,15 @@ class ConfigManager:
             },
             "modules": {
                 "dedup": {"enabled": True},
-                "timelapse": {"enabled": True},
+                "timelapse": {
+                    "enabled": True,
+                    "render_profile": "fast",
+                    "crop_mode": "bottom",
+                    "target_width": 3840,
+                    "target_height": 2160,
+                    "fps": 60,
+                    "crf": 15
+                },
                 "video_edit": {
                     "enabled": True,
                     "render_profile": "fast",

@@ -68,6 +68,9 @@ def show_config_menu():
         ve_profile = config.get("modules.video_edit.render_profile", "fast")
         prof_desc = "Fast (Intel QSV HW)" if ve_profile == "fast" else ("Balanced (Bicúbico/3x3)" if ve_profile == "balanced" else "Quality (Lanczos/16-bit)")
         table.add_row("29", "Perfil Renderização Vídeo", prof_desc)
+        tl_profile = config.get("modules.timelapse.render_profile", "fast")
+        tl_prof_desc = "Fast (Intel QSV HW / 1:1 Sensor)" if tl_profile == "fast" else ("Balanced (Bicúbico)" if tl_profile == "balanced" else "Quality (Lanczos/Deband)")
+        table.add_row("30", "Perfil Renderização Timelapse", tl_prof_desc)
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar")
@@ -299,6 +302,16 @@ def show_config_menu():
             new_val = Prompt.ask("Escolha o perfil (fast/balanced/quality)", default=str(curr)).lower().strip()
             if new_val in ["fast", "balanced", "quality"]:
                 config.set("modules.video_edit.render_profile", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida! Escolha 'fast', 'balanced' ou 'quality'.[/red]")
+            time.sleep(1)
+        elif choice == "30":
+            curr = config.get("modules.timelapse.render_profile", "fast")
+            console.print("Perfis disponíveis: [bold]fast[/bold] (Intel QSV HW / Corte 1:1 Sensor / Máxima velocidade), [bold]balanced[/bold] (Equilibrado / bicúbico), [bold]quality[/bold] (Máxima qualidade / Lanczos 4K + deband)")
+            new_val = Prompt.ask("Escolha o perfil para timelapse (fast/balanced/quality)", default=str(curr)).lower().strip()
+            if new_val in ["fast", "balanced", "quality"]:
+                config.set("modules.timelapse.render_profile", new_val)
                 console.print("[green]Salvo![/green]")
             else:
                 console.print("[red]Opção inválida! Escolha 'fast', 'balanced' ou 'quality'.[/red]")

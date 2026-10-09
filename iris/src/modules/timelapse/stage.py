@@ -126,11 +126,23 @@ class TimelapseStage(PipelineStage):
             orig_w = first_item.meta_width or 0
             orig_h = first_item.meta_height or 0
 
+            # Garantir dimensões reais da imagem para tomada de decisão precisa de corte 1:1
+            if (orig_w <= 0 or orig_h <= 0) and photo_paths:
+                try:
+                    from PIL import Image
+                    with Image.open(photo_paths[0]) as im:
+                        orig_w, orig_h = im.size
+                except Exception:
+                    pass
+
             fps = tl_config.get("fps", 60)
             fpi = max(1, tl_config.get("frames_per_image", 1))
             target_h = tl_config.get("target_height", 2160)
             target_w = tl_config.get("target_width", 3840)
             crop_mode = tl_config.get("crop_mode", "center")
+            render_profile = tl_config.get("render_profile", "fast").lower().strip()
+            if render_profile not in ("fast", "balanced", "quality"):
+                render_profile = "fast"
 
             video_name = generate_timelapse_video_name(
                 first_dt=first_dt,
@@ -155,7 +167,9 @@ class TimelapseStage(PipelineStage):
                 success_count += 1
                 continue
 
+            is_direct_desc = "Corte Direto 1:1 sem redimensionamento" if (orig_w >= target_w and orig_h >= target_h) else "Escala Proporcional"
             console.print(f"[cyan]Destino final 6_Produzidos: {output_video_path}[/cyan]")
+            console.print(f"[cyan]Configuração: Perfil [bold]{render_profile.upper()}[/bold] | Enquadramento: [bold]{crop_mode}[/bold] ({is_direct_desc})[/cyan]")
 
             # 3. Preparar sequência numerada via hardlinks
             prep_ok, temp_seq_dir, sorted_photos = prepare_numbered_sequence(
@@ -174,7 +188,9 @@ class TimelapseStage(PipelineStage):
                 sequence_dir=temp_seq_dir,
                 output_video_path=output_video_path,
                 photo_count=len(sorted_photos),
-                config=tl_config
+                config=tl_config,
+                orig_w=orig_w,
+                orig_h=orig_h
             )
 
             # Limpar sequência temporária
@@ -225,6 +241,8 @@ class TimelapseStage(PipelineStage):
                     "isos": isos,
                     "focals": focals,
                     "focal_equiv_summary": f"{focal_equivs[0]:.0f}mm" if focal_equivs else "",
+                    "render_profile": render_profile,
+                    "is_direct_crop": bool(render_stats.get("is_direct_crop", False)),
                     "deband_enabled": bool(render_stats.get("deband_enabled", False)),
                     "deband_grain": bool(render_stats.get("deband_grain", False)),
                     "render_stats": render_stats
@@ -240,7 +258,7 @@ class TimelapseStage(PipelineStage):
                     "frames_per_image": fpi,
                     "resolution": f"{target_w}x{target_h}",
                     "crop_mode": crop_mode,
-                    "encoder": encoder_used,
+                    "encoder": f"{encoder_used} [{render_profile.upper()}]",
                     "duration_seconds": dur_sec,
                     "speedup_factor": speedup,
                     "youtube_privacy": config.get("modules.youtube.privacy_status", "unlisted"),
@@ -252,10 +270,11 @@ class TimelapseStage(PipelineStage):
                 # Notificar
                 topic = tl_config.get("ntfy_topic", "timelapse-studio-2026")
                 enable_toast = tl_config.get("windows_toast", True)
+                crop_tag = "Corte 1:1" if render_stats.get("is_direct_crop") else "Escala"
                 notify_timelapse_render_done(
                     project_name=project.name,
                     video_name=output_video_path.name,
-                    details=f"Encoder: {encoder_used} | Duração: {dur_sec:.1f}s | Speedup: {speedup}x",
+                    details=f"Encoder: {encoder_used} [{render_profile.upper()} / {crop_tag}] | Duração: {dur_sec:.1f}s | Speedup: {speedup}x",
                     topic=topic,
                     enable_toast=enable_toast
                 )

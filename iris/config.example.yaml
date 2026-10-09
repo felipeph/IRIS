@@ -34,6 +34,7 @@ modules:
     max_workers: 4            # número de threads para movimentação paralela
   timelapse:
     enabled: true
+    render_profile: fast            # Perfis: 'fast' (Intel QSV HW / Corte 1:1 Sensor), 'balanced' (Bicúbico), 'quality' (Lanczos/Deband)
     fps: 60
     frames_per_image: 1
     target_width: 3840

@@ -367,6 +367,17 @@ def build_rich_youtube_description(record: Dict[str, Any], project_name: str = "
     else:
         deband_desc = "Desativado (Renderização Direta Lanczos)"
 
+    is_direct_crop = meta.get("is_direct_crop", False)
+    tl_render_profile = meta.get("render_profile")
+    if is_direct_crop:
+        framing_desc = f"Corte Direto 1:1 Nativo 4K do Sensor (Alinhamento: {crop_mode}) • Sem Redimensionamento"
+    elif tl_render_profile == "fast":
+        framing_desc = f"Intel QSV VPP Escala HQ em Hardware (Alinhamento: {crop_mode})"
+    elif tl_render_profile == "balanced":
+        framing_desc = f"Escalonamento Bicúbico 4K com corte inteligente (Alinhamento: {crop_mode})"
+    else:
+        framing_desc = f"Lanczos 3 com corte inteligente (Alinhamento: {crop_mode})"
+
     # 4. Rastreabilidade
     proj = project_name or record.get("project_name") or "IRIS Project"
     out_video_name = Path(record.get("output_video_path", "video.mp4")).name
@@ -414,7 +425,7 @@ Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IR
 🎞️ PROCESSAMENTO E ENGENHARIA DE VÍDEO (IRIS):
 • Resolução Final: 4K UHD ({res}) • Proporção 16:9
 • Taxa de Quadros: {fps:.1f} FPS
-• Enquadramento: Lanczos 3 com corte inteligente (Alinhamento: {crop_mode})
+• Enquadramento: {framing_desc}
 • Otimização para YouTube: {deband_desc}
 • Encoder: {encoder} (Aceleração por Hardware)
 • Perfil de Cor: BT.709 Standard Broadcast (HD/UHD){compression_line}{render_perf_desc}

@@ -6,7 +6,7 @@ import subprocess
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 
 from rich.console import Console
 from rich.live import Live
@@ -20,68 +20,77 @@ def build_video_filter_chain(
     crop_mode: str = "bottom",
     target_w: int = 3840,
     target_h: int = 2160,
-    deband_config: Optional[Dict[str, Any]] = None
+    deband_config: Optional[Dict[str, Any]] = None,
+    orig_w: int = 0,
+    orig_h: int = 0,
+    render_profile: str = "quality"
 ) -> str:
     """
     Constrói a cadeia de filtros de vídeo (-vf) para o FFmpeg.
-    Aplica crop proporcional para 16:9, scale Lanczos e filtros opcionais
-    de deband e micro-grão temporal para preservação de gradientes contra a compressão do YouTube.
+    Aplica corte proporcional ou direto 1:1, scale e filtros opcionais de deband/grain.
+    Mantido para retrocompatibilidade.
     """
-    res_scale = f"{target_w}:{target_h}"
-    if crop_mode == "center":
-        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='(ih-oh)/2',scale={res_scale}:flags=lanczos"
-    elif crop_mode == "top":
-        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='0',scale={res_scale}:flags=lanczos"
-    else:  # bottom
-        crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='(ih-oh)',scale={res_scale}:flags=lanczos"
+    is_direct = bool(orig_w >= target_w and orig_h >= target_h)
+    crop_m = crop_mode.lower().strip()
+    if crop_m not in ("top", "center", "bottom"):
+        crop_m = "bottom"
 
-    filters = [crop_filter]
+    filters = []
+    if is_direct:
+        if crop_m == "top":
+            cy_val = "0"
+        elif crop_m == "center":
+            cy_val = f"(ih-{target_h})/2"
+        else:
+            cy_val = f"ih-{target_h}"
+        filters.append(f"crop={target_w}:{target_h}:(iw-{target_w})/2:{cy_val}")
+    else:
+        res_scale = f"{target_w}:{target_h}"
+        scale_flag = "bicubic" if render_profile == "balanced" else "lanczos"
+        if crop_m == "center":
+            crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='(ih-oh)/2',scale={res_scale}:flags={scale_flag}"
+        elif crop_m == "top":
+            crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='0',scale={res_scale}:flags={scale_flag}"
+        else:  # bottom
+            crop_filter = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='(ih-oh)',scale={res_scale}:flags={scale_flag}"
+        filters.append(crop_filter)
 
-    if deband_config and deband_config.get("enabled", False):
+    if deband_config and deband_config.get("enabled", False) and render_profile == "quality":
         filters.append("deband=1thr=0.04:2thr=0.04:3thr=0.04:range=16:blur=true:coupling=true")
         if deband_config.get("add_grain", False):
             filters.append("noise=alls=1:allf=t")
 
     return ",".join(filters)
 
-def render_timelapse_video(
-    sequence_dir: Path,
+def build_timelapse_render_cmd(
+    input_pattern: str,
     output_video_path: Path,
-    photo_count: int,
-    config: Dict[str, Any]
-) -> Tuple[bool, str, str, Dict[str, Any]]:
+    fps: int,
+    frames_per_image: int,
+    orig_w: int = 0,
+    orig_h: int = 0,
+    target_w: int = 3840,
+    target_h: int = 2160,
+    crop_mode: str = "bottom",
+    render_profile: str = "fast",
+    encoder_name: str = "h264_qsv (Intel Quick Sync)",
+    encoder_args: Optional[List[str]] = None,
+    deband_cfg: Optional[Dict[str, Any]] = None,
+    force_software: bool = False
+) -> Tuple[List[str], bool, bool]:
     """
-    Renderiza vídeo timelapse 4K UHD via FFmpeg demuxer image2 com corte e escala Lanczos.
-    Exibe barra de progresso Rich e captura métricas de hardware em tempo real.
-    Retorna (sucesso, encoder_utilizado, mensagem_erro, render_stats).
+    Constrói a linha de comando do FFmpeg para renderização de timelapse de acordo com o perfil.
+    Aplica corte direto 1:1 sem redimensionamento quando orig_w >= target_w e orig_h >= target_h.
+    Retorna (cmd, is_direct_crop, deband_used).
     """
-    fps = config.get("fps", 60)
-    frames_per_image = max(1, config.get("frames_per_image", 1))
-    crf = config.get("crf", 15)
-    preset = config.get("preset", "ultrafast")
-    crop_mode = config.get("crop_mode", "bottom")
-    target_w = config.get("target_width", 3840)
-    target_h = config.get("target_height", 2160)
+    profile = render_profile.lower().strip()
+    if profile not in ("fast", "balanced", "quality"):
+        profile = "fast"
 
-    deband_cfg = config.get("deband")
-    if deband_cfg is None:
-        deband_cfg = {"enabled": True, "add_grain": True}
+    if encoder_args is None:
+        encoder_args = ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "15"]
 
-    # 1. Detecta acelerador
-    encoder_name, encoder_args = detect_ffmpeg_encoder(preset=preset, crf=crf)
-
-    # 2. Configura filtros de Crop, Lanczos Scale, Deband e Grain
-    video_filter = build_video_filter_chain(
-        crop_mode=crop_mode,
-        target_w=target_w,
-        target_h=target_h,
-        deband_config=deband_cfg
-    )
-
-    input_pattern = (sequence_dir / "%06d.jpg").as_posix()
     input_fps = f"{fps}/{frames_per_image}"
-    input_args = ["-f", "image2", "-framerate", str(input_fps), "-start_number", "1", "-i", input_pattern]
-
     youtube_flags = [
         "-colorspace", "bt709",
         "-color_trc", "bt709",
@@ -90,7 +99,95 @@ def render_timelapse_video(
         "-an"
     ]
 
-    output_video_path.parent.mkdir(parents=True, exist_ok=True)
+    is_direct_crop = bool(orig_w >= target_w and orig_h >= target_h)
+    crop_m = crop_mode.lower().strip()
+    if crop_m not in ("top", "center", "bottom"):
+        crop_m = "bottom"
+
+    use_qsv_hw = (profile == "fast" and not force_software and "qsv" in encoder_name.lower())
+
+    if use_qsv_hw:
+        # Pipeline 100% em hardware Intel QSV (mjpeg_qsv decode + vpp_qsv crop/scale + h264_qsv encode)
+        input_args = [
+            "-hwaccel", "qsv",
+            "-hwaccel_output_format", "qsv",
+            "-c:v", "mjpeg_qsv",
+            "-f", "image2",
+            "-framerate", str(input_fps),
+            "-start_number", "1",
+            "-i", input_pattern
+        ]
+
+        if is_direct_crop:
+            # Corte Direto 1:1 Sem Redimensionamento (Zero-Scaling no VPP da GPU)
+            if crop_m == "top":
+                cy_expr = "0"
+            elif crop_m == "center":
+                cy_expr = f"(ih-{target_h})/2"
+            else:  # bottom
+                cy_expr = f"ih-{target_h}"
+            vpp_filter = f"vpp_qsv=cw={target_w}:ch={target_h}:cx=(iw-{target_w})/2:cy={cy_expr}:w={target_w}:h={target_h}"
+        else:
+            # Imagem menor que 4K: Corte proporcional 16:9 + upscale HQ em hardware
+            if crop_m == "top":
+                vpp_cy = "0"
+            elif crop_m == "center":
+                vpp_cy = "(ih-ch)/2"
+            else:  # bottom
+                vpp_cy = "ih-ch"
+            vpp_filter = f"vpp_qsv=cw=trunc(min(iw\\,ih*(16/9))/2)*2:ch=trunc(min(ih\\,iw/(16/9))/2)*2:cx=(iw-cw)/2:cy={vpp_cy}:w={target_w}:h={target_h}:scale_mode=hq"
+
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner",
+            *input_args,
+            "-vf", vpp_filter,
+            "-r", str(fps),
+            "-progress", "pipe:1",
+            "-nostats",
+            *encoder_args,
+            *youtube_flags,
+            str(output_video_path.resolve())
+        ]
+        return cmd, is_direct_crop, False
+
+    # Pipeline Software / CPU (balanced ou quality)
+    input_args = [
+        "-f", "image2",
+        "-framerate", str(input_fps),
+        "-start_number", "1",
+        "-i", input_pattern
+    ]
+
+    filters = []
+    if is_direct_crop:
+        # Corte direto 1:1 sem redimensionamento
+        if crop_m == "top":
+            cy_val = "0"
+        elif crop_m == "center":
+            cy_val = f"(ih-{target_h})/2"
+        else:  # bottom
+            cy_val = f"ih-{target_h}"
+        filters.append(f"crop={target_w}:{target_h}:(iw-{target_w})/2:{cy_val}")
+    else:
+        # Corte proporcional 16:9 + scale
+        scale_flag = "bicubic" if profile == "balanced" else "lanczos"
+        if crop_m == "top":
+            sw_cy = "0"
+        elif crop_m == "center":
+            sw_cy = "(ih-oh)/2"
+        else:  # bottom
+            sw_cy = "ih-oh"
+        crop_scale = f"crop=w='trunc(min(iw\\,ih*(16/9))/2)*2':h='trunc(min(ih\\,iw/(16/9))/2)*2':x='(iw-ow)/2':y='{sw_cy}',scale={target_w}:{target_h}:flags={scale_flag}"
+        filters.append(crop_scale)
+
+    deband_used = False
+    if profile == "quality" and deband_cfg and deband_cfg.get("enabled", False):
+        filters.append("deband=1thr=0.04:2thr=0.04:3thr=0.04:range=16:blur=true:coupling=true")
+        deband_used = True
+        if deband_cfg.get("add_grain", False):
+            filters.append("noise=alls=1:allf=t")
+
+    video_filter = ",".join(filters)
 
     cmd = [
         "ffmpeg", "-y", "-hide_banner",
@@ -104,6 +201,63 @@ def render_timelapse_video(
         *youtube_flags,
         str(output_video_path.resolve())
     ]
+    return cmd, is_direct_crop, deband_used
+
+def render_timelapse_video(
+    sequence_dir: Path,
+    output_video_path: Path,
+    photo_count: int,
+    config: Dict[str, Any],
+    orig_w: int = 0,
+    orig_h: int = 0,
+    force_software: bool = False
+) -> Tuple[bool, str, str, Dict[str, Any]]:
+    """
+    Renderiza vídeo timelapse 4K UHD via FFmpeg demuxer image2 de acordo com o perfil configurado.
+    Suporta aceleração por hardware Intel QSV (perfil fast com corte direto 1:1 sem redimensionamento)
+    e modos balanced e quality com fallback automático transparente.
+    Exibe barra de progresso Rich e captura métricas de hardware em tempo real.
+    Retorna (sucesso, encoder_utilizado, mensagem_erro, render_stats).
+    """
+    fps = config.get("fps", 60)
+    frames_per_image = max(1, config.get("frames_per_image", 1))
+    crf = config.get("crf", 15)
+    preset = config.get("preset", "ultrafast")
+    crop_mode = config.get("crop_mode", "bottom")
+    target_w = config.get("target_width", 3840)
+    target_h = config.get("target_height", 2160)
+    render_profile = config.get("render_profile", "fast").lower().strip()
+    if render_profile not in ("fast", "balanced", "quality"):
+        render_profile = "fast"
+
+    deband_cfg = config.get("deband")
+    if deband_cfg is None:
+        deband_cfg = {"enabled": True, "add_grain": True}
+
+    # 1. Detecta acelerador
+    encoder_name, encoder_args = detect_ffmpeg_encoder(preset=preset, crf=crf, force_cpu=force_software)
+
+    input_pattern = (sequence_dir / "%06d.jpg").as_posix()
+
+    output_video_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 2. Constrói comando do FFmpeg via perfil
+    cmd, is_direct_crop, deband_used = build_timelapse_render_cmd(
+        input_pattern=input_pattern,
+        output_video_path=output_video_path,
+        fps=fps,
+        frames_per_image=frames_per_image,
+        orig_w=orig_w,
+        orig_h=orig_h,
+        target_w=target_w,
+        target_h=target_h,
+        crop_mode=crop_mode,
+        render_profile=render_profile,
+        encoder_name=encoder_name,
+        encoder_args=encoder_args,
+        deband_cfg=deband_cfg,
+        force_software=force_software
+    )
 
     total_frames = max(1, photo_count * frames_per_image)
     start_time = time.time()
@@ -242,19 +396,35 @@ def render_timelapse_video(
                     "total_frames": total_frames,
                     "avg_fps": round(total_frames / max(0.001, elapsed_sec), 1),
                     "encoder": encoder_name,
+                    "render_profile": render_profile,
+                    "is_direct_crop": is_direct_crop,
                     "target_width": target_w,
                     "target_height": target_h,
+                    "orig_width": orig_w,
+                    "orig_height": orig_h,
                     "fps": fps,
                     "frames_per_image": frames_per_image,
                     "crop_mode": crop_mode,
                     "crf": crf,
                     "preset": preset,
-                    "deband_enabled": bool(deband_cfg.get("enabled", False)),
-                    "deband_grain": bool(deband_cfg.get("add_grain", False)),
+                    "deband_enabled": deband_used,
+                    "deband_grain": bool(deband_cfg.get("add_grain", False) if deband_used else False),
                 }
                 return True, encoder_name, "", render_stats
             else:
                 err_detail = "".join(stderr_lines[-8:]) if stderr_lines else f"Código {process.returncode}"
+                # Fallback automático: se falhou no modo fast por hardware, tenta via software
+                if render_profile == "fast" and not force_software:
+                    console.print("\n[yellow]⚠ Falha no decodificador de hardware QSV (mjpeg_qsv). Acionando fallback automático para decodificação em software...[/yellow]")
+                    return render_timelapse_video(
+                        sequence_dir=sequence_dir,
+                        output_video_path=output_video_path,
+                        photo_count=photo_count,
+                        config=config,
+                        orig_w=orig_w,
+                        orig_h=orig_h,
+                        force_software=True
+                    )
                 return False, encoder_name, err_detail, {}
 
     except KeyboardInterrupt:

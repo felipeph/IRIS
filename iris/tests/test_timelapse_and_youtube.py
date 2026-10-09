@@ -5,7 +5,7 @@ from datetime import datetime
 from src.core.project import Project, ProjectItem, create_project
 from src.core.pipeline import PipelineRunner
 from src.modules.timelapse.encoder import detect_ffmpeg_encoder
-from src.modules.timelapse.renderer import build_video_filter_chain
+from src.modules.timelapse.renderer import build_video_filter_chain, build_timelapse_render_cmd
 from src.modules.timelapse.namer import generate_timelapse_video_name, resolve_produced_output_path
 from src.modules.timelapse.sequence import prepare_numbered_sequence, clean_sequence_dir
 from src.modules.timelapse.stage import get_stage as get_timelapse_stage
@@ -545,6 +545,202 @@ def test_youtube_stage_force_upload(tmp_path, monkeypatch):
     monkeypatch.setattr("src.modules.youtube.stage.get_authenticated_service", lambda: None)
     res_force = yt_stage.run(proj, interactive=False, force_upload=True)
     assert res_force is False
+
+
+def test_build_timelapse_render_cmd_fast_12mp_direct_crop(tmp_path):
+    out_path = tmp_path / "tl_4k.mp4"
+    pattern = "C:/seq/%06d.jpg"
+    
+    # 1. Modo top com 12MP (4000x3000) -> 4K (3840x2160)
+    cmd_top, direct_top, deband_top = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=4000,
+        orig_h=3000,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="top",
+        render_profile="fast",
+        encoder_name="h264_qsv (Intel Quick Sync)"
+    )
+    assert direct_top is True
+    assert deband_top is False
+    assert "-hwaccel" in cmd_top and "qsv" in cmd_top
+    assert "-c:v" in cmd_top and "mjpeg_qsv" in cmd_top
+    assert "-c:v" in cmd_top and "h264_qsv" in cmd_top
+    vf_idx = cmd_top.index("-vf")
+    vf_str = cmd_top[vf_idx + 1]
+    assert "vpp_qsv=cw=3840:ch=2160:cx=(iw-3840)/2:cy=0:w=3840:h=2160" in vf_str
+    assert "-pix_fmt" not in cmd_top
+
+    # 2. Modo center
+    cmd_center, direct_center, _ = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=4000,
+        orig_h=3000,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="center",
+        render_profile="fast",
+        encoder_name="h264_qsv (Intel Quick Sync)"
+    )
+    assert direct_center is True
+    vf_str_center = cmd_center[cmd_center.index("-vf") + 1]
+    assert "cy=(ih-2160)/2" in vf_str_center
+
+    # 3. Modo bottom
+    cmd_bottom, direct_bottom, _ = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=4000,
+        orig_h=3000,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="bottom",
+        render_profile="fast",
+        encoder_name="h264_qsv (Intel Quick Sync)"
+    )
+    assert direct_bottom is True
+    vf_str_bottom = cmd_bottom[cmd_bottom.index("-vf") + 1]
+    assert "cy=ih-2160" in vf_str_bottom
+
+
+def test_build_timelapse_render_cmd_balanced_and_quality_12mp(tmp_path):
+    out_path = tmp_path / "tl_4k.mp4"
+    pattern = "C:/seq/%06d.jpg"
+
+    # Balanced: corte direto 1:1 na CPU sem filtro scale
+    cmd_bal, direct_bal, deband_bal = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=4000,
+        orig_h=3000,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="bottom",
+        render_profile="balanced"
+    )
+    assert direct_bal is True
+    assert deband_bal is False
+    vf_bal = cmd_bal[cmd_bal.index("-vf") + 1]
+    assert vf_bal == "crop=3840:2160:(iw-3840)/2:ih-2160"
+    assert "scale=" not in vf_bal
+    assert "-pix_fmt" in cmd_bal and "yuv420p" in cmd_bal
+
+    # Quality: corte direto 1:1 na CPU + deband
+    cmd_qual, direct_qual, deband_qual = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=4000,
+        orig_h=3000,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="top",
+        render_profile="quality",
+        deband_cfg={"enabled": True, "add_grain": True}
+    )
+    assert direct_qual is True
+    assert deband_qual is True
+    vf_qual = cmd_qual[cmd_qual.index("-vf") + 1]
+    assert "crop=3840:2160:(iw-3840)/2:0" in vf_qual
+    assert "deband=" in vf_qual
+    assert "noise=" in vf_qual
+
+
+def test_build_timelapse_render_cmd_lower_resolution_upscale(tmp_path):
+    out_path = tmp_path / "tl_4k.mp4"
+    pattern = "C:/seq/%06d.jpg"
+
+    # 1080p original (1920x1080) precisa de upscale para 4K (3840x2160)
+    cmd_fast, direct_fast, _ = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=1920,
+        orig_h=1080,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="bottom",
+        render_profile="fast",
+        encoder_name="h264_qsv"
+    )
+    assert direct_fast is False
+    vf_fast = cmd_fast[cmd_fast.index("-vf") + 1]
+    assert "scale_mode=hq" in vf_fast
+    assert "w=3840:h=2160" in vf_fast
+
+    cmd_bal, direct_bal, _ = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=1920,
+        orig_h=1080,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="center",
+        render_profile="balanced"
+    )
+    assert direct_bal is False
+    vf_bal = cmd_bal[cmd_bal.index("-vf") + 1]
+    assert "flags=bicubic" in vf_bal
+
+
+def test_timelapse_describer_direct_crop_and_profiles():
+    # 1. Registro com corte direto 1:1
+    rec_direct = {
+        "project_name": "p_test",
+        "photo_count": 500,
+        "metadata_json": {
+            "crop_mode": "bottom",
+            "is_direct_crop": True,
+            "render_profile": "fast",
+            "render_stats": {"render_time_seconds": 15.0, "avg_fps": 33.3}
+        }
+    }
+    desc_direct = build_rich_youtube_description(rec_direct)
+    assert "Corte Direto 1:1 Nativo 4K do Sensor (Alinhamento: Bottom) • Sem Redimensionamento" in desc_direct
+
+    # 2. Registro com perfil fast e upscale
+    rec_fast_up = {
+        "project_name": "p_test",
+        "photo_count": 500,
+        "metadata_json": {
+            "crop_mode": "center",
+            "is_direct_crop": False,
+            "render_profile": "fast",
+            "render_stats": {}
+        }
+    }
+    desc_fast_up = build_rich_youtube_description(rec_fast_up)
+    assert "Intel QSV VPP Escala HQ em Hardware (Alinhamento: Center)" in desc_fast_up
+
+    # 3. Registro com perfil balanced e upscale
+    rec_bal_up = {
+        "project_name": "p_test",
+        "photo_count": 500,
+        "metadata_json": {
+            "crop_mode": "top",
+            "is_direct_crop": False,
+            "render_profile": "balanced",
+            "render_stats": {}
+        }
+    }
+    desc_bal_up = build_rich_youtube_description(rec_bal_up)
+    assert "Escalonamento Bicúbico 4K com corte inteligente (Alinhamento: Top)" in desc_bal_up
+
 
 
 
