@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.live import Live
 
 from src.core.ui import PipelineUI
+from src.core.logger import logger
 from src.modules.timelapse.encoder import detect_ffmpeg_encoder
 
 console = Console()
@@ -342,7 +343,8 @@ def build_render_cmd(
 def render_edited_video(
     clip_paths: List[Path],
     output_video_path: Path,
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    force_software: bool = False
 ) -> Tuple[bool, str, str, Dict[str, Any]]:
     """
     Renderiza vídeo 4K UHD com controle de velocidade, FPS, trimming e perfis de renderização.
@@ -369,7 +371,7 @@ def render_edited_video(
         render_profile = "fast"
 
     # Detecta encoder com aceleração por GPU ou CPU
-    encoder_name, encoder_args = detect_ffmpeg_encoder(preset=preset, crf=crf)
+    encoder_name, encoder_args = detect_ffmpeg_encoder(preset=preset, crf=crf, force_cpu=force_software)
 
     # Inspeciona clipes
     clip_infos = [get_video_stream_info(p) for p in clip_paths]
@@ -409,7 +411,7 @@ def render_edited_video(
         encoder_name=encoder_name,
         encoder_args=encoder_args,
         has_any_audio=has_any_audio,
-        force_software=False
+        force_software=force_software
     )
 
     # Execução e monitoramento com Rich UI
@@ -542,6 +544,23 @@ def render_edited_video(
             return True, encoder_name, "", stats
         else:
             err_msg = "".join(stderr_lines[-20:]) if stderr_lines else f"Código de saída {process.returncode}"
+            # Fallback automático: se falhou no modo fast por hardware, tenta via software (CPU)
+            is_hardware = (render_profile == "fast" and "qsv" in encoder_name.lower())
+            if is_hardware and not force_software:
+                logger.warning(
+                    f"[video_edit] Falha na renderização acelerada por hardware QSV ({err_msg}). "
+                    f"Acionando fallback automático para software (CPU)..."
+                )
+                console.print(
+                    f"\n[yellow]⚠ Falha na aceleração QSV de '{output_video_path.name}'. "
+                    f"Acionando fallback automático para CPU (software)...[/yellow]"
+                )
+                return render_edited_video(
+                    clip_paths=clip_paths,
+                    output_video_path=output_video_path,
+                    config=config,
+                    force_software=True
+                )
             return False, encoder_name, err_msg, {}
 
     except Exception as e:
@@ -550,4 +569,20 @@ def render_edited_video(
                 process.kill()
             except Exception:
                 pass
+        is_hardware = (render_profile == "fast" and "qsv" in encoder_name.lower())
+        if is_hardware and not force_software:
+            logger.warning(
+                f"[video_edit] Exceção na renderização QSV ({e}). "
+                f"Acionando fallback automático para software (CPU)..."
+            )
+            console.print(
+                f"\n[yellow]⚠ Exceção na aceleração QSV de '{output_video_path.name}'. "
+                f"Acionando fallback automático para CPU (software)...[/yellow]"
+            )
+            return render_edited_video(
+                clip_paths=clip_paths,
+                output_video_path=output_video_path,
+                config=config,
+                force_software=True
+            )
         return False, encoder_name, str(e), {}

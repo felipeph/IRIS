@@ -21,7 +21,7 @@ from src.modules.video_edit.session import (
     parse_item_datetime,
     parse_duration_seconds
 )
-from src.modules.video_edit.renderer import build_atempo_chain, build_render_cmd
+from src.modules.video_edit.renderer import build_atempo_chain, build_render_cmd, render_edited_video
 from src.modules.video_edit.stage import get_stage as get_video_edit_stage
 from src.modules.youtube.describer import (
     build_edited_video_youtube_metadata,
@@ -553,3 +553,90 @@ def test_build_edited_video_youtube_metadata_profiles(tmp_path):
     assert "Perfil Qualidade Máxima" in meta_qual["description"]
     assert "Lanczos" in meta_qual["description"]
     assert "Lanczos" in meta_qual["tags"]
+
+
+def test_build_render_cmd_force_software(tmp_path):
+    clip1 = tmp_path / "clip1.mp4"
+    clip1.write_bytes(b"dummy")
+    out_video = tmp_path / "out.mp4"
+
+    cmd_soft, unsharp, deband = build_render_cmd(
+        clip_paths=[clip1],
+        clip_infos=[{"duration": 10.0, "has_audio": True}],
+        output_video_path=out_video,
+        trim_starts=[0.0],
+        trimmed_durs=[10.0],
+        speed=1.0,
+        target_fps=60,
+        target_w=3840,
+        target_h=2160,
+        render_profile="fast",
+        encoder_name="h264_qsv (Intel Quick Sync)",
+        encoder_args=["-c:v", "h264_qsv"],
+        has_any_audio=True,
+        force_software=True
+    )
+    cmd_str = " ".join(cmd_soft)
+    assert "-hwaccel qsv" not in cmd_str
+    assert "vpp_qsv" not in cmd_str
+    assert "scale=3840:2160:flags=bicubic" in cmd_str
+
+
+def test_render_edited_video_software_fallback(tmp_path, monkeypatch):
+    import io
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"dummy")
+    out_video = tmp_path / "out.mp4"
+
+    monkeypatch.setattr(
+        "src.modules.video_edit.renderer.get_video_stream_info",
+        lambda p: {"duration": 5.0, "has_audio": False}
+    )
+
+    def mock_detect(preset="ultrafast", crf=15, force_cpu=False, force_recheck=False):
+        if force_cpu:
+            return "libx264 (CPU)", ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+        return "h264_qsv (Intel Quick Sync)", ["-c:v", "h264_qsv"]
+
+    monkeypatch.setattr("src.modules.video_edit.renderer.detect_ffmpeg_encoder", mock_detect)
+
+    calls = []
+
+    class MockPopen:
+        def __init__(self, cmd, *args, **kwargs):
+            self.cmd = cmd
+            self.stdout = []
+            calls.append(cmd)
+            if len(calls) == 1:
+                self.returncode = 1
+                self.stderr = io.StringIO("MFX_ERR_DEVICE_BUSY\n")
+            else:
+                self.returncode = 0
+                self.stderr = io.StringIO("")
+                out_video.write_bytes(b"0" * 2000)
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self):
+            pass
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "Popen", MockPopen)
+
+    cfg = {
+        "speed": 1.0,
+        "target_fps": 60,
+        "render_profile": "fast"
+    }
+
+    ok, enc_used, err, stats = render_edited_video(
+        clip_paths=[clip],
+        output_video_path=out_video,
+        config=cfg
+    )
+
+    assert ok is True
+    assert len(calls) == 2
+    assert "libx264" in enc_used
+

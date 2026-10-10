@@ -4,7 +4,7 @@ from datetime import datetime
 
 from src.core.project import Project, ProjectItem, create_project
 from src.core.pipeline import PipelineRunner
-from src.modules.timelapse.encoder import detect_ffmpeg_encoder
+from src.modules.timelapse.encoder import detect_ffmpeg_encoder, clear_encoder_cache
 from src.modules.timelapse.renderer import build_video_filter_chain, build_timelapse_render_cmd
 from src.modules.timelapse.namer import generate_timelapse_video_name, resolve_produced_output_path
 from src.modules.timelapse.sequence import prepare_numbered_sequence, clean_sequence_dir
@@ -14,9 +14,31 @@ from src.modules.youtube.uploader import build_timelapse_youtube_metadata
 from src.modules.youtube.describer import build_rich_youtube_description
 
 def test_detect_ffmpeg_encoder():
+    clear_encoder_cache()
     label, args = detect_ffmpeg_encoder()
     assert isinstance(label, str) and len(label) > 0
     assert "-c:v" in args
+
+def test_detect_ffmpeg_encoder_cache():
+    clear_encoder_cache()
+    # 1. Primeira detecção
+    label1, args1 = detect_ffmpeg_encoder(preset="fast", crf=18)
+    
+    # 2. Segunda chamada deve usar cache e adaptar parâmetros
+    label2, args2 = detect_ffmpeg_encoder(preset="slow", crf=22)
+    assert label1 == label2
+    
+    # 3. force_cpu deve ignorar o cache de hardware mas não sobrescrevê-lo
+    label_cpu, args_cpu = detect_ffmpeg_encoder(force_cpu=True)
+    assert label_cpu == "libx264 (CPU)"
+    assert "libx264" in args_cpu
+    
+    # 4. Próxima chamada sem force_cpu continua retornando o hardware original do cache
+    label3, args3 = detect_ffmpeg_encoder()
+    assert label3 == label1
+    
+    # 5. Limpeza do cache funciona
+    clear_encoder_cache()
 
 def test_generate_timelapse_video_name():
     d1 = datetime(2026, 8, 17, 16, 55, 0)

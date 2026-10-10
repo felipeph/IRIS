@@ -1,4 +1,5 @@
 import re
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -334,6 +335,10 @@ class VideoEditStage(PipelineStage):
             else:
                 console.print(f"[bold red]✖ Falha na renderização de '{out_path.name}': {err_msg}[/bold red]")
                 error_count += 1
+
+            # Pausa suave de resfriamento entre vídeos para permitir que a GPU libere recursos
+            if job_idx < total_active:
+                time.sleep(1.0)
 
         if error_count > 0:
             console.print(f"[yellow]Etapa 6 finalizada com {error_count} erro(s) e {success_count} sucesso(s).[/yellow]")
