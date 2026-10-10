@@ -23,7 +23,10 @@ from src.modules.video_edit.session import (
 )
 from src.modules.video_edit.renderer import build_atempo_chain, build_render_cmd
 from src.modules.video_edit.stage import get_stage as get_video_edit_stage
-from src.modules.youtube.describer import build_edited_video_youtube_metadata
+from src.modules.youtube.describer import (
+    build_edited_video_youtube_metadata,
+    build_edited_video_youtube_title
+)
 
 
 def test_format_number_no_dot():
@@ -343,8 +346,11 @@ def test_build_edited_video_youtube_metadata(tmp_path):
     assert "title" in meta
     assert "description" in meta
     assert "tags" in meta
+    assert "2026-08-17" in meta["title"]
+    assert "14:30" in meta["title"]
     assert "Vídeo 4K UHD" in meta["title"]
-    assert "Canon PowerShot SX60 HS" in meta["title"]
+    assert "Canon PowerShot SX60 HS" not in meta["title"]
+    assert "Canon PowerShot SX60 HS" in meta["description"]
     
     desc = meta["description"]
     assert "TEMPO, CAPTURA E VELOCIDADE" in desc
@@ -353,6 +359,54 @@ def test_build_edited_video_youtube_metadata(tmp_path):
     assert "RASTREABILIDADE IRIS" in desc
     assert "Lanczos" in desc
     assert "#4k" in desc
+
+
+def test_build_edited_video_youtube_title_joined():
+    vpath = Path("2026-10-09_16h22m-18h35m_Canon-SX60_3clipes_orig-1920x1080_to_4K-3840x2160_video_editado.mp4")
+    rec = {
+        "clip_count": 3,
+        "duration_seconds": 120.0,
+        "metadata_json": {}
+    }
+    title = build_edited_video_youtube_title(vpath, rec)
+    assert title == "2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD"
+
+
+def test_build_edited_video_youtube_title_single_clip_long():
+    # Clipe único com 180s (3 minutos) de duração -> calcula término
+    vpath = Path("2026-10-09_16h22m_Canon-SX60_1clipe_video_editado.mp4")
+    rec = {
+        "clip_count": 1,
+        "duration_seconds": 180.0,
+        "metadata_json": {}
+    }
+    title = build_edited_video_youtube_title(vpath, rec)
+    assert title == "2026-10-09 (16:22 - 16:25) - Vídeo 4K UHD"
+
+
+def test_build_edited_video_youtube_title_single_clip_short():
+    # Clipe único curto (25 segundos) -> mesmo minuto
+    vpath = Path("2026-10-09_16h22m_Canon-SX60_1clipe_video_editado.mp4")
+    rec = {
+        "clip_count": 1,
+        "duration_seconds": 25.0,
+        "metadata_json": {}
+    }
+    title = build_edited_video_youtube_title(vpath, rec)
+    assert title == "2026-10-09 (16:22) - Vídeo 4K UHD"
+
+
+def test_build_edited_video_youtube_title_fallback_meta():
+    # Arquivo com nome arbitrário -> usa metadata_json
+    vpath = Path("meu_video_customizado.mp4")
+    rec = {
+        "metadata_json": {
+            "first_dt_iso": "2026-10-09T16:22:00",
+            "last_dt_iso": "2026-10-09T18:35:00"
+        }
+    }
+    title = build_edited_video_youtube_title(vpath, rec)
+    assert title == "2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD"
 
 
 def test_build_render_cmd_profiles(tmp_path):

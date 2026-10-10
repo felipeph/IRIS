@@ -269,9 +269,12 @@ CREATE TABLE IF NOT EXISTS edited_videos (
 
 ### 6.2 Template do Título Oficial
 ```text
-{DD/MM/AAAA HH:MM} - Vídeo 4K UHD - {CAMERA}
+{AAAA-MM-DD} ({HH:MM - HH:MM}) - Vídeo 4K UHD
 ```
-*Exemplo:* `17/08/2026 14:30 - Vídeo 4K UHD - Canon PowerShot SX60 HS`
+*Exemplos:*
+- **Sessão / Múltiplos clipes:** `2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD`
+- **Clipe único longo (>1 min):** `2026-10-09 (16:22 - 16:25) - Vídeo 4K UHD`
+- **Clipe único curto (mesmo minuto):** `2026-10-09 (16:22) - Vídeo 4K UHD`
 
 ### 6.3 Estrutura da Ficha Técnica na Descrição
 

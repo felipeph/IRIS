@@ -442,6 +442,116 @@ Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IR
     return description[:5000]
 
 
+from datetime import datetime, timedelta
+
+
+def build_edited_video_youtube_title(video_path: Path, record: Dict[str, Any]) -> str:
+    """
+    Gera título padronizado para o YouTube no formato oficial igual ao dos timelapses:
+    Exemplos:
+      - Com intervalo de horas: '2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD'
+      - Clipe único com duração > 1 min: '2026-10-09 (16:22 - 16:25) - Vídeo 4K UHD'
+      - Clipe único curto (mesmo minuto): '2026-10-09 (16:22) - Vídeo 4K UHD'
+    """
+    meta = record.get("metadata_json") or {}
+    name = video_path.name
+    parts = name.split('_')
+
+    date_part = ""
+    time_str = ""
+
+    # 1. Tentar extrair do nome do arquivo (ex: 2026-10-09_16h22m-18h35m_... ou 2026-10-09_16h22m_...)
+    if len(parts) > 0 and re.match(r'^\d{4}-\d{2}-\d{2}$', parts[0]):
+        date_part = parts[0]
+    
+    time_part = parts[1] if len(parts) > 1 else ""
+
+    # Duração total para cálculo de término se necessário
+    dur_sec = float(record.get("duration_seconds") or meta.get("final_duration_seconds") or meta.get("total_orig_duration_seconds") or 0.0)
+
+    if "-" in time_part and not time_part.startswith("to-"):
+        # Intervalo gravado no nome (ex: 16h22m-18h35m)
+        t1, t2 = time_part.split("-", 1)
+        t1_clean = t1.replace('h', ':').replace('m', '')
+        t2_clean = t2.replace('h', ':').replace('m', '')
+        if t1_clean and t2_clean and t1_clean != t2_clean:
+            time_str = f"({t1_clean} - {t2_clean})"
+        elif t1_clean:
+            time_str = f"({t1_clean})"
+    elif time_part and ("h" in time_part or "m" in time_part):
+        # Tempo único no nome (ex: 14h30m)
+        t_clean = time_part.replace('h', ':').replace('m', '')
+        # Se dur_sec >= 60 e temos date_part, calcular horário de término
+        if dur_sec >= 60.0 and date_part and re.match(r'^\d{1,2}:\d{2}$', t_clean):
+            try:
+                dt_start = datetime.strptime(f"{date_part} {t_clean}", "%Y-%m-%d %H:%M")
+                dt_end = dt_start + timedelta(seconds=dur_sec)
+                t_end = dt_end.strftime("%H:%M")
+                if t_end != t_clean:
+                    time_str = f"({t_clean} - {t_end})"
+                else:
+                    time_str = f"({t_clean})"
+            except Exception:
+                time_str = f"({t_clean})"
+        elif t_clean:
+            time_str = f"({t_clean})"
+
+    # 2. Fallback caso date_part ou time_str não tenham sido resolvidos pelo nome
+    if not date_part or not time_str:
+        first_dt = None
+        last_dt = None
+        if meta.get("first_dt_iso"):
+            try:
+                first_dt = datetime.fromisoformat(meta["first_dt_iso"])
+            except Exception:
+                pass
+        if meta.get("last_dt_iso"):
+            try:
+                last_dt = datetime.fromisoformat(meta["last_dt_iso"])
+            except Exception:
+                pass
+
+        if not first_dt and meta.get("first_dt_formatted"):
+            # Ex: "17/08/2026 às 14:30:22"
+            try:
+                f_parts = meta["first_dt_formatted"].split(" às ")
+                dt_str = f"{f_parts[0]} {f_parts[1]}"
+                first_dt = datetime.strptime(dt_str, "%d/%m/%Y %H:%M:%S")
+            except Exception:
+                pass
+
+        if first_dt:
+            if not date_part:
+                date_part = first_dt.strftime("%Y-%m-%d")
+            if not time_str:
+                start_hm = first_dt.strftime("%H:%M")
+                if last_dt and last_dt.strftime("%H:%M") != start_hm:
+                    end_hm = last_dt.strftime("%H:%M")
+                    time_str = f"({start_hm} - {end_hm})"
+                elif dur_sec >= 60.0:
+                    dt_end = first_dt + timedelta(seconds=dur_sec)
+                    end_hm = dt_end.strftime("%H:%M")
+                    if end_hm != start_hm:
+                        time_str = f"({start_hm} - {end_hm})"
+                    else:
+                        time_str = f"({start_hm})"
+                else:
+                    time_str = f"({start_hm})"
+
+    if not date_part:
+        date_part = datetime.now().strftime("%Y-%m-%d")
+
+    title_elements = [date_part]
+    if time_str:
+        title_elements.append(time_str)
+    title_elements.append("- Vídeo 4K UHD")
+
+    title = " ".join(title_elements)
+    if len(title) > 100:
+        title = title[:97] + "..."
+    return title
+
+
 def build_edited_video_youtube_metadata(
     video_path: Path,
     record: Dict[str, Any],
@@ -453,8 +563,10 @@ def build_edited_video_youtube_metadata(
     """
     meta = record.get("metadata_json") or {}
     
-    # 1. Título
-    # Inicia com data e hora da captura e depois "Vídeo 4K UHD - {camera}"
+    # 1. Título padronizado igual ao dos timelapses (YYYY-MM-DD (HH:MM - HH:MM) - Vídeo 4K UHD)
+    title = build_edited_video_youtube_title(video_path, record)
+
+    # Data de captura para a descrição técnica
     first_dt_str = meta.get("first_dt_formatted")
     dt_prefix = ""
     if first_dt_str:
@@ -476,9 +588,6 @@ def build_edited_video_youtube_metadata(
         camera_name = f"{cam_make} {cam_model}".strip()
     else:
         camera_name = cam_model or cam_make or "Câmera"
-
-    title = f"{dt_prefix} - Vídeo 4K UHD - {camera_name}"
-    title = title[:100]
 
     # 2. Informações Técnicas
     orig_w = meta.get("orig_width") or record.get("orig_resolution", "1920x1080").split("x")[0]
