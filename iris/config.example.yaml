@@ -75,6 +75,9 @@ modules:
     stage_interval_seconds: 180
     ntfy_topic: "timelapse-studio-2026"
     windows_toast: true
+    cleanup_local_videos: true
+    cleanup_to_trash: true
+    auto_cleanup_videos: false
 pipeline:
   stages:
   - enabled: true

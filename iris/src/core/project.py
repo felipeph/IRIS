@@ -58,12 +58,17 @@ def init_central_db():
                 youtube_privacy TEXT,
                 status TEXT,
                 metadata_json TEXT DEFAULT '{}',
+                local_file_deleted INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         try:
             cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE timelapses ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
         cursor.execute("""
@@ -89,10 +94,15 @@ def init_central_db():
                 youtube_privacy TEXT,
                 status TEXT DEFAULT 'rendered',
                 metadata_json TEXT DEFAULT '{}',
+                local_file_deleted INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        try:
+            cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
 init_central_db()
@@ -219,12 +229,17 @@ class Project:
                     youtube_privacy TEXT,
                     status TEXT,
                     metadata_json TEXT DEFAULT '{}',
+                    local_file_deleted INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             try:
                 cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE timelapses ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
             cursor.execute("""
@@ -250,10 +265,15 @@ class Project:
                     youtube_privacy TEXT,
                     status TEXT DEFAULT 'rendered',
                     metadata_json TEXT DEFAULT '{}',
+                    local_file_deleted INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            try:
+                cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     def save_metadata(self):
@@ -448,6 +468,7 @@ class Project:
                         d["metadata_json"] = {}
                 elif not isinstance(raw_meta, dict):
                     d["metadata_json"] = {}
+                d["local_file_deleted"] = bool(d.get("local_file_deleted", 0))
                 results.append(d)
         return results
 
@@ -464,6 +485,20 @@ class Project:
             """, (video_id, url, video_path))
             conn.commit()
         update_central_timelapse_youtube(video_path, video_id, url)
+
+    def mark_timelapse_local_deleted(self, video_path: str):
+        """Marca no banco do projeto e banco central que o arquivo local do timelapse foi excluído."""
+        if not self._project_db_file.exists():
+            return
+        with get_db_connection(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE timelapses
+                SET local_file_deleted=1, updated_at=CURRENT_TIMESTAMP
+                WHERE output_video_path=?
+            """, (video_path,))
+            conn.commit()
+        update_central_timelapse_local_deleted(video_path)
 
     def save_edited_video(self, record: Dict[str, Any]):
         """Salva ou atualiza um vídeo editado no banco do projeto e no banco central."""
@@ -570,6 +605,7 @@ class Project:
                         d["source_video_paths"] = json.loads(raw_src)
                     except Exception:
                         d["source_video_paths"] = [raw_src]
+                d["local_file_deleted"] = bool(d.get("local_file_deleted", 0))
                 results.append(d)
         return results
 
@@ -586,6 +622,20 @@ class Project:
             """, (video_id, url, video_path))
             conn.commit()
         update_central_edited_video_youtube(video_path, video_id, url)
+
+    def mark_edited_video_local_deleted(self, video_path: str):
+        """Marca no banco do projeto e banco central que o arquivo local do vídeo editado foi excluído."""
+        if not self._project_db_file.exists():
+            return
+        with get_db_connection(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE edited_videos
+                SET local_file_deleted=1, updated_at=CURRENT_TIMESTAMP
+                WHERE output_video_path=?
+            """, (video_path,))
+            conn.commit()
+        update_central_edited_video_local_deleted(video_path)
 
 
 def get_project(name: str) -> Optional[Project]:
@@ -691,6 +741,19 @@ def update_central_timelapse_youtube(video_path: str, video_id: str, url: str):
         """, (video_id, url, video_path))
         conn.commit()
 
+def update_central_timelapse_local_deleted(video_path: str):
+    """Marca no banco central que o arquivo local do timelapse foi excluído."""
+    if not CENTRAL_DB_PATH.exists():
+        return
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE timelapses
+            SET local_file_deleted=1, updated_at=CURRENT_TIMESTAMP
+            WHERE output_video_path=?
+        """, (video_path,))
+        conn.commit()
+
 def list_central_timelapses(project_name: Optional[str] = None) -> List[Dict[str, Any]]:
     """Lista timelapses cadastrados no banco central."""
     if not CENTRAL_DB_PATH.exists():
@@ -713,6 +776,7 @@ def list_central_timelapses(project_name: Optional[str] = None) -> List[Dict[str
                     d["metadata_json"] = {}
             elif not isinstance(raw_meta, dict):
                 d["metadata_json"] = {}
+            d["local_file_deleted"] = bool(d.get("local_file_deleted", 0))
             results.append(d)
     return results
 
@@ -798,6 +862,19 @@ def update_central_edited_video_youtube(video_path: str, video_id: str, url: str
         """, (video_id, url, video_path))
         conn.commit()
 
+def update_central_edited_video_local_deleted(video_path: str):
+    """Marca no banco central que o arquivo local do vídeo editado foi excluído."""
+    if not CENTRAL_DB_PATH.exists():
+        return
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE edited_videos
+            SET local_file_deleted=1, updated_at=CURRENT_TIMESTAMP
+            WHERE output_video_path=?
+        """, (video_path,))
+        conn.commit()
+
 def list_central_edited_videos(project_name: Optional[str] = None) -> List[Dict[str, Any]]:
     """Lista vídeos editados cadastrados no banco central."""
     if not CENTRAL_DB_PATH.exists():
@@ -831,6 +908,7 @@ def list_central_edited_videos(project_name: Optional[str] = None) -> List[Dict[
                     d["source_video_paths"] = json.loads(raw_src)
                 except Exception:
                     d["source_video_paths"] = [raw_src]
+            d["local_file_deleted"] = bool(d.get("local_file_deleted", 0))
             results.append(d)
     return results
 

@@ -1,5 +1,6 @@
 import os
 import sys
+import gc
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -22,6 +23,7 @@ from src.modules.youtube.uploader import (
     add_video_to_playlist
 )
 from src.modules.youtube.describer import build_edited_video_youtube_metadata
+from src.modules.youtube.cleaner import execute_post_upload_cleanup
 
 console = Console()
 
@@ -110,6 +112,47 @@ class YouTubeUploadStage(PipelineStage):
                     pending_tl = uploaded_tl
                     pending_ve = uploaded_ve
                 else:
+                    # Verificar se há vídeos já postados cujos arquivos locais ainda ocupam espaço
+                    if yt_config.get("cleanup_local_videos", True):
+                        cleanup_candidates = []
+                        for tl in uploaded_tl:
+                            p = Path(tl.get("output_video_path", ""))
+                            if p.exists() and not tl.get("local_file_deleted", False):
+                                cleanup_candidates.append(("timelapse", p, tl.get("youtube_video_id", "")))
+                        for ve in uploaded_ve:
+                            p = Path(ve.get("output_video_path", ""))
+                            if p.exists() and not ve.get("local_file_deleted", False):
+                                cleanup_candidates.append(("edited_video", p, ve.get("youtube_video_id", "")))
+
+                        if cleanup_candidates:
+                            total_gb = sum(p.stat().st_size for _, p, _ in cleanup_candidates) / (1024**3)
+                            console.print(f"\n[cyan]ℹ Encontrados {len(cleanup_candidates)} vídeo(s) já publicados no YouTube ainda presentes no SSD ({total_gb:.2f} GB).[/cyan]")
+                            should_run_clean = False
+                            is_auto = yt_config.get("auto_cleanup_videos", False) or getattr(project, "auto_cleanup", False)
+                            if kwargs.get("interactive", False) and not is_auto:
+                                from rich.prompt import Confirm
+                                should_run_clean = Confirm.ask(
+                                    f"[yellow]Deseja verificar e liberar o espaço desses arquivos locais agora?[/yellow]",
+                                    default=True
+                                )
+                            elif kwargs.get("clean_already_uploaded", False):
+                                should_run_clean = True
+                            else:
+                                should_run_clean = False
+
+                            if should_run_clean:
+                                youtube = get_authenticated_service()
+                                if youtube:
+                                    for c_type, c_path, c_id in cleanup_candidates:
+                                        execute_post_upload_cleanup(
+                                            project=project,
+                                            video_path=c_path,
+                                            video_id=c_id,
+                                            job_type=c_type,
+                                            youtube=youtube,
+                                            interactive=kwargs.get("interactive", False),
+                                            ui_console=console
+                                        )
                     return True
             else:
                 console.print(f"[cyan]Nenhum vídeo pendente de upload no projeto '{project.name}'. Etapa concluída.[/cyan]")
@@ -212,88 +255,101 @@ class YouTubeUploadStage(PipelineStage):
             }
 
             chunk_size = 8 * 1024 * 1024  # 8MB
-            try:
-                media = MediaFileUpload(str(video_path), chunksize=chunk_size, resumable=True)
-                request = youtube.videos().insert(
-                    part=",".join(body.keys()),
-                    body=body,
-                    media_body=media
-                )
-            except Exception as e:
-                console.print(f"[red]Erro ao preparar upload: {e}[/red]")
-                error_count += 1
-                continue
-
-            # Upload com barra de progresso Rich
-            start_time = time.time()
-            start_str = datetime.now().strftime("%H:%M:%S")
+            media = None
+            request = None
             response = None
-            retry_count = 0
-            uploaded_bytes = 0
 
-            with Live(PipelineUI.generate_upload_renderable(
-                stage_title="ETAPA 6: PUBLICAÇÃO NO YOUTUBE (OAUTH 2.0)",
-                start_str=start_str,
-                video_title=metadata["title"],
-                video_filename=video_path.name,
-                total_bytes=file_size,
-                uploaded_bytes=0,
-                speed_str="0.0 MB/s",
-                elapsed_str="0:00:00",
-                eta_str="--:--:--",
-                previsao_fim_str="--:--:--",
-                status_msg="Conectando aos servidores do Google..."
-            ), console=console, refresh_per_second=4) as live:
+            try:
+                try:
+                    media = MediaFileUpload(str(video_path), chunksize=chunk_size, resumable=True)
+                    request = youtube.videos().insert(
+                        part=",".join(body.keys()),
+                        body=body,
+                        media_body=media
+                    )
+                except Exception as e:
+                    console.print(f"[red]Erro ao preparar upload: {e}[/red]")
+                    error_count += 1
+                    continue
 
-                while response is None:
-                    try:
-                        status, response = request.next_chunk()
-                        if status:
-                            uploaded_bytes = int(status.total_size * status.progress()) if status.total_size else uploaded_bytes
-                            elapsed_sec = max(0.1, time.time() - start_time)
-                            speed_mb = (uploaded_bytes / (1024**2)) / elapsed_sec
-                            speed_str = f"{speed_mb:.2f} MB/s"
-                            elapsed_str = str(timedelta(seconds=int(elapsed_sec)))
+                # Upload com barra de progresso Rich
+                start_time = time.time()
+                start_str = datetime.now().strftime("%H:%M:%S")
+                retry_count = 0
+                uploaded_bytes = 0
 
-                            rem_bytes = max(0, file_size - uploaded_bytes)
-                            if speed_mb > 0 and rem_bytes > 0:
-                                eta_sec = (rem_bytes / (1024**2)) / speed_mb
-                                eta_str = str(timedelta(seconds=int(eta_sec)))
-                                end_dt = datetime.now() + timedelta(seconds=int(eta_sec))
-                                previsao_str = end_dt.strftime("%H:%M:%S")
+                with Live(PipelineUI.generate_upload_renderable(
+                    stage_title="ETAPA 6: PUBLICAÇÃO NO YOUTUBE (OAUTH 2.0)",
+                    start_str=start_str,
+                    video_title=metadata["title"],
+                    video_filename=video_path.name,
+                    total_bytes=file_size,
+                    uploaded_bytes=0,
+                    speed_str="0.0 MB/s",
+                    elapsed_str="0:00:00",
+                    eta_str="--:--:--",
+                    previsao_fim_str="--:--:--",
+                    status_msg="Conectando aos servidores do Google..."
+                ), console=console, refresh_per_second=4) as live:
+
+                    while response is None:
+                        try:
+                            status, response = request.next_chunk()
+                            if status:
+                                uploaded_bytes = int(status.total_size * status.progress()) if status.total_size else uploaded_bytes
+                                elapsed_sec = max(0.1, time.time() - start_time)
+                                speed_mb = (uploaded_bytes / (1024**2)) / elapsed_sec
+                                speed_str = f"{speed_mb:.2f} MB/s"
+                                elapsed_str = str(timedelta(seconds=int(elapsed_sec)))
+
+                                rem_bytes = max(0, file_size - uploaded_bytes)
+                                if speed_mb > 0 and rem_bytes > 0:
+                                    eta_sec = (rem_bytes / (1024**2)) / speed_mb
+                                    eta_str = str(timedelta(seconds=int(eta_sec)))
+                                    end_dt = datetime.now() + timedelta(seconds=int(eta_sec))
+                                    previsao_str = end_dt.strftime("%H:%M:%S")
+                                else:
+                                    eta_str = "0:00:00" if rem_bytes == 0 else "--:--:--"
+                                    previsao_str = datetime.now().strftime("%H:%M:%S")
+
+                                live.update(PipelineUI.generate_upload_renderable(
+                                    stage_title="ETAPA 6: PUBLICAÇÃO NO YOUTUBE (OAUTH 2.0)",
+                                    start_str=start_str,
+                                    video_title=metadata["title"],
+                                    video_filename=video_path.name,
+                                    total_bytes=file_size,
+                                    uploaded_bytes=uploaded_bytes,
+                                    speed_str=speed_str,
+                                    elapsed_str=elapsed_str,
+                                    eta_str=eta_str,
+                                    previsao_fim_str=previsao_str,
+                                    status_msg="Transmitindo dados (Resumable Upload)..."
+                                ))
+                                retry_count = 0
+
+                        except HttpError as e:
+                            if e.resp.status in [500, 502, 503, 504] and retry_count < 5:
+                                retry_count += 1
+                                time.sleep(min(2 ** retry_count, 30))
                             else:
-                                eta_str = "0:00:00" if rem_bytes == 0 else "--:--:--"
-                                previsao_str = datetime.now().strftime("%H:%M:%S")
-
-                            live.update(PipelineUI.generate_upload_renderable(
-                                stage_title="ETAPA 6: PUBLICAÇÃO NO YOUTUBE (OAUTH 2.0)",
-                                start_str=start_str,
-                                video_title=metadata["title"],
-                                video_filename=video_path.name,
-                                total_bytes=file_size,
-                                uploaded_bytes=uploaded_bytes,
-                                speed_str=speed_str,
-                                elapsed_str=elapsed_str,
-                                eta_str=eta_str,
-                                previsao_fim_str=previsao_str,
-                                status_msg="Transmitindo dados (Resumable Upload)..."
-                            ))
-                            retry_count = 0
-
-                    except HttpError as e:
-                        if e.resp.status in [500, 502, 503, 504] and retry_count < 5:
-                            retry_count += 1
-                            time.sleep(min(2 ** retry_count, 30))
-                        else:
-                            console.print(f"\n[red]Erro HTTP da YouTube API ({e.resp.status}): {e}[/red]")
-                            break
-                    except Exception as e:
-                        if retry_count < 5:
-                            retry_count += 1
-                            time.sleep(min(2 ** retry_count, 30))
-                        else:
-                            console.print(f"\n[red]Erro na transmissão de vídeo: {e}[/red]")
-                            break
+                                console.print(f"\n[red]Erro HTTP da YouTube API ({e.resp.status}): {e}[/red]")
+                                break
+                        except Exception as e:
+                            if retry_count < 5:
+                                retry_count += 1
+                                time.sleep(min(2 ** retry_count, 30))
+                            else:
+                                console.print(f"\n[red]Erro na transmissão de vídeo: {e}[/red]")
+                                break
+            finally:
+                if media and hasattr(media, "_fd") and media._fd:
+                    try:
+                        media._fd.close()
+                    except Exception:
+                        pass
+                media = None
+                request = None
+                gc.collect()
 
             if response and "id" in response:
                 video_id = response["id"]
@@ -331,6 +387,17 @@ class YouTubeUploadStage(PipelineStage):
                 console.print(f"\n[bold green]✔ Vídeo publicado com sucesso![/bold green]")
                 console.print(f"🔗 [bold cyan]Link Oficial: {video_url}[/bold cyan]")
                 success_count += 1
+
+                # 5. Limpeza de disco pós-upload (se ativada e verificada)
+                execute_post_upload_cleanup(
+                    project=project,
+                    video_path=video_path,
+                    video_id=video_id,
+                    job_type=job_type,
+                    youtube=youtube,
+                    interactive=interactive,
+                    ui_console=console
+                )
             else:
                 console.print(f"[bold red]✖ Falha no envio do vídeo '{video_path.name}'.[/bold red]")
                 error_count += 1

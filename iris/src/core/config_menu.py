@@ -384,6 +384,16 @@ def _menu_youtube_notifications(console: Console):
         table.add_row("3", "Playlist Vídeos YouTube", "modules.youtube.video_playlist", str(ve_pl))
         table.add_row("4", "Tópico NTFY Notificações", "modules.timelapse.ntfy_topic", str(config.get("modules.timelapse.ntfy_topic", "timelapse-studio-2026")))
         
+        clean_enabled = config.get("modules.youtube.cleanup_local_videos", True)
+        table.add_row("5", "Limpeza Local Pós-Upload", "modules.youtube.cleanup_local_videos", "[green]Ativada[/green]" if clean_enabled else "[red]Desativada[/red]")
+        
+        to_trash_val = config.get("modules.youtube.cleanup_to_trash", True)
+        trash_display = "[green]Lixeira (send2trash)[/green]" if to_trash_val else "[red]Permanente (unlink)[/red]"
+        table.add_row("6", "Destino da Exclusão", "modules.youtube.cleanup_to_trash", trash_display)
+        
+        auto_clean_yt = config.get("modules.youtube.auto_cleanup_videos", False)
+        table.add_row("7", "Limpeza s/ Confirmação", "modules.youtube.auto_cleanup_videos", "[green]Sim (Auto)[/green]" if auto_clean_yt else "[yellow]Não (Confirmar)[/yellow]")
+        
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
         
@@ -413,6 +423,24 @@ def _menu_youtube_notifications(console: Console):
             new_val = Prompt.ask("Canal do NTFY", default=str(config.get("modules.timelapse.ntfy_topic", "timelapse-studio-2026")))
             config.set("modules.timelapse.ntfy_topic", new_val)
             config.set("modules.youtube.ntfy_topic", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "5":
+            curr = config.get("modules.youtube.cleanup_local_videos", True)
+            new_val = Confirm.ask("Ativar limpeza dos vídeos 4K locais após upload verificado no YouTube?", default=curr)
+            config.set("modules.youtube.cleanup_local_videos", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "6":
+            curr = config.get("modules.youtube.cleanup_to_trash", True)
+            new_val = Confirm.ask("Enviar vídeos para a Lixeira do Windows (Sim = Lixeira, Não = Exclusão definitiva imediata)?", default=curr)
+            config.set("modules.youtube.cleanup_to_trash", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "7":
+            curr = config.get("modules.youtube.auto_cleanup_videos", False)
+            new_val = Confirm.ask("Excluir vídeos locais automaticamente sem pedir confirmação no terminal?", default=curr)
+            config.set("modules.youtube.auto_cleanup_videos", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
         else:
