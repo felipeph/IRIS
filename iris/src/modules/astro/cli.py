@@ -167,6 +167,142 @@ def cmd_batch(args):
     console.print(f"\n[bold green][OK] Lote concluído com sucesso![/bold green]")
 
 
+def cmd_stack(args):
+    """Executa o empilhamento lunar via PlanetarySystemStacker (PSS)."""
+    from src.core.config import config
+    from src.modules.astro_stack.runner import AstroStackRunner
+
+    show_banner()
+    input_dir = Path(args.input_dir).resolve()
+    if not input_dir.exists() or not input_dir.is_dir():
+        console.print(f"[red]Erro: Diretório não encontrado:[/red] {input_dir}")
+        sys.exit(1)
+
+    dest_root = Path(config.get("general.destination_root", "C:/IRIS"))
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else dest_root / "8_Astro_Stack" / "Manual" / input_dir.name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    keep_percents = [int(p.strip()) for p in args.percents.split(",") if p.strip()]
+
+    console.print(f"\n[bold white]Origem (Fotos/RAWs):[/bold white] [green]{input_dir}[/green]")
+    console.print(f"[bold white]Destino (Stacks 16-bit):[/bold white] [cyan]{output_dir}[/cyan]")
+    console.print(f"[bold white]Percentuais (Keep %):[/bold white] [magenta]{keep_percents}%[/magenta]\n")
+
+    runner = AstroStackRunner()
+    if not runner.is_available():
+        console.print("[red]Erro: Ambiente virtual do astro não encontrado.[/red]")
+        sys.exit(1)
+
+    t0 = time.time()
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[cyan]Executando alinhamento e empilhamento PSS...", total=100)
+
+        def cb(msg, _):
+            progress.update(task, description=f"[cyan]{msg}[/cyan]")
+
+        report = runner.run_session(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            keep_percents=keep_percents,
+            crop_size=args.crop_size,
+            margin=args.margin,
+            align_box_width=args.align_box_width,
+            stab_mode=args.stab_mode,
+            progress_callback=cb,
+        )
+        progress.update(task, completed=100, description="[green]Empilhamento concluído![/green]")
+
+    total_time = time.time() - t0
+    console.print(f"\n[bold green][OK] Empilhamento concluído em {total_time:.2f} segundos![/bold green]\n")
+
+    table = Table(title=f"Arquivos TIFF Gerados: {input_dir.name}")
+    table.add_column("Keep %", style="cyan")
+    table.add_column("Arquivo TIFF Gerado (16-bit)", style="green")
+
+    for kp_val, out_p in report.get("output_tiff_paths", {}).items():
+        table.add_row(f"{kp_val}%", Path(out_p).name)
+
+    console.print(table)
+    console.print(f"\n[dim]Diretório de saída: {output_dir}[/dim]\n")
+
+
+def cmd_pipeline(args):
+    """Executa o pipeline lunar completo: Empilhamento PSS -> Aprimoramento Wavelets."""
+    from src.core.config import config
+    from src.modules.astro_stack.runner import AstroStackRunner
+    from src.modules.astro_sharpen.namer import resolve_astro_sharpen_dir
+
+    show_banner()
+    input_dir = Path(args.input_dir).resolve()
+    if not input_dir.exists() or not input_dir.is_dir():
+        console.print(f"[red]Erro: Diretório não encontrado:[/red] {input_dir}")
+        sys.exit(1)
+
+    dest_root = Path(config.get("general.destination_root", "C:/IRIS"))
+    stack_dir = Path(args.output_stack_dir).resolve() if args.output_stack_dir else dest_root / "8_Astro_Stack" / "Manual" / input_dir.name
+    stack_dir.mkdir(parents=True, exist_ok=True)
+    sharpen_dir = Path(args.output_sharpen_dir).resolve() if args.output_sharpen_dir else resolve_astro_sharpen_dir(stack_dir, dest_root)
+    sharpen_dir.mkdir(parents=True, exist_ok=True)
+
+    keep_percents = [int(p.strip()) for p in args.percents.split(",") if p.strip()]
+
+    console.print(Panel(
+        f"[bold cyan]🌕 PIPELINE LUNAR COMPLETO (PSS -> WAVELETS)[/bold cyan]\n"
+        f"[dim]Origem:[/dim] {input_dir}\n"
+        f"[dim]Destino Stacks:[/dim] {stack_dir}\n"
+        f"[dim]Destino Finais:[/dim] {sharpen_dir}\n"
+        f"[dim]Presets:[/dim] {args.preset}",
+        expand=False,
+        border_style="cyan"
+    ))
+
+    # Etapa 1: Stacking
+    runner = AstroStackRunner()
+    if not runner.is_available():
+        console.print("[red]Erro: Ambiente virtual do astro não encontrado.[/red]")
+        sys.exit(1)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[cyan]Etapa 1/2: Empilhando frames com PSS...", total=100)
+        report = runner.run_session(
+            input_dir=input_dir,
+            output_dir=stack_dir,
+            keep_percents=keep_percents,
+            progress_callback=lambda msg, _: progress.update(task, description=f"[cyan]{msg}[/cyan]"),
+        )
+        progress.update(task, completed=100, description="[green]Stacking concluído![/green]")
+
+    # Etapa 2: Sharpening
+    console.print("\n[bold cyan]Etapa 2/2: Aplicando Wavelets e CLAHE nos Stacks...[/bold cyan]")
+    all_sharpen_results = {}
+    for kp_val, out_p in report.get("output_tiff_paths", {}).items():
+        stack_p = Path(out_p)
+        res = process_and_export_all_presets(
+            input_path=stack_p,
+            output_dir=sharpen_dir,
+            presets=[args.preset],
+            enable_clahe=not args.no_clahe,
+            use_limb_guard=not args.no_limb_guard,
+        )
+        all_sharpen_results[f"Stack {kp_val}%"] = res
+
+    console.print(f"\n[bold green][OK] Pipeline completo finalizado com sucesso![/bold green]\n")
+    console.print(f"[dim]Stacks 16-bit: {stack_dir}[/dim]")
+    console.print(f"[dim]Imagens Finais: {sharpen_dir}[/dim]\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="iris-astro",
@@ -175,6 +311,28 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponíveis")
 
     presets_choices = ["all", "craters", "classic", "registax"] + list(LunarWaveletEngine.PRESETS.keys())
+
+    # Comando: stack
+    parser_stack = subparsers.add_parser("stack", help="Empilha fotos/RAWs lunares com o PlanetarySystemStacker (PSS)")
+    parser_stack.add_argument("input_dir", type=Path, help="Pasta contendo as fotos/RAWs da Lua")
+    parser_stack.add_argument("--output-dir", type=Path, default=None, help="Pasta de destino para os stacks TIFF")
+    parser_stack.add_argument("--percents", type=str, default="10,25,50", help="Percentuais de frames por AP (ex: 10,25,50)")
+    parser_stack.add_argument("--crop-size", type=int, default=None, help="Tamanho do recorte centrado (auto por padrão)")
+    parser_stack.add_argument("--margin", type=int, default=128, help="Margem além do diâmetro lunar em pixels")
+    parser_stack.add_argument("--align-box-width", type=int, default=64, help="Largura da caixa de alinhamento")
+    parser_stack.add_argument("--stab-mode", type=str, default="Surface", choices=["Surface", "Planet"])
+    parser_stack.set_defaults(func=cmd_stack)
+
+    # Comando: pipeline
+    parser_pipe = subparsers.add_parser("pipeline", help="Executa o fluxo completo: Stacking PSS -> Aprimoramento Wavelets")
+    parser_pipe.add_argument("input_dir", type=Path, help="Pasta contendo as fotos/RAWs da Lua")
+    parser_pipe.add_argument("--output-stack-dir", type=Path, default=None, help="Pasta de destino dos stacks (8_Astro_Stack)")
+    parser_pipe.add_argument("--output-sharpen-dir", type=Path, default=None, help="Pasta de destino dos finais (9_Astro_Sharpening)")
+    parser_pipe.add_argument("--percents", type=str, default="10,25,50", help="Percentuais de frames (ex: 10,25,50)")
+    parser_pipe.add_argument("--preset", choices=presets_choices, default="registax", help="Preset ou grupo de wavelets")
+    parser_pipe.add_argument("--no-clahe", action="store_true", help="Desativa o CLAHE")
+    parser_pipe.add_argument("--no-limb-guard", action="store_true", help="Desativa o Limb Guard")
+    parser_pipe.set_defaults(func=cmd_pipeline)
 
     # Comando: sharpen
     parser_sharpen = subparsers.add_parser("sharpen", help="Processa e aprimora um arquivo TIFF empilhado")
@@ -233,3 +391,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

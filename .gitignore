@@ -22,6 +22,7 @@ var/
 # Ambientes Virtuais
 venv/
 .venv/
+.venv_astro/
 env/
 .env/
 

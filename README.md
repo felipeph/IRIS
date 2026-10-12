@@ -42,7 +42,8 @@ Um menu interativo aparecerá. Escolha se deseja iniciar um novo projeto (onde v
   - `sanitization/`, `organize/`, `cleanup/`: sanitização EXIF, organização em pastas e limpeza da origem.
   - `timelapse/`, `video_edit/`: renderização de timelapse 4K e edição/upscale de vídeo 4K.
   - `youtube/`: upload, descrição e limpeza pós-upload.
-  - `astro/`: processamento lunar com wavelets (CLI `iris-astro`).
+  - `astro_stack/`, `astro_sharpen/`, `astro/`: empilhamento lunar multiponto autônomo (PSS -> `8_Astro_Stack`), pós-processamento e wavelets À Trous (`9_Astro_Sharpening`) e CLI unificada `iris-astro`.
+- `iris/vendor/`: PlanetarySystemStacker (PSS) headless empilhador de superfície para astrofotografia (GPL-3).
 - `iris/secrets/`: credenciais do YouTube (`client_secrets.json`, `token.json`), fora do git.
 - `iris/tests/`: Bateria de testes automatizados unitários usando `pytest`.
 

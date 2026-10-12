@@ -17,12 +17,24 @@ classification:
   enable_timelapse_album_samples: true
   timelapse_sample_interval_minutes: 5.0
 modules:
-  astro:
+  astro_stack:
     enabled: true
-    levels: 5
-    default_preset: "all"     # "all", "suave", "equilibrado", "enfatico", "mineral"
-    enable_clahe: true        # Realce adaptativo de contraste local 16-bit
-    use_limb_guard: true      # Proteção anti-halo/ringing no limbo lunar
+    keep_percents: [10, 25, 50]       # Percentuais de frames por ponto de alinhamento
+    margin_pixels: 128                # Margem além do diâmetro lunar em pixels
+    align_box_width: 64               # Caixa de ponto de alinhamento (pixels)
+    align_search_width: 20            # Raio de busca do alinhamento (pixels)
+    stab_mode: "Surface"              # "Surface" para superfície lunar
+    timeout_seconds: 600              # Timeout do PSS
+    venv_path: "auto"                 # "auto" ou caminho do executável/venv
+    windows_toast: true
+    ntfy_topic: "iris-alerts"
+  astro_sharpen:
+    enabled: true
+    presets: ["registax_fiel", "registax_limb_guard", "registax_plus"]
+    enable_clahe: true                # Realce adaptativo de contraste local 16-bit
+    use_limb_guard: true              # Proteção anti-halo/ringing no limbo lunar
+    windows_toast: true
+    ntfy_topic: "iris-alerts"
   bird_detect:
     enabled: true
   cleanup:
@@ -100,6 +112,14 @@ pipeline:
     id: organize
     module: src.modules.organize.stage
     name: Organização Física (SSD)
+  - enabled: true
+    id: astro_stack
+    module: src.modules.astro_stack.stage
+    name: Empilhamento Lunar (PSS -> 8_Astro_Stack)
+  - enabled: true
+    id: astro_sharpen
+    module: src.modules.astro_sharpen.stage
+    name: Aprimoramento Wavelets (9_Astro_Sharpening)
   - enabled: true
     id: timelapse
     module: src.modules.timelapse.stage

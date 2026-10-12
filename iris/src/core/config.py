@@ -116,6 +116,18 @@ class ConfigManager:
                         "enabled": True
                     },
                     {
+                        "id": "astro_stack",
+                        "name": "Empilhamento Lunar (PSS -> 8_Astro_Stack)",
+                        "module": "src.modules.astro_stack.stage",
+                        "enabled": True
+                    },
+                    {
+                        "id": "astro_sharpen",
+                        "name": "Aprimoramento Wavelets (9_Astro_Sharpening)",
+                        "module": "src.modules.astro_sharpen.stage",
+                        "enabled": True
+                    },
+                    {
                         "id": "timelapse",
                         "name": "Renderização de Timelapses (Fotos -> 4K)",
                         "module": "src.modules.timelapse.stage",
@@ -149,6 +161,26 @@ class ConfigManager:
             },
             "modules": {
                 "dedup": {"enabled": True},
+                "astro_stack": {
+                    "enabled": True,
+                    "keep_percents": [10, 25, 50],
+                    "margin_pixels": 128,
+                    "align_box_width": 64,
+                    "align_search_width": 20,
+                    "stab_mode": "Surface",
+                    "timeout_seconds": 600,
+                    "venv_path": "auto",
+                    "windows_toast": True,
+                    "ntfy_topic": "iris-alerts"
+                },
+                "astro_sharpen": {
+                    "enabled": True,
+                    "presets": ["registax_fiel", "registax_limb_guard", "registax_plus"],
+                    "enable_clahe": True,
+                    "use_limb_guard": True,
+                    "windows_toast": True,
+                    "ntfy_topic": "iris-alerts"
+                },
                 "timelapse": {
                     "enabled": True,
                     "render_profile": "fast",

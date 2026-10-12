@@ -103,6 +103,40 @@ def init_central_db():
             cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS astro_stacks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_name TEXT,
+                session_dir TEXT,
+                raw_count INTEGER,
+                keep_percents TEXT,
+                output_dir TEXT,
+                output_tiff_paths_json TEXT DEFAULT '{}',
+                crop_size INTEGER,
+                shared_gain REAL,
+                status TEXT DEFAULT 'stacked',
+                metadata_json TEXT DEFAULT '{}',
+                elapsed_seconds REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(project_name, session_dir)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS astro_sharpens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_name TEXT,
+                source_stack_path TEXT,
+                preset TEXT,
+                output_tiff_path TEXT UNIQUE,
+                output_png_path TEXT,
+                status TEXT DEFAULT 'sharpened',
+                metadata_json TEXT DEFAULT '{}',
+                elapsed_seconds REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 init_central_db()
@@ -274,6 +308,40 @@ class Project:
                 cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS astro_stacks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_name TEXT,
+                    session_dir TEXT,
+                    raw_count INTEGER,
+                    keep_percents TEXT,
+                    output_dir TEXT,
+                    output_tiff_paths_json TEXT DEFAULT '{}',
+                    crop_size INTEGER,
+                    shared_gain REAL,
+                    status TEXT DEFAULT 'stacked',
+                    metadata_json TEXT DEFAULT '{}',
+                    elapsed_seconds REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(project_name, session_dir)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS astro_sharpens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_name TEXT,
+                    source_stack_path TEXT,
+                    preset TEXT,
+                    output_tiff_path TEXT UNIQUE,
+                    output_png_path TEXT,
+                    status TEXT DEFAULT 'sharpened',
+                    metadata_json TEXT DEFAULT '{}',
+                    elapsed_seconds REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
 
     def save_metadata(self):
@@ -637,6 +705,153 @@ class Project:
             conn.commit()
         update_central_edited_video_local_deleted(video_path)
 
+    def add_astro_stack(self, record: Dict[str, Any]):
+        """Registra uma sessão de empilhamento lunar no banco do projeto e no banco central."""
+        self._init_project_db()
+        record_copy = dict(record)
+        record_copy["project_name"] = self.name
+        
+        keep_percents = record_copy.get("keep_percents", [])
+        if isinstance(keep_percents, (list, tuple)):
+            keep_percents_str = json.dumps(list(keep_percents))
+        else:
+            keep_percents_str = str(keep_percents)
+            
+        out_paths = record_copy.get("output_tiff_paths_json", {})
+        if isinstance(out_paths, (dict, list)):
+            out_paths_str = json.dumps(out_paths)
+        else:
+            out_paths_str = str(out_paths)
+            
+        meta_val = record_copy.get("metadata_json", {})
+        meta_json_str = json.dumps(meta_val) if isinstance(meta_val, dict) else str(meta_val)
+
+        with get_db_connection(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO astro_stacks (
+                    project_name, session_dir, raw_count, keep_percents, output_dir,
+                    output_tiff_paths_json, crop_size, shared_gain, status, metadata_json, elapsed_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_name, session_dir) DO UPDATE SET
+                    raw_count=excluded.raw_count,
+                    keep_percents=excluded.keep_percents,
+                    output_dir=excluded.output_dir,
+                    output_tiff_paths_json=excluded.output_tiff_paths_json,
+                    crop_size=excluded.crop_size,
+                    shared_gain=excluded.shared_gain,
+                    status=excluded.status,
+                    metadata_json=excluded.metadata_json,
+                    elapsed_seconds=excluded.elapsed_seconds,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (
+                self.name,
+                record_copy.get("session_dir", ""),
+                record_copy.get("raw_count", 0),
+                keep_percents_str,
+                record_copy.get("output_dir", ""),
+                out_paths_str,
+                record_copy.get("crop_size", 0),
+                record_copy.get("shared_gain", 1.0),
+                record_copy.get("status", "stacked"),
+                meta_json_str,
+                record_copy.get("elapsed_seconds", 0.0)
+            ))
+            conn.commit()
+            
+        save_central_astro_stack(record_copy)
+
+    def get_astro_stacks(self, session_dir: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Recupera sessões de empilhamento registradas no projeto."""
+        if not self._project_db_file.exists():
+            return []
+        self._init_project_db()
+        results = []
+        with get_db_connection(self._project_db_file) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            if session_dir:
+                cursor.execute("SELECT * FROM astro_stacks WHERE project_name=? AND session_dir=? ORDER BY created_at DESC", (self.name, session_dir))
+            else:
+                cursor.execute("SELECT * FROM astro_stacks WHERE project_name=? ORDER BY created_at DESC", (self.name,))
+            for row in cursor.fetchall():
+                d = dict(row)
+                for json_col in ("keep_percents", "output_tiff_paths_json", "metadata_json"):
+                    val = d.get(json_col)
+                    if isinstance(val, str) and val:
+                        try:
+                            d[json_col] = json.loads(val)
+                        except Exception:
+                            pass
+                results.append(d)
+        return results
+
+    def is_astro_session_stacked(self, session_dir: str) -> bool:
+        """Verifica se uma sessão lunar já foi empilhada com sucesso."""
+        stacks = self.get_astro_stacks(session_dir)
+        return any(s.get("status") in ("stacked", "done", "success", "completed") for s in stacks)
+
+    def add_astro_sharpen(self, record: Dict[str, Any]):
+        """Registra uma imagem aprimorada por wavelets no banco do projeto e no central."""
+        self._init_project_db()
+        record_copy = dict(record)
+        record_copy["project_name"] = self.name
+        
+        meta_val = record_copy.get("metadata_json", {})
+        meta_json_str = json.dumps(meta_val) if isinstance(meta_val, dict) else str(meta_val)
+
+        with get_db_connection(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO astro_sharpens (
+                    project_name, source_stack_path, preset, output_tiff_path, output_png_path,
+                    status, metadata_json, elapsed_seconds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(output_tiff_path) DO UPDATE SET
+                    preset=excluded.preset,
+                    output_png_path=excluded.output_png_path,
+                    status=excluded.status,
+                    metadata_json=excluded.metadata_json,
+                    elapsed_seconds=excluded.elapsed_seconds,
+                    updated_at=CURRENT_TIMESTAMP
+            """, (
+                self.name,
+                record_copy.get("source_stack_path", ""),
+                record_copy.get("preset", ""),
+                record_copy.get("output_tiff_path", ""),
+                record_copy.get("output_png_path", ""),
+                record_copy.get("status", "sharpened"),
+                meta_json_str,
+                record_copy.get("elapsed_seconds", 0.0)
+            ))
+            conn.commit()
+            
+        save_central_astro_sharpen(record_copy)
+
+    def get_astro_sharpens(self, source_stack_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Recupera imagens com sharpening registradas no projeto."""
+        if not self._project_db_file.exists():
+            return []
+        self._init_project_db()
+        results = []
+        with get_db_connection(self._project_db_file) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            if source_stack_path:
+                cursor.execute("SELECT * FROM astro_sharpens WHERE project_name=? AND source_stack_path=? ORDER BY created_at DESC", (self.name, source_stack_path))
+            else:
+                cursor.execute("SELECT * FROM astro_sharpens WHERE project_name=? ORDER BY created_at DESC", (self.name,))
+            for row in cursor.fetchall():
+                d = dict(row)
+                val = d.get("metadata_json")
+                if isinstance(val, str) and val:
+                    try:
+                        d["metadata_json"] = json.loads(val)
+                    except Exception:
+                        pass
+                results.append(d)
+        return results
+
 
 def get_project(name: str) -> Optional[Project]:
     """Recupera um projeto existente ou retorna None."""
@@ -924,5 +1139,133 @@ def get_last_active_project() -> Optional[str]:
             return row[0] if row else None
     except Exception:
         return None
+
+
+def save_central_astro_stack(record: Dict[str, Any]):
+    """Salva/atualiza uma sessão de empilhamento no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        init_central_db()
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        cursor = conn.cursor()
+        keep_percents = record.get("keep_percents", [])
+        keep_percents_str = json.dumps(list(keep_percents)) if isinstance(keep_percents, (list, tuple)) else str(keep_percents)
+        out_paths = record.get("output_tiff_paths_json", {})
+        out_paths_str = json.dumps(out_paths) if isinstance(out_paths, (dict, list)) else str(out_paths)
+        meta_val = record.get("metadata_json", {})
+        meta_json_str = json.dumps(meta_val) if isinstance(meta_val, dict) else str(meta_val)
+        
+        cursor.execute("""
+            INSERT INTO astro_stacks (
+                project_name, session_dir, raw_count, keep_percents, output_dir,
+                output_tiff_paths_json, crop_size, shared_gain, status, metadata_json, elapsed_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_name, session_dir) DO UPDATE SET
+                raw_count=excluded.raw_count,
+                keep_percents=excluded.keep_percents,
+                output_dir=excluded.output_dir,
+                output_tiff_paths_json=excluded.output_tiff_paths_json,
+                crop_size=excluded.crop_size,
+                shared_gain=excluded.shared_gain,
+                status=excluded.status,
+                metadata_json=excluded.metadata_json,
+                elapsed_seconds=excluded.elapsed_seconds,
+                updated_at=CURRENT_TIMESTAMP
+        """, (
+            record.get("project_name", ""),
+            record.get("session_dir", ""),
+            record.get("raw_count", 0),
+            keep_percents_str,
+            record.get("output_dir", ""),
+            out_paths_str,
+            record.get("crop_size", 0),
+            record.get("shared_gain", 1.0),
+            record.get("status", "stacked"),
+            meta_json_str,
+            record.get("elapsed_seconds", 0.0)
+        ))
+        conn.commit()
+
+
+def list_central_astro_stacks(project_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Lista sessões de empilhamento cadastradas no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        return []
+    results = []
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if project_name:
+            cursor.execute("SELECT * FROM astro_stacks WHERE project_name=? ORDER BY created_at DESC", (project_name,))
+        else:
+            cursor.execute("SELECT * FROM astro_stacks ORDER BY created_at DESC")
+        for row in cursor.fetchall():
+            d = dict(row)
+            for json_col in ("keep_percents", "output_tiff_paths_json", "metadata_json"):
+                val = d.get(json_col)
+                if isinstance(val, str) and val:
+                    try:
+                        d[json_col] = json.loads(val)
+                    except Exception:
+                        pass
+            results.append(d)
+    return results
+
+
+def save_central_astro_sharpen(record: Dict[str, Any]):
+    """Salva/atualiza uma imagem com sharpening no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        init_central_db()
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        cursor = conn.cursor()
+        meta_val = record.get("metadata_json", {})
+        meta_json_str = json.dumps(meta_val) if isinstance(meta_val, dict) else str(meta_val)
+        cursor.execute("""
+            INSERT INTO astro_sharpens (
+                project_name, source_stack_path, preset, output_tiff_path, output_png_path,
+                status, metadata_json, elapsed_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(output_tiff_path) DO UPDATE SET
+                preset=excluded.preset,
+                output_png_path=excluded.output_png_path,
+                status=excluded.status,
+                metadata_json=excluded.metadata_json,
+                elapsed_seconds=excluded.elapsed_seconds,
+                updated_at=CURRENT_TIMESTAMP
+        """, (
+            record.get("project_name", ""),
+            record.get("source_stack_path", ""),
+            record.get("preset", ""),
+            record.get("output_tiff_path", ""),
+            record.get("output_png_path", ""),
+            record.get("status", "sharpened"),
+            meta_json_str,
+            record.get("elapsed_seconds", 0.0)
+        ))
+        conn.commit()
+
+
+def list_central_astro_sharpens(project_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Lista imagens com sharpening cadastradas no banco central."""
+    if not CENTRAL_DB_PATH.exists():
+        return []
+    results = []
+    with get_db_connection(CENTRAL_DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        if project_name:
+            cursor.execute("SELECT * FROM astro_sharpens WHERE project_name=? ORDER BY created_at DESC", (project_name,))
+        else:
+            cursor.execute("SELECT * FROM astro_sharpens ORDER BY created_at DESC")
+        for row in cursor.fetchall():
+            d = dict(row)
+            val = d.get("metadata_json")
+            if isinstance(val, str) and val:
+                try:
+                    d["metadata_json"] = json.loads(val)
+                except Exception:
+                    pass
+            results.append(d)
+    return results
+
 
 
