@@ -37,8 +37,22 @@ Um menu interativo aparecerá. Escolha se deseja iniciar um novo projeto (onde v
   - `pipeline.py`: O "executor" responsável por encadear as etapas do workflow.
   - `project.py`: Modelagem do projeto (estado SQLite de cada job de ingestão).
   - `logger.py`: Serviço de logger.
-- `iris/src/modules/ingestion/`: Módulo de ingestão que inclui a lógica avançada de cópia com verificação de hash e flush físico.
+- `iris/src/modules/`: módulos das etapas do pipeline.
+  - `planning/`, `ingestion/`: planejamento e ingestão segura (cópia/movimentação com hash).
+  - `sanitization/`, `organize/`, `cleanup/`: sanitização EXIF, organização em pastas e limpeza da origem.
+  - `timelapse/`, `video_edit/`: renderização de timelapse 4K e edição/upscale de vídeo 4K.
+  - `youtube/`: upload, descrição e limpeza pós-upload.
+  - `astro/`: processamento lunar com wavelets (CLI `iris-astro`).
+- `iris/secrets/`: credenciais do YouTube (`client_secrets.json`, `token.json`), fora do git.
 - `iris/tests/`: Bateria de testes automatizados unitários usando `pytest`.
+
+## Documentação
+
+Documentos técnicos em `iris/docs/`:
+- [arquitetura_ingestao_segura.md](iris/docs/arquitetura_ingestao_segura.md)
+- [astro_automacao_lunar.md](iris/docs/astro_automacao_lunar.md)
+- [spec_edicao_video_4k.md](iris/docs/spec_edicao_video_4k.md)
+- [guia_sanitizacao_exif.md](iris/docs/guia_sanitizacao_exif.md)
 
 ## Licença
 Este é um projeto pessoal open-source. Sinta-se livre para adaptar para seus próprios fluxos de backup.

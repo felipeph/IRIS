@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -32,7 +31,7 @@ env/
 .cache
 nosetests.xml
 coverage.xml
-*,cover
+*.cover
 .hypothesis/
 .pytest_cache/
 cover/
@@ -48,10 +47,8 @@ cover/
 config.yaml
 iris/config.yaml
 secrets/
-iris/secrets/
 *.json
 !iris/config.example.json
-
 
 # Específicos do IRIS
 _old/
@@ -61,4 +58,3 @@ iris/docs/ai_system_context.md
 iris/experiments/
 *.tif
 *.tiff
-

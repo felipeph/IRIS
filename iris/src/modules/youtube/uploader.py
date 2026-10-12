@@ -22,37 +22,17 @@ SCOPES = [
 
 _GEOCODE_CACHE = {}
 
+SECRETS_DIR = Path(__file__).resolve().parents[3] / "secrets"
+
 def find_client_secrets_file() -> Optional[Path]:
-    """Busca o client_secrets.json nas pastas de segredos conhecidas."""
-    candidates = [
-        Path("secrets/client_secrets.json"),
-        Path("iris/secrets/client_secrets.json"),
-        Path("c:/code/IRIS/secrets/client_secrets.json"),
-        Path("c:/code/IRIS/iris/secrets/client_secrets.json"),
-        Path("C:/code/FOTOGRAFIA/timelapse/secrets/client_secrets.json")
-    ]
-    for c in candidates:
-        if c.exists():
-            return c.resolve()
-    return None
+    """Retorna o client_secrets.json em iris/secrets/, se existir."""
+    path = SECRETS_DIR / "client_secrets.json"
+    return path if path.exists() else None
 
 def find_token_file() -> Path:
-    """Retorna o caminho preferencial para token.json."""
-    candidates = [
-        Path("secrets/token.json"),
-        Path("iris/secrets/token.json"),
-        Path("c:/code/IRIS/secrets/token.json"),
-        Path("c:/code/IRIS/iris/secrets/token.json"),
-        Path("C:/code/FOTOGRAFIA/timelapse/secrets/token.json")
-    ]
-    for c in candidates:
-        if c.exists():
-            return c.resolve()
-    
-    # Se não existe em nenhum lugar, salvar em c:/code/IRIS/secrets/token.json
-    default_path = Path("c:/code/IRIS/secrets/token.json")
-    default_path.parent.mkdir(parents=True, exist_ok=True)
-    return default_path
+    """Retorna o caminho de token.json em iris/secrets/ (criando a pasta se preciso)."""
+    SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    return SECRETS_DIR / "token.json"
 
 def save_token_atomic(token_path: Path, creds: Credentials):
     """Salva credenciais em token_path de forma atômica."""
