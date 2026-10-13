@@ -11,7 +11,7 @@ def resolve_astro_sharpen_dir(stack_dir_or_path: Union[str, Path], dest_root: Un
         -> dest_root / 9_Astro_Sharpening / Lua / 2026 / 08 / 28 / sessao_19-05-55
     """
     p = Path(stack_dir_or_path)
-    if p.is_file():
+    if p.is_file() or p.suffix:
         p = p.parent
 
     dest_root_p = Path(dest_root)
@@ -22,10 +22,14 @@ def resolve_astro_sharpen_dir(stack_dir_or_path: Union[str, Path], dest_root: Un
         rel_p = p
 
     parts = list(rel_p.parts)
-    if parts and parts[0] == "8_Astro_Stack":
-        parts[0] = "9_Astro_Sharpening"
-    elif parts and parts[0] != "9_Astro_Sharpening":
-        parts = ["9_Astro_Sharpening"] + parts
+    if "8_Astro_Stack" in parts:
+        idx = parts.index("8_Astro_Stack")
+        parts = ["9_Astro_Sharpening"] + list(parts[idx + 1:])
+    elif parts and parts[0] == "9_Astro_Sharpening":
+        pass
+    else:
+        safe_parts = [p for p in parts if not (len(p) == 2 and p[1] == ':') and p not in ('/', '\\')]
+        parts = ["9_Astro_Sharpening"] + safe_parts
 
     return dest_root_p.joinpath(*parts)
 

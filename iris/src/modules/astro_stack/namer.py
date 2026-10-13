@@ -14,10 +14,14 @@ def resolve_astro_stack_dir(session_rel_dir: Union[str, Path], dest_root: Union[
     parts = list(rel_path.parts)
     
     # Substitui 5_Astrofotografia por 8_Astro_Stack
-    if parts and parts[0] == "5_Astrofotografia":
-        parts[0] = "8_Astro_Stack"
-    elif parts and parts[0] != "8_Astro_Stack":
-        parts = ["8_Astro_Stack"] + parts
+    if "5_Astrofotografia" in parts:
+        idx = parts.index("5_Astrofotografia")
+        parts = ["8_Astro_Stack"] + list(parts[idx + 1:])
+    elif parts and parts[0] == "8_Astro_Stack":
+        pass
+    else:
+        safe_parts = [p for p in parts if not (len(p) == 2 and p[1] == ':') and p not in ('/', '\\')]
+        parts = ["8_Astro_Stack"] + safe_parts
 
     return Path(dest_root).joinpath(*parts)
 

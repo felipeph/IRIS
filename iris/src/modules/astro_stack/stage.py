@@ -16,7 +16,7 @@ from src.modules.astro_stack.runner import AstroStackRunner
 from src.modules.astro_stack.namer import resolve_astro_stack_dir
 from src.modules.timelapse.notifier import send_windows_toast, send_ntfy_notification
 
-console = Console()
+console = Console(legacy_windows=False)
 
 
 class AstroStackStage(PipelineStage):
@@ -62,8 +62,35 @@ class AstroStackStage(PipelineStage):
                         rel_key = str(sess_dir.relative_to(dest_root)).replace("\\", "/")
                         sessions[rel_key] = raws
 
+        # 3. Se nenhuma sessão encontrada, verifica se o source_path do projeto aponta diretamente para uma sessão ou raiz com fotos
+        if not sessions and getattr(project, "source_path", None):
+            src_p = Path(project.source_path)
+            if src_p.exists() and src_p.is_dir():
+                extensions = {".cr2", ".cr3", ".nef", ".arw", ".dng", ".raw", ".tif", ".tiff", ".png", ".jpg"}
+                direct_raws = sorted(p for p in src_p.iterdir() if p.is_file() and p.suffix.lower() in extensions and not p.name.startswith("."))
+                if len(direct_raws) >= 2:
+                    parts = list(src_p.parts)
+                    if "5_Astrofotografia" in parts:
+                        idx = parts.index("5_Astrofotografia")
+                        rel_key = "/".join(parts[idx:])
+                    else:
+                        rel_key = f"5_Astrofotografia/Lua/{src_p.name}"
+                    sessions[rel_key] = direct_raws
+                else:
+                    for sess_dir in src_p.rglob("sessao_*"):
+                        if sess_dir.is_dir():
+                            raws = sorted(p for p in sess_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions and not p.name.startswith("."))
+                            if len(raws) >= 2:
+                                parts = list(sess_dir.parts)
+                                if "5_Astrofotografia" in parts:
+                                    idx = parts.index("5_Astrofotografia")
+                                    rel_key = "/".join(parts[idx:])
+                                else:
+                                    rel_key = f"5_Astrofotografia/Lua/{sess_dir.name}"
+                                sessions[rel_key] = raws
+
         if not sessions:
-            console.print("[dim]Nenhuma sessão de fotos lunares encontrada em '5_Astrofotografia/Lua'. Prosseguindo.[/dim]")
+            console.print("[dim]Nenhuma sessão de fotos lunares encontrada em '5_Astrofotografia/Lua' ou na origem. Prosseguindo.[/dim]")
             return True
 
         runner = AstroStackRunner()

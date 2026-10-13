@@ -198,3 +198,44 @@ def test_stage_run_empty_project(tmp_path: Path):
     s_sharpen = get_sharpen_stage("astro_sharpen", "Aprimoramento de Astrofotografia")
     res_sharpen = s_sharpen.run(proj)
     assert res_sharpen is True
+
+
+def test_namer_with_absolute_windows_paths():
+    dest_root = Path("C:/IRIS")
+    abs_session = Path("C:/1/TESTES/5_Astrofotografia/Lua/2026/06/02/sessao_20-22-39")
+    
+    out_dir = resolve_astro_stack_dir(abs_session, dest_root)
+    assert out_dir == dest_root / "8_Astro_Stack" / "Lua" / "2026" / "06" / "02" / "sessao_20-22-39"
+
+    abs_stack = Path("C:/1/TESTES/8_Astro_Stack/Lua/2026/06/02/sessao_20-22-39/stack10p.tiff")
+    sharpen_dir = resolve_astro_sharpen_dir(abs_stack, dest_root)
+    assert sharpen_dir == dest_root / "9_Astro_Sharpening" / "Lua" / "2026" / "06" / "02" / "sessao_20-22-39"
+
+
+def test_stage_source_path_session_discovery(tmp_path: Path):
+    sess_dir = tmp_path / "5_Astrofotografia" / "Lua" / "2026" / "06" / "02" / "sessao_20-22-39"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    # Cria 2 arquivos simulados
+    (sess_dir / "frame1.cr2").write_bytes(b"\x00" * 100)
+    (sess_dir / "frame2.cr2").write_bytes(b"\x00" * 100)
+
+    proj = Project("src_path_astro_proj", str(sess_dir))
+    s_stack = get_stack_stage("astro_stack", "Empilhamento Lunar")
+
+    # Com runner simulado para não disparar o subprocesso PSS
+    with patch("src.modules.astro_stack.stage.AstroStackRunner") as mock_runner_cls:
+        mock_runner = MagicMock()
+        mock_runner.is_available.return_value = True
+        mock_runner.run_session.return_value = {
+            "output_tiff_paths": {"10": str(tmp_path / "test.tiff")},
+            "crop_size": 200,
+            "shared_gain": 1.5,
+        }
+        mock_runner_cls.return_value = mock_runner
+
+        with patch("src.modules.astro_stack.stage.send_windows_toast"):
+            with patch("src.modules.astro_stack.stage.send_ntfy_notification"):
+                success = s_stack.run(proj, force=True)
+                assert success is True
+                assert mock_runner.run_session.called
+

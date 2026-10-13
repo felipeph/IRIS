@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from rich.console import Console
 from src.core.config import config
@@ -129,3 +130,47 @@ def test_config_manager_sanitize_mojibake():
     assert sanitized["title"] == "Publicação de Vídeos"
     assert sanitized["stages"][0] == "Sanitização"
     assert sanitized["stages"][1] == clean_str
+
+
+def test_config_manager_auto_migrates_missing_stages(tmp_path: Path):
+    """Garante que ConfigManager insere astro_stack e astro_sharpen em configurações legadas."""
+    import yaml
+    from src.core.config import ConfigManager
+
+    test_cfg_file = tmp_path / "legacy_config.yaml"
+    legacy_data = {
+        "general": {"theme": "light"},
+        "pipeline": {
+            "stages": [
+                {"id": "ingestion", "name": "Ingestão", "enabled": True},
+                {"id": "organize", "name": "Organização", "enabled": True},
+                {"id": "timelapse", "name": "Timelapse", "enabled": True},
+            ]
+        },
+        "modules": {
+            "timelapse": {"enabled": True}
+        }
+    }
+    with open(test_cfg_file, "w", encoding="utf-8") as f:
+        yaml.dump(legacy_data, f)
+
+    with patch("src.core.config.CONFIG_FILE", test_cfg_file):
+        cm = ConfigManager()
+        cm.load()
+
+        stages = cm.get("pipeline.stages")
+        stage_ids = [s["id"] for s in stages]
+        assert "astro_stack" in stage_ids
+        assert "astro_sharpen" in stage_ids
+        
+        # Garante ordem correta: após organize e antes de timelapse
+        org_idx = stage_ids.index("organize")
+        stack_idx = stage_ids.index("astro_stack")
+        sharpen_idx = stage_ids.index("astro_sharpen")
+        tl_idx = stage_ids.index("timelapse")
+        assert org_idx < stack_idx < sharpen_idx < tl_idx
+
+        # Garante que os módulos foram criados
+        assert cm.get("modules.astro_stack.enabled") is True
+        assert cm.get("modules.astro_sharpen.enabled") is True
+

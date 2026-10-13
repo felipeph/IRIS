@@ -106,7 +106,15 @@ class PipelineRunner:
                     start_index = i + 1  # Inicia na próxima etapa, assumindo que current_stage_id foi concluída
                     break
                     
-        for stage in self.stages[start_index:]:
+        stages_to_run = self.stages[start_index:]
+        if not stages_to_run:
+            console.print(f"\n[yellow]ℹ Todas as {len(self.stages)} etapas do pipeline já foram concluídas para o projeto '{project.name}'.[/yellow]")
+            console.print(f"[dim]Última etapa registrada: '{project.current_stage_id}'.[/dim]")
+            console.print("[dim]Para reexecutar uma etapa específica, selecione-a pelo número no menu interativo.[/dim]")
+            console.print(f"\n[bold blue]=== Fim do Pipeline ===[/bold blue]")
+            return
+
+        for stage in stages_to_run:
             if stage.stage_id == "cleanup":
                 if not getattr(project, "auto_cleanup", False):
                     console.print(f"\n[dim]-> Pulando etapa: {stage.name} (Limpeza automática desativada no projeto)[/dim]")

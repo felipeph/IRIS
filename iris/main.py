@@ -156,7 +156,18 @@ def run_pipeline_for_project(active_project):
             elif choice == "C":
                 show_config_menu()
             elif choice == "R" or choice == "":
-                runner.run_project(active_project)
+                last_stage_id = stages[-1].stage_id if stages else None
+                if active_project.current_stage_id and active_project.current_stage_id == last_stage_id:
+                    console.print(f"\n[yellow]ℹ Este projeto já concluiu todas as etapas (Última: {active_project.current_stage_id}).[/yellow]")
+                    restart = Confirm.ask("Deseja reiniciar a execução do pipeline desde a primeira etapa?", default=False)
+                    if restart:
+                        active_project.current_stage_id = ""
+                        active_project.save()
+                        runner.run_project(active_project)
+                    else:
+                        console.print("[dim]Dica: Você pode selecionar uma etapa individual pelo seu número para reexecutar apenas ela.[/dim]")
+                else:
+                    runner.run_project(active_project)
                 Prompt.ask("\n[dim]Pressione ENTER para continuar...[/dim]")
             else:
                 try:

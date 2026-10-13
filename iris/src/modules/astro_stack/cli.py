@@ -3,6 +3,23 @@ import argparse
 import sys
 from pathlib import Path
 
+MODULE_DIR = Path(__file__).resolve().parent
+IRIS_DIR = MODULE_DIR.parents[2]
+if str(IRIS_DIR) not in sys.path:
+    sys.path.insert(0, str(IRIS_DIR))
+
+# Garante suporte completo a UTF-8 no console do Windows
+if sys.platform == "win32":
+    try:
+        if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+        if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+        if sys.stdin and hasattr(sys.stdin, "reconfigure"):
+            sys.stdin.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -11,7 +28,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeEl
 from src.core.config import config
 from src.modules.astro_stack.runner import AstroStackRunner
 
-console = Console()
+console = Console(legacy_windows=False)
 
 
 def run_cli():

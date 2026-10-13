@@ -100,7 +100,7 @@ class AstroStackRunner:
             "--keep-percents", kp_str,
             "--margin", str(margin),
             "--align-box-width", str(align_box_width),
-            "--align_search_width", str(align_search_width),
+            "--align-search-width", str(align_search_width),
             "--stab-mode", stab_mode,
             "--timeout", str(timeout),
         ]

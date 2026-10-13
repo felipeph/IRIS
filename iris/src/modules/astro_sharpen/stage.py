@@ -17,7 +17,7 @@ from src.modules.astro.wavelets import LunarWaveletEngine
 from src.modules.astro_sharpen.namer import resolve_astro_sharpen_dir
 from src.modules.timelapse.notifier import send_windows_toast, send_ntfy_notification
 
-console = Console()
+console = Console(legacy_windows=False)
 
 
 class AstroSharpenStage(PipelineStage):
@@ -67,8 +67,16 @@ class AstroSharpenStage(PipelineStage):
                 if tiff_f.is_file() and not tiff_f.name.startswith(".") and "preview" not in tiff_f.name.lower():
                     stacks_to_process.append(tiff_f)
 
+        # 3. Se nenhum stack encontrado, faz scan no source_path do projeto
+        if not stacks_to_process and getattr(project, "source_path", None):
+            src_p = Path(project.source_path)
+            if src_p.exists() and src_p.is_dir():
+                for tiff_f in src_p.rglob("*.tif*"):
+                    if tiff_f.is_file() and not tiff_f.name.startswith(".") and "preview" not in tiff_f.name.lower():
+                        stacks_to_process.append(tiff_f)
+
         if not stacks_to_process:
-            console.print("[dim]Nenhum arquivo TIFF empilhado encontrado em '8_Astro_Stack'. Prosseguindo.[/dim]")
+            console.print("[dim]Nenhum arquivo TIFF empilhado encontrado em '8_Astro_Stack' ou na origem. Prosseguindo.[/dim]")
             return True
 
         console.print(f"Encontrados [bold green]{len(stacks_to_process)}[/bold green] stack(s) TIFF para aprimoramento.")

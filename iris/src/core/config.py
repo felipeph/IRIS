@@ -132,10 +132,67 @@ class ConfigManager:
             if "pipeline" not in self.config:
                 self.config["pipeline"] = {}
             pipe = self.config["pipeline"]
+            
+            has_changes = has_mojibake
+            
             if "stages" not in pipe:
                 pipe["stages"] = self._get_default_stages()
-                self.save()  # Auto-save para popular o disco
-            elif has_mojibake:
+                has_changes = True
+            else:
+                existing_ids = {s.get("id") for s in pipe["stages"] if isinstance(s, dict)}
+                default_stages = self._get_default_stages()
+                for def_s in default_stages:
+                    def_id = def_s.get("id")
+                    if def_id not in existing_ids:
+                        insert_idx = len(pipe["stages"])
+                        if def_id in ("astro_stack", "astro_sharpen"):
+                            for idx, s in enumerate(pipe["stages"]):
+                                if s.get("id") == "organize":
+                                    insert_idx = idx + 1
+                                    if def_id == "astro_sharpen":
+                                        for idx2, s2 in enumerate(pipe["stages"]):
+                                            if s2.get("id") == "astro_stack":
+                                                insert_idx = idx2 + 1
+                                                break
+                                    break
+                                elif s.get("id") == "timelapse":
+                                    insert_idx = idx
+                                    break
+                        pipe["stages"].insert(insert_idx, def_s)
+                        existing_ids.add(def_id)
+                        has_changes = True
+
+            if "modules" not in self.config:
+                self.config["modules"] = {}
+            mods = self.config["modules"]
+
+            if "astro_stack" not in mods:
+                mods["astro_stack"] = {
+                    "enabled": True,
+                    "keep_percents": [10, 25, 50],
+                    "margin_pixels": 128,
+                    "align_box_width": 64,
+                    "align_search_width": 20,
+                    "stab_mode": "Surface",
+                    "timeout_seconds": 600,
+                    "venv_path": "auto",
+                    "windows_toast": True,
+                    "ntfy_topic": "iris-alerts"
+                }
+                has_changes = True
+
+            if "astro_sharpen" not in mods:
+                mods["astro_sharpen"] = {
+                    "enabled": True,
+                    "presets": ["registax_fiel", "registax_limb_guard", "registax_plus"],
+                    "enable_clahe": True,
+                    "use_limb_guard": True,
+                    "windows_toast": True,
+                    "ntfy_topic": "iris-alerts"
+                }
+                has_changes = True
+
+            if has_changes:
                 self.save()
         except Exception as e:
             print(f"Erro ao carregar configurações: {e}")

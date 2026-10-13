@@ -11,15 +11,36 @@ import time
 from pathlib import Path
 from typing import List
 
+MODULE_DIR = Path(__file__).resolve().parent
+IRIS_DIR = MODULE_DIR.parents[2]
+if str(IRIS_DIR) not in sys.path:
+    sys.path.insert(0, str(IRIS_DIR))
+
+try:
+    from .postprocess import load_lunar_image, process_and_export_all_presets
+    from .wavelets import LunarWaveletEngine
+except (ImportError, ValueError):
+    from src.modules.astro.postprocess import load_lunar_image, process_and_export_all_presets
+    from src.modules.astro.wavelets import LunarWaveletEngine
+
+# Garante suporte completo a UTF-8 no console do Windows
+if sys.platform == "win32":
+    try:
+        if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+        if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+        if sys.stdin and hasattr(sys.stdin, "reconfigure"):
+            sys.stdin.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 
-from .postprocess import load_lunar_image, process_and_export_all_presets
-from .wavelets import LunarWaveletEngine
-
-console = Console()
+console = Console(legacy_windows=False)
 
 
 def show_banner():
@@ -171,6 +192,7 @@ def cmd_stack(args):
     """Executa o empilhamento lunar via PlanetarySystemStacker (PSS)."""
     from src.core.config import config
     from src.modules.astro_stack.runner import AstroStackRunner
+    from src.modules.astro_stack.namer import resolve_astro_stack_dir
 
     show_banner()
     input_dir = Path(args.input_dir).resolve()
@@ -179,7 +201,7 @@ def cmd_stack(args):
         sys.exit(1)
 
     dest_root = Path(config.get("general.destination_root", "C:/IRIS"))
-    output_dir = Path(args.output_dir).resolve() if args.output_dir else dest_root / "8_Astro_Stack" / "Manual" / input_dir.name
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else resolve_astro_stack_dir(input_dir, dest_root)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     keep_percents = [int(p.strip()) for p in args.percents.split(",") if p.strip()]
@@ -236,6 +258,7 @@ def cmd_pipeline(args):
     """Executa o pipeline lunar completo: Empilhamento PSS -> Aprimoramento Wavelets."""
     from src.core.config import config
     from src.modules.astro_stack.runner import AstroStackRunner
+    from src.modules.astro_stack.namer import resolve_astro_stack_dir
     from src.modules.astro_sharpen.namer import resolve_astro_sharpen_dir
 
     show_banner()
@@ -245,7 +268,7 @@ def cmd_pipeline(args):
         sys.exit(1)
 
     dest_root = Path(config.get("general.destination_root", "C:/IRIS"))
-    stack_dir = Path(args.output_stack_dir).resolve() if args.output_stack_dir else dest_root / "8_Astro_Stack" / "Manual" / input_dir.name
+    stack_dir = Path(args.output_stack_dir).resolve() if args.output_stack_dir else resolve_astro_stack_dir(input_dir, dest_root)
     stack_dir.mkdir(parents=True, exist_ok=True)
     sharpen_dir = Path(args.output_sharpen_dir).resolve() if args.output_sharpen_dir else resolve_astro_sharpen_dir(stack_dir, dest_root)
     sharpen_dir.mkdir(parents=True, exist_ok=True)
