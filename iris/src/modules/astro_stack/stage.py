@@ -39,14 +39,6 @@ class AstroStackStage(PipelineStage):
             console.print("[yellow]Módulo astro_stack desativado nas configurações. Pulando etapa.[/yellow]")
             return True
 
-        runner = AstroStackRunner()
-        if not runner.is_available():
-            console.print(
-                "[red]ERRO: Ambiente virtual com dependências de astrofotografia não encontrado![/red]\n"
-                "[yellow]Por favor, configure 'modules.astro_stack.venv_path' ou crie o ambiente .venv_astro.[/yellow]"
-            )
-            return False
-
         # Mapeia sessões de astrofotografia no projeto
         sessions: Dict[str, List[Path]] = {}
 
@@ -73,6 +65,14 @@ class AstroStackStage(PipelineStage):
         if not sessions:
             console.print("[dim]Nenhuma sessão de fotos lunares encontrada em '5_Astrofotografia/Lua'. Prosseguindo.[/dim]")
             return True
+
+        runner = AstroStackRunner()
+        if not runner.is_available():
+            console.print(
+                "[red]ERRO: Ambiente virtual com dependências de astrofotografia não encontrado![/red]\n"
+                "[yellow]Por favor, configure 'modules.astro_stack.venv_path' ou crie o ambiente .venv_astro.[/yellow]"
+            )
+            return False
 
         console.print(f"Encontradas [bold green]{len(sessions)}[/bold green] sessão(ões) lunar(es) para análise.")
 

@@ -105,3 +105,27 @@ def test_youtube_notifications_edit(mock_console):
             assert config.get("modules.youtube.playlist") == "Meus Timelapses"
     finally:
         config.set("modules.youtube.playlist", original_playlist)
+
+
+def test_config_manager_sanitize_mojibake():
+    """Valida se ConfigManager corrige mojibake double-encoded e preserva strings limpas."""
+    from src.core.config import ConfigManager
+
+    clean_str = "Ingestão de Arquivos (SD -> SSD)"
+    dirty_str = "IngestÃ£o de Arquivos (SD -> SSD)"
+
+    # Limpo deve permanecer inalterado
+    assert ConfigManager._sanitize_mojibake(clean_str) == clean_str
+
+    # Mojibake deve ser corrigido para UTF-8 válido
+    assert ConfigManager._sanitize_mojibake(dirty_str) == clean_str
+
+    # Estruturas aninhadas (dicionários e listas)
+    nested = {
+        "title": "PublicaÃ§Ã£o de VÃ­deos",
+        "stages": ["SanitizaÃ§Ã£o", clean_str],
+    }
+    sanitized = ConfigManager._sanitize_mojibake(nested)
+    assert sanitized["title"] == "Publicação de Vídeos"
+    assert sanitized["stages"][0] == "Sanitização"
+    assert sanitized["stages"][1] == clean_str

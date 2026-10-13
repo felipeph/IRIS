@@ -25,6 +25,88 @@ class ConfigManager:
         DB_DIR.mkdir(parents=True, exist_ok=True)
         PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _sanitize_mojibake(data):
+        """Corrige recursivamente strings corrompidas por double-encoding UTF-8 (mojibake)."""
+        if isinstance(data, str):
+            if any(marker in data for marker in ("Ã", "Â")):
+                try:
+                    candidate = data.encode("latin1").decode("utf-8")
+                    return candidate
+                except (UnicodeEncodeError, UnicodeDecodeError):
+                    pass
+            return data
+        elif isinstance(data, dict):
+            return {k: ConfigManager._sanitize_mojibake(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [ConfigManager._sanitize_mojibake(item) for item in data]
+        return data
+
+    @staticmethod
+    def _get_default_stages():
+        return [
+            {
+                "id": "ingestion",
+                "name": "Ingestão de Arquivos (SD -> SSD)",
+                "module": "src.modules.ingestion.stage",
+                "enabled": True
+            },
+            {
+                "id": "cleanup",
+                "name": "Limpeza da Origem (Após verificação)",
+                "module": "src.modules.cleanup.stage",
+                "enabled": True
+            },
+            {
+                "id": "sanitization",
+                "name": "Sanitização de Metadados EXIF",
+                "module": "src.modules.sanitization.stage",
+                "enabled": True
+            },
+            {
+                "id": "planning",
+                "name": "Planejamento e Metadados (Staging)",
+                "module": "src.modules.planning.stage",
+                "enabled": True
+            },
+            {
+                "id": "organize",
+                "name": "Organização Física (SSD)",
+                "module": "src.modules.organize.stage",
+                "enabled": True
+            },
+            {
+                "id": "astro_stack",
+                "name": "Empilhamento Lunar (PSS -> 8_Astro_Stack)",
+                "module": "src.modules.astro_stack.stage",
+                "enabled": True
+            },
+            {
+                "id": "astro_sharpen",
+                "name": "Aprimoramento Wavelets (9_Astro_Sharpening)",
+                "module": "src.modules.astro_sharpen.stage",
+                "enabled": True
+            },
+            {
+                "id": "timelapse",
+                "name": "Renderização de Timelapses (Fotos -> 4K)",
+                "module": "src.modules.timelapse.stage",
+                "enabled": True
+            },
+            {
+                "id": "video_edit",
+                "name": "Edição e Upscale 4K de Vídeos (Lanczos/GPU)",
+                "module": "src.modules.video_edit.stage",
+                "enabled": True
+            },
+            {
+                "id": "youtube",
+                "name": "Publicação no YouTube (Timelapses e Vídeos)",
+                "module": "src.modules.youtube.stage",
+                "enabled": True
+            }
+        ]
+
     def load(self):
         """Carrega as configurações do arquivo YAML. Cria um padrão se não existir."""
         if not CONFIG_FILE.exists():
@@ -32,7 +114,10 @@ class ConfigManager:
             
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                self.config = yaml.safe_load(f) or {}
+                raw_config = yaml.safe_load(f) or {}
+                
+            self.config = self._sanitize_mojibake(raw_config)
+            has_mojibake = (raw_config != self.config)
                 
             # Garante valores default caso o arquivo exista mas falte alguma chave
             if "general" not in self.config:
@@ -48,33 +133,10 @@ class ConfigManager:
                 self.config["pipeline"] = {}
             pipe = self.config["pipeline"]
             if "stages" not in pipe:
-                pipe["stages"] = [
-                    {
-                        "id": "ingestion",
-                        "name": "Ingestão de Arquivos (SD -> SSD)",
-                        "module": "src.modules.ingestion.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "planning",
-                        "name": "Planejamento e Metadados (Staging)",
-                        "module": "src.modules.planning.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "organize",
-                        "name": "Organização Física (SSD)",
-                        "module": "src.modules.organize.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "cleanup",
-                        "name": "Limpeza da Origem (Após verificação)",
-                        "module": "src.modules.cleanup.stage",
-                        "enabled": True
-                    }
-                ]
+                pipe["stages"] = self._get_default_stages()
                 self.save()  # Auto-save para popular o disco
+            elif has_mojibake:
+                self.save()
         except Exception as e:
             print(f"Erro ao carregar configurações: {e}")
             self.config = {}
@@ -90,62 +152,7 @@ class ConfigManager:
                 "last_project": None
             },
             "pipeline": {
-                "stages": [
-                    {
-                        "id": "ingestion",
-                        "name": "Ingestão de Arquivos (SD -> SSD)",
-                        "module": "src.modules.ingestion.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "planning",
-                        "name": "Planejamento e Metadados (Staging)",
-                        "module": "src.modules.planning.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "organize",
-                        "name": "Organização Física (SSD)",
-                        "module": "src.modules.organize.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "cleanup",
-                        "name": "Limpeza da Origem (Após verificação)",
-                        "module": "src.modules.cleanup.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "astro_stack",
-                        "name": "Empilhamento Lunar (PSS -> 8_Astro_Stack)",
-                        "module": "src.modules.astro_stack.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "astro_sharpen",
-                        "name": "Aprimoramento Wavelets (9_Astro_Sharpening)",
-                        "module": "src.modules.astro_sharpen.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "timelapse",
-                        "name": "Renderização de Timelapses (Fotos -> 4K)",
-                        "module": "src.modules.timelapse.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "video_edit",
-                        "name": "Edição e Upscale 4K de Vídeos (Lanczos/GPU)",
-                        "module": "src.modules.video_edit.stage",
-                        "enabled": True
-                    },
-                    {
-                        "id": "youtube",
-                        "name": "Publicação no YouTube (Timelapses e Vídeos)",
-                        "module": "src.modules.youtube.stage",
-                        "enabled": True
-                    }
-                ]
+                "stages": self._get_default_stages()
             },
             "naming": {
                 "photo_pattern": "{date}_{time}_{camera}_{resolution}_{dimensions}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}",

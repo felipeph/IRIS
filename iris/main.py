@@ -1,5 +1,18 @@
 import sys
 import time
+
+# Garante suporte completo a UTF-8 no console do Windows
+if sys.platform == "win32":
+    try:
+        if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+        if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+        if sys.stdin and hasattr(sys.stdin, "reconfigure"):
+            sys.stdin.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
