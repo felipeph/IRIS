@@ -156,6 +156,7 @@ def test_process_and_save_frame_single_pass(tmp_path: Path):
     direct_out = tmp_path / "subfolder" / "direct_frame.tiff"
     meta = process_and_save_frame(test_raw, crop_size=160, gain=2.0, output_tiff_path=direct_out, fast_demosaic=True)
 
+    assert meta["success"] is True
     assert meta["filename"] == "synthetic_moon_direct.tiff"
     assert meta["peak"] == 25000.0
     assert direct_out.exists()
@@ -163,6 +164,27 @@ def test_process_and_save_frame_single_pass(tmp_path: Path):
     result_data = _read_tiff(direct_out)
     assert result_data.shape == (160, 160)
     assert result_data[80, 80] == 50000
+
+
+def test_process_and_save_frame_edge_skipped(tmp_path: Path):
+    from src.modules.astro_stack.preprocessor import _write_tiff
+
+    # Cria imagem sintética onde a lua toca a borda inferior (y=299)
+    test_raw = tmp_path / "synthetic_moon_border.tiff"
+    img = np.zeros((300, 300), dtype=np.uint16)
+    y, x = np.ogrid[:300, :300]
+    dist = np.sqrt((x - 150)**2 + (y - 280)**2)
+    img[dist <= 40] = 25000
+    _write_tiff(test_raw, img)
+
+    direct_out = tmp_path / "subfolder" / "direct_border.tiff"
+    meta = process_and_save_frame(test_raw, crop_size=160, gain=2.0, output_tiff_path=direct_out, fast_demosaic=True)
+
+    # Não deve quebrar com exceção não tratada e deve indicar success=False
+    assert meta["success"] is False
+    assert "toca a borda" in meta["error"]
+    assert not direct_out.exists()
+
 
 
 

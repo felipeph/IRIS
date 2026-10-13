@@ -131,30 +131,41 @@ def process_and_save_frame(
     aplica ganho escalar e grava diretamente o TIFF final pronto para o PSS.
     
     Elimina qualquer necessidade de arquivos ou pastas temporárias intermediárias.
+    Retorna dicionário com success=True ou success=False em caso de borda tocada / falha.
     """
     path = Path(file_path)
     out_path = Path(output_tiff_path)
 
-    img = read_mono(path, fast_demosaic=fast_demosaic)
-    bounds = moon_bounds(img)
-    peak = float(np.max(img))
-    cropped = centred_crop(img, crop_size, bounds=bounds)
+    try:
+        img = read_mono(path, fast_demosaic=fast_demosaic)
+        bounds = moon_bounds(img)
+        peak = float(np.max(img))
+        cropped = centred_crop(img, crop_size, bounds=bounds)
 
-    if abs(gain - 1.0) >= 1e-4:
-        scaled = np.uint16(np.clip(cropped.astype(np.float32) * gain, 0, 65535))
-    else:
-        scaled = cropped
+        if abs(gain - 1.0) >= 1e-4:
+            scaled = np.uint16(np.clip(cropped.astype(np.float32) * gain, 0, 65535))
+        else:
+            scaled = cropped
 
-    _write_tiff(out_path, scaled)
+        _write_tiff(out_path, scaled)
 
-    return {
-        "file": str(path),
-        "filename": path.name,
-        "tiff_path": str(out_path),
-        "shape": list(img.shape),
-        "moon_bounds": list(bounds),
-        "peak": peak,
-    }
+        return {
+            "success": True,
+            "file": str(path),
+            "filename": path.name,
+            "tiff_path": str(out_path),
+            "shape": list(img.shape),
+            "moon_bounds": list(bounds),
+            "peak": peak,
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "file": str(path),
+            "filename": path.name,
+            "error": str(exc),
+        }
+
 
 
 def process_single_frame(

@@ -163,6 +163,8 @@ def main():
     metadata = [None] * len(files)
     t_start_decode = time.monotonic()
     completed_decode = 0
+    valid_count = 0
+    skipped_count = 0
 
     executor = ProcessPoolExecutor(max_workers=max_workers)
     try:
@@ -184,18 +186,27 @@ def main():
             metadata[idx] = res
             completed_decode += 1
 
+            if res.get("success"):
+                valid_count += 1
+            else:
+                skipped_count += 1
+
             pct = 5.0 + ((completed_decode / len(files)) * 40.0)
             now = time.monotonic()
             fps = completed_decode / max(0.001, now - t_start_decode)
             rem_s = (len(files) - completed_decode) / max(0.1, fps)
 
+            msg = f"Lendo e preparando {valid_count}/{len(files)} ({fps:.1f} fps)"
+            if skipped_count > 0:
+                msg += f" [Descartados: {skipped_count}]"
+
             print(
-                f"PROGRESS_JSON:{json.dumps({'phase': 'decode', 'current': completed_decode, 'total': len(files), 'fps': round(fps, 2), 'rem_seconds': round(rem_s, 1), 'item': f.name, 'crop_size': crop_size, 'gain': gain, 'progress_pct': pct, 'msg': f'Lendo e preparando {completed_decode}/{len(files)} ({fps:.1f} fps)'})}",
+                f"PROGRESS_JSON:{json.dumps({'phase': 'decode', 'current': completed_decode, 'valid': valid_count, 'skipped': skipped_count, 'total': len(files), 'fps': round(fps, 2), 'rem_seconds': round(rem_s, 1), 'item': f.name, 'crop_size': crop_size, 'gain': gain, 'progress_pct': pct, 'msg': msg})}",
                 flush=True,
             )
             if completed_decode % 10 == 0 or completed_decode == len(files):
                 print(
-                    f"PROGRESS: Lendo e preparando {f.name} ({completed_decode}/{len(files)}) [{fps:.1f} fps]",
+                    f"PROGRESS: Lendo e preparando {f.name} ({valid_count}/{completed_decode}) [{fps:.1f} fps]",
                     flush=True,
                 )
     except Exception as exc:
@@ -203,6 +214,14 @@ def main():
         raise exc
     finally:
         executor.shutdown(wait=False)
+
+    if valid_count < 2:
+        print(f"ERRO: Menos de 2 imagens válidas após descarte de borda. Válidas: {valid_count}, Descartadas: {skipped_count}", file=sys.stderr)
+        sys.exit(2)
+
+    if skipped_count > 0:
+        print(f"STATUS: Preparação concluída: {valid_count} frames válidos prontos para PSS ({skipped_count} fotos na borda descartadas).", flush=True)
+
 
 
     # Extrai metadados de câmera/data do primeiro arquivo
