@@ -10,6 +10,8 @@ import sys
 import time
 from uuid import uuid4
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 import cv2
 import numpy as np
 import tifffile
@@ -19,7 +21,14 @@ MODULE_DIR = Path(__file__).resolve().parent
 if str(MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(MODULE_DIR))
 
-from preprocessor import read_mono, moon_bounds, centred_crop, calculate_sequence_gain
+from preprocessor import (
+    read_mono,
+    moon_bounds,
+    centred_crop,
+    calculate_sequence_gain,
+    process_single_frame,
+    scale_single_frame,
+)
 from namer import build_stack_filename, build_preview_filename, build_report_filename
 
 
@@ -34,6 +43,7 @@ def parse_args():
     parser.add_argument("--align-search-width", "--align_search_width", type=int, default=20, help="Largura de busca dos pontos de alinhamento")
     parser.add_argument("--stab-mode", type=str, default="Surface", choices=["Surface", "Planet"], help="Modo de estabilização")
     parser.add_argument("--vendor-dir", type=Path, default=None, help="Caminho para vendor/PlanetarySystemStacker")
+    parser.add_argument("--workers", type=int, default=None, help="Número de workers paralelos para decodificação (auto)")
     parser.add_argument("--timeout", type=int, default=600, help="Timeout do processo PSS em segundos")
     return parser.parse_args()
 
@@ -88,48 +98,96 @@ def main():
     run_id = f"run_{time.strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     run_dir = output_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir = run_dir / "temp_frames"
+    temp_dir.mkdir(parents=True, exist_ok=True)
     prepared_dir = run_dir / "frames"
     prepared_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"STATUS: Início da sessão. Encontrados {len(files)} arquivos.", flush=True)
+    max_workers = args.workers if args.workers is not None and args.workers > 0 else min(os.cpu_count() or 4, 4)
+    print(f"STATUS: Início da sessão. Encontrados {len(files)} arquivos. Workers paralelos: {max_workers}", flush=True)
 
-    # 1. Leitura e análise dos frames
-    metadata = []
-    images = []
-    for idx, f in enumerate(files):
-        pct = (idx + 1) / len(files) * 30.0
-        print(f"PROGRESS_JSON:{json.dumps({'phase': 'decode', 'current': idx + 1, 'total': len(files), 'item': f.name, 'progress_pct': pct, 'msg': f'Lendo e analisando frame {idx + 1}/{len(files)}'})}", flush=True)
-        print(f"PROGRESS: Lendo e decodificando {f.name} ({idx + 1}/{len(files)})", flush=True)
-        img = read_mono(f)
-        bounds = moon_bounds(img)
-        images.append(img)
-        metadata.append({
-            "file": str(f),
-            "filename": f.name,
-            "shape": list(img.shape),
-            "moon_bounds": list(bounds),
-        })
+    # 1. Determinação da geometria e dimensão de corte comum (crop_size)
+    if args.crop_size is not None and args.crop_size > 0:
+        crop_size = args.crop_size
+        print(f"STATUS: Dimensão de corte pré-definida via argumento: {crop_size}x{crop_size}", flush=True)
+    else:
+        # Amostragem representativa rápida de até 10 frames distribuídos
+        sample_count = min(10, len(files))
+        sample_indices = np.linspace(0, len(files) - 1, sample_count, dtype=int).tolist()
+        sample_bounds = []
+        for s_idx in sample_indices:
+            sf = files[s_idx]
+            try:
+                s_img = read_mono(sf, fast_demosaic=True)
+                s_b = moon_bounds(s_img)
+                sample_bounds.append(s_b)
+            except Exception as e:
+                print(f"AVISO: Falha ao detectar disco na amostra {sf.name}: {e}", file=sys.stderr)
 
-    # 2. Definição da dimensão e ganho comum
-    crop_size = args.crop_size or int(math.ceil((max(max(m["moon_bounds"][2:]) for m in metadata) + args.margin) / 16.0) * 16)
-    if crop_size <= 0:
-        raise ValueError(f"Dimensão de corte inválida: {crop_size}")
+        if not sample_bounds:
+            raise ValueError("Não foi possível detectar a Lua nos frames de amostragem da sessão.")
 
-    peak_global = max(float(np.max(im)) for im in images)
-    gain = calculate_sequence_gain(peak_global)
-    print(f"PROGRESS_JSON:{json.dumps({'phase': 'geometry', 'crop_size': crop_size, 'gain': gain, 'progress_pct': 30.0, 'msg': f'Dimensões: {crop_size}x{crop_size} | Ganho: {gain:.3f}x'})}", flush=True)
-    print(f"STATUS: Dimensão calculada: {crop_size}x{crop_size}. Ganho linear compartilhado: {gain:.4f}", flush=True)
+        max_dim = max(max(b[2:]) for b in sample_bounds)
+        crop_size = int(math.ceil((max_dim + args.margin) / 16.0) * 16)
+        if crop_size <= 0:
+            raise ValueError(f"Dimensão de corte calculada inválida: {crop_size}")
 
-    # 3. Preparação dos frames centralizados
-    for idx, (img, m) in enumerate(zip(images, metadata)):
-        cropped = centred_crop(img, crop_size)
-        mono_prepared = np.uint16(np.clip(cropped.astype(np.float32) * gain, 0, 65535))
-        frame_name = f"frame_{idx:04d}.tiff"
-        tifffile.imwrite(prepared_dir / frame_name, mono_prepared, photometric="minisblack")
-        if (idx + 1) % 5 == 0 or (idx + 1) == len(images):
-            pct = 30.0 + ((idx + 1) / len(images) * 15.0)
-            print(f"PROGRESS_JSON:{json.dumps({'phase': 'prep', 'current': idx + 1, 'total': len(images), 'item': frame_name, 'crop_size': crop_size, 'gain': gain, 'progress_pct': pct, 'msg': f'Centralizando frame {idx + 1}/{len(images)}'})}", flush=True)
-    del images  # Libera memória imediatamente
+    print(f"STATUS: Dimensão de corte calculada: {crop_size}x{crop_size} (Margem: {args.margin}px)", flush=True)
+
+    # 2. Leitura, recorte centrado e extração em streaming paralelo (sem acúmulo de RAM)
+    metadata = [None] * len(files)
+    t_start_decode = time.monotonic()
+    completed_decode = 0
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(process_single_frame, f, crop_size, temp_dir / f"raw_{idx:04d}.tiff", True): (idx, f)
+            for idx, f in enumerate(files)
+        }
+
+        for fut in as_completed(futures):
+            idx, f = futures[fut]
+            res = fut.result()
+            metadata[idx] = res
+            completed_decode += 1
+
+            pct = (completed_decode / len(files)) * 35.0
+            now = time.monotonic()
+            fps = completed_decode / max(0.001, now - t_start_decode)
+            rem_s = (len(files) - completed_decode) / max(0.1, fps)
+
+            print(f"PROGRESS_JSON:{json.dumps({'phase': 'decode', 'current': completed_decode, 'total': len(files), 'fps': round(fps, 2), 'rem_seconds': round(rem_s, 1), 'item': f.name, 'progress_pct': pct, 'msg': f'Lendo e recortando {completed_decode}/{len(files)} ({fps:.1f} fps)'})}", flush=True)
+            if completed_decode % 10 == 0 or completed_decode == len(files):
+                print(f"PROGRESS: Lendo e recortando {f.name} ({completed_decode}/{len(files)}) [{fps:.1f} fps]", flush=True)
+
+        # 3. Cálculo de ganho global da sequência
+        valid_peaks = [m["peak"] for m in metadata if m and "peak" in m]
+        peak_global = max(valid_peaks) if valid_peaks else 0.0
+        gain = calculate_sequence_gain(peak_global)
+
+        print(f"PROGRESS_JSON:{json.dumps({'phase': 'geometry', 'crop_size': crop_size, 'gain': gain, 'progress_pct': 35.0, 'msg': f'Dimensões: {crop_size}x{crop_size} | Ganho linear: {gain:.3f}x'})}", flush=True)
+        print(f"STATUS: Dimensão calculada: {crop_size}x{crop_size}. Ganho linear compartilhado: {gain:.4f}", flush=True)
+
+        # 4. Normalização de ganho e gravação final dos frames em prepared_dir
+        scale_futures = []
+        for idx, m in enumerate(metadata):
+            src_p = Path(m["temp_tiff"])
+            dst_p = prepared_dir / f"frame_{idx:04d}.tiff"
+            scale_futures.append(executor.submit(scale_single_frame, src_p, dst_p, gain))
+
+        scale_done = 0
+        for fut in as_completed(scale_futures):
+            fut.result()
+            scale_done += 1
+            if scale_done % 20 == 0 or scale_done == len(files):
+                pct = 35.0 + ((scale_done / len(files)) * 10.0)
+                print(f"PROGRESS_JSON:{json.dumps({'phase': 'prep', 'current': scale_done, 'total': len(files), 'item': f'frame_{scale_done:04d}.tiff', 'crop_size': crop_size, 'gain': gain, 'progress_pct': pct, 'msg': f'Normalizando ganho {scale_done}/{len(files)}'})}", flush=True)
+
+    # Limpeza dos frames temporários
+    try:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception:
+        pass
 
     # Extrai metadados de câmera/data do primeiro arquivo
     first_file = files[0].stem

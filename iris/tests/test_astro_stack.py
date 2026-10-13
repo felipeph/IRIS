@@ -19,6 +19,8 @@ from src.modules.astro_stack.preprocessor import (
     moon_bounds,
     centred_crop,
     calculate_sequence_gain,
+    process_single_frame,
+    scale_single_frame,
 )
 from src.modules.astro_stack.runner import find_astro_python, AstroStackRunner
 from src.modules.astro_stack.stage import AstroStackStage, get_stage as get_stack_stage
@@ -91,6 +93,10 @@ def test_moon_bounds_and_centred_crop():
     # O centro do crop deve conter o pico brilhante
     assert cropped[80, 80] == 45000
 
+    # Teste de recorte rápido com bounds pré-calculados (otimização de performance)
+    cropped_fast = centred_crop(img, size=160, bounds=(bx, by, bw, bh))
+    np.testing.assert_array_equal(cropped, cropped_fast)
+
 
 def test_calculate_sequence_gain():
     gain = calculate_sequence_gain(30000.0)
@@ -98,6 +104,40 @@ def test_calculate_sequence_gain():
 
     gain_zero = calculate_sequence_gain(0.0)
     assert gain_zero == 1.0
+
+
+def test_process_and_scale_single_frame(tmp_path: Path):
+    import cv2
+    from src.modules.astro_stack.preprocessor import _read_tiff, _write_tiff
+
+    # Cria imagem sintética e salva em disco como TIFF
+    test_raw = tmp_path / "synthetic_moon.tiff"
+    img = np.zeros((300, 300), dtype=np.uint16)
+    y, x = np.ogrid[:300, :300]
+    dist = np.sqrt((x - 150)**2 + (y - 150)**2)
+    img[dist <= 40] = 30000
+    _write_tiff(test_raw, img)
+
+    # 1. Processamento isolado (process_single_frame)
+    temp_out = tmp_path / "raw_cropped.tiff"
+    meta = process_single_frame(test_raw, crop_size=160, output_tiff_path=temp_out, fast_demosaic=True)
+
+    assert meta["filename"] == "synthetic_moon.tiff"
+    assert meta["peak"] == 30000.0
+    assert temp_out.exists()
+
+    cropped_data = _read_tiff(temp_out)
+    assert cropped_data.shape == (160, 160)
+    assert cropped_data[80, 80] == 30000
+
+    # 2. Normalização com ganho linear (scale_single_frame)
+    final_out = tmp_path / "final_frame.tiff"
+    scale_single_frame(temp_out, final_out, gain=2.0)
+
+    assert final_out.exists()
+    final_data = _read_tiff(final_out)
+    assert final_data.shape == (160, 160)
+    assert final_data[80, 80] == 60000
 
 
 # ==============================================================================
@@ -189,15 +229,19 @@ def test_pipeline_stages_instantiation():
 
 
 def test_stage_run_empty_project(tmp_path: Path):
+    empty_dst = tmp_path / "dst"
+    empty_dst.mkdir(parents=True, exist_ok=True)
     proj = Project("empty_astro_proj", str(tmp_path / "src"))
     s_stack = get_stack_stage("astro_stack", "Empilhamento Lunar")
-    # Sem imagens na sessão, o stage deve completar com sucesso (retorna True)
-    res_stack = s_stack.run(proj)
-    assert res_stack is True
 
-    s_sharpen = get_sharpen_stage("astro_sharpen", "Aprimoramento de Astrofotografia")
-    res_sharpen = s_sharpen.run(proj)
-    assert res_sharpen is True
+    with patch("src.core.config.config.get", side_effect=lambda k, d=None: empty_dst if k in ("storage.destination_root", "general.destination_root") else d):
+        # Sem imagens na sessão, o stage deve completar com sucesso (retorna True)
+        res_stack = s_stack.run(proj)
+        assert res_stack is True
+
+        s_sharpen = get_sharpen_stage("astro_sharpen", "Aprimoramento de Astrofotografia")
+        res_sharpen = s_sharpen.run(proj)
+        assert res_sharpen is True
 
 
 def test_namer_with_absolute_windows_paths():

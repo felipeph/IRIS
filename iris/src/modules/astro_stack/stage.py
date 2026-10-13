@@ -141,14 +141,30 @@ class AstroStackStage(PipelineStage):
             crop_size = 0
             shared_gain = 1.0
             completed_stacks: Dict[str, str] = {}
+            current_phase = "init"
+            decode_fps = 0.0
+            decode_rem_seconds = 0.0
+            last_kp_time = None
+            kp_durations: List[float] = []
 
             def make_renderable():
                 now = time.time()
                 elapsed = now - t0
                 elapsed_str = str(datetime.timedelta(seconds=int(elapsed)))
-                if progress_pct > 0:
+
+                remaining = None
+                if current_phase == "decode" and decode_rem_seconds > 0:
+                    kps_left = max(0, len(keep_percents) - len(completed_stacks))
+                    remaining = decode_rem_seconds + (kps_left * 60.0)
+                elif current_phase in ("pss", "kp_done") and kp_durations:
+                    avg_kp = sum(kp_durations) / len(kp_durations)
+                    kps_left = max(0, len(keep_percents) - len(completed_stacks))
+                    remaining = kps_left * avg_kp
+                elif progress_pct > 5.0:
                     total_est = elapsed / (progress_pct / 100.0)
-                    remaining = max(0, total_est - elapsed)
+                    remaining = max(0.0, total_est - elapsed)
+
+                if remaining is not None and remaining >= 0:
                     eta_str = str(datetime.timedelta(seconds=int(remaining)))
                     end_dt = datetime.datetime.now() + datetime.timedelta(seconds=int(remaining))
                     previsao_str = end_dt.strftime("%H:%M:%S")
@@ -177,19 +193,32 @@ class AstroStackStage(PipelineStage):
                 with Live(make_renderable(), console=console, refresh_per_second=4) as live:
                     def on_progress(event_or_msg, pct_val):
                         nonlocal current_phase_msg, current_item, progress_pct, crop_size, shared_gain, completed_stacks
+                        nonlocal current_phase, decode_fps, decode_rem_seconds, last_kp_time
+                        now_ev = time.time()
                         if isinstance(event_or_msg, dict):
+                            current_phase = event_or_msg.get("phase", current_phase)
                             current_phase_msg = event_or_msg.get("msg", current_phase_msg)
                             current_item = event_or_msg.get("item", current_item)
                             if "progress_pct" in event_or_msg:
                                 progress_pct = float(event_or_msg["progress_pct"])
+                            if "fps" in event_or_msg:
+                                decode_fps = float(event_or_msg["fps"])
+                            if "rem_seconds" in event_or_msg:
+                                decode_rem_seconds = float(event_or_msg["rem_seconds"])
                             if "crop_size" in event_or_msg and event_or_msg["crop_size"]:
                                 crop_size = int(event_or_msg["crop_size"])
                             if "gain" in event_or_msg and event_or_msg["gain"]:
                                 shared_gain = float(event_or_msg["gain"])
                             if "completed_stacks" in event_or_msg:
                                 completed_stacks.update(event_or_msg["completed_stacks"])
+                            if event_or_msg.get("phase") == "pss":
+                                if last_kp_time is None:
+                                    last_kp_time = now_ev
                             if event_or_msg.get("phase") == "kp_done" and "kp" in event_or_msg:
                                 completed_stacks[str(event_or_msg["kp"])] = event_or_msg.get("filename", "")
+                                if last_kp_time is not None:
+                                    kp_durations.append(now_ev - last_kp_time)
+                                last_kp_time = now_ev
                         else:
                             current_phase_msg = str(event_or_msg)
                             if pct_val is not None:

@@ -1,7 +1,7 @@
 """Pré-processamento e normalização geométrica de frames lunares para empilhamento."""
 import math
 from pathlib import Path
-from typing import Tuple, List, Dict, Any, Union
+from typing import Tuple, List, Dict, Any, Union, Optional
 
 import numpy as np
 
@@ -31,12 +31,17 @@ def moon_bounds(image: np.ndarray) -> Tuple[int, int, int, int]:
     return x, y, width, height
 
 
-def centred_crop(image: np.ndarray, size: int) -> np.ndarray:
+def centred_crop(image: np.ndarray, size: int, bounds: Optional[Tuple[int, int, int, int]] = None) -> np.ndarray:
     """Aplica recorte centrado no disco lunar utilizando translação em pixels inteiros.
     
     Zero interpolação / redimensionamento para preservar a fidelidade dos dados brutos dos sensores.
+    Se bounds for fornecido, reaproveita as coordenadas evitando o recálculo redundante de moon_bounds.
     """
-    x, y, width, height = moon_bounds(image)
+    if bounds is not None:
+        x, y, width, height = bounds
+    else:
+        x, y, width, height = moon_bounds(image)
+
     if size < max(width, height) + 16:
         raise ValueError(f"Recorte {size} muito pequeno para a Lua ({width} x {height}).")
     left = int(round(x + (width - 1) / 2.0 - (size - 1) / 2.0))
@@ -48,7 +53,7 @@ def centred_crop(image: np.ndarray, size: int) -> np.ndarray:
     return out
 
 
-def read_mono(path: Union[str, Path]) -> np.ndarray:
+def read_mono(path: Union[str, Path], fast_demosaic: bool = True) -> np.ndarray:
     """Lê um arquivo RAW ou imagem convencional e retorna matriz monocromática uint16."""
     import cv2
     path = Path(path)
@@ -58,12 +63,15 @@ def read_mono(path: Union[str, Path]) -> np.ndarray:
         try:
             import rawpy
             with rawpy.imread(str(path)) as raw:
-                rgb = raw.postprocess(
-                    output_bps=16,
-                    no_auto_bright=True,
-                    use_camera_wb=True,
-                    gamma=(1, 1),
-                )
+                params = {
+                    "output_bps": 16,
+                    "no_auto_bright": True,
+                    "use_camera_wb": True,
+                    "gamma": (1, 1),
+                }
+                if fast_demosaic and hasattr(rawpy, "DemosaicAlgorithm"):
+                    params["demosaic_algorithm"] = rawpy.DemosaicAlgorithm.LINEAR
+                rgb = raw.postprocess(**params)
             return cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         except ImportError:
             raise RuntimeError(
@@ -90,3 +98,78 @@ def calculate_sequence_gain(peak_val: float) -> float:
     if peak_val <= 0:
         return 1.0
     return 60000.0 / peak_val
+
+
+def _write_tiff(path: Union[str, Path], img: np.ndarray) -> None:
+    try:
+        import tifffile
+        tifffile.imwrite(path, img, photometric="minisblack")
+    except ImportError:
+        import cv2
+        cv2.imwrite(str(path), img)
+
+
+def _read_tiff(path: Union[str, Path]) -> np.ndarray:
+    try:
+        import tifffile
+        return tifffile.imread(path)
+    except ImportError:
+        import cv2
+        return cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+
+
+def process_single_frame(
+    file_path: Union[str, Path],
+    crop_size: int,
+    output_tiff_path: Union[str, Path],
+    fast_demosaic: bool = True,
+) -> Dict[str, Any]:
+    """Processa um frame isolado: decodifica, localiza bounds, recorta e grava TIFF intermediário.
+    
+    Retorna dicionário com metadados para evitar acúmulo de matrizes brutas na memória RAM.
+    """
+    path = Path(file_path)
+    out_path = Path(output_tiff_path)
+
+    img = read_mono(path, fast_demosaic=fast_demosaic)
+    bounds = moon_bounds(img)
+    peak = float(np.max(img))
+    cropped = centred_crop(img, crop_size, bounds=bounds)
+
+    _write_tiff(out_path, cropped)
+
+    return {
+        "file": str(path),
+        "filename": path.name,
+        "temp_tiff": str(out_path),
+        "shape": list(img.shape),
+        "moon_bounds": list(bounds),
+        "peak": peak,
+    }
+
+
+def scale_single_frame(
+    src_tiff_path: Union[str, Path],
+    dst_tiff_path: Union[str, Path],
+    gain: float,
+) -> None:
+    """Aplica ganho linear sobre o frame recortado temporário e salva o frame final do PSS."""
+    src_p = Path(src_tiff_path)
+    dst_p = Path(dst_tiff_path)
+
+    if abs(gain - 1.0) < 1e-4:
+        if src_p != dst_p:
+            if dst_p.exists():
+                dst_p.unlink()
+            src_p.rename(dst_p)
+        return
+
+    img = _read_tiff(src_p)
+    scaled = np.uint16(np.clip(img.astype(np.float32) * gain, 0, 65535))
+    _write_tiff(dst_p, scaled)
+
+    if src_p != dst_p and src_p.exists():
+        try:
+            src_p.unlink()
+        except Exception:
+            pass

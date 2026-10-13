@@ -106,6 +106,9 @@ class AstroStackRunner:
         ]
         if crop_size is not None:
             cmd.extend(["--crop-size", str(crop_size)])
+        workers = config.get("modules.astro_stack.workers", None)
+        if workers:
+            cmd.extend(["--workers", str(workers)])
         if vendor_dir.exists():
             cmd.extend(["--vendor-dir", str(vendor_dir)])
 
