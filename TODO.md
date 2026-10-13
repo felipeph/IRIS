@@ -1,5 +1,6 @@
 # Projeto IRIS - TODO List
 
+- [ ] **feat**: Painel Rich vertical para progresso do empilhamento lunar (Astro Stack), consolidação de notificações (disparo único por lote em Stacking e Sharpening) e expansão da família de presets RegiStax com foco em ruído e iluminação ('registax_clean', 'registax_iluminado', 'registax_pro', 'registax_dinamico'). *(Adicionado em: 12/10/2026 23:10)*
 - [ ] **feat**: Implementar módulo local de visão computacional (GPU/on-device, via YOLO ou classificador leve) para inferência em amostragem de frames e extração automática de palavras-chave/tags da cena (ex: nuvens, sol, chuva, pássaros) sem custo de tokens ou dependência de APIs externas. *(Adicionado em: 22/09/2026 22:06)*
 - [ ] **feat**: Criar módulo de geração de thumbnails para o YouTube com sobreposição discreta de metadados sobre um frame (data/hora do timelapse, velocidade em relação ao tempo real, resolução final, FPS e localização da captura). *(Adicionado em: 22/09/2026 22:02)*
 
