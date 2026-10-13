@@ -48,24 +48,22 @@ class AstroStackStage(PipelineStage):
         for it in project.items:
             rel_dest = getattr(it, "relative_dest_dir", "") or ""
             if "5_Astrofotografia" in rel_dest or "astro_lua" in getattr(it, "category", ""):
-                # Resolve caminho físico
-                p = dest_root / rel_dest / it.target_filename if hasattr(it, "target_filename") and it.target_filename else dest_root / rel_dest / Path(it.original_path).name
-                if p.exists() and p.is_file():
+                # Resolve caminho físico priorizando organized_path, staging_path e dest_root
+                p = None
+                if getattr(it, "organized_path", None) and Path(it.organized_path).exists():
+                    p = Path(it.organized_path)
+                elif getattr(it, "staging_path", None) and Path(it.staging_path).exists():
+                    p = Path(it.staging_path)
+                else:
+                    cand = dest_root / rel_dest / it.target_filename if hasattr(it, "target_filename") and it.target_filename else dest_root / rel_dest / Path(it.original_path).name
+                    if cand.exists():
+                        p = cand
+                if p and p.is_file():
                     sessions.setdefault(rel_dest, []).append(p)
 
-        # 2. Se nenhuma sessão mapeada pelos items, faz scan na pasta 5_Astrofotografia/Lua
-        astro_root = dest_root / "5_Astrofotografia" / "Lua"
-        if not sessions and astro_root.exists():
-            extensions = {".cr2", ".cr3", ".nef", ".arw", ".dng", ".raw", ".tif", ".tiff", ".png", ".jpg"}
-            for sess_dir in astro_root.rglob("sessao_*"):
-                if sess_dir.is_dir():
-                    raws = sorted(p for p in sess_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions and not p.name.startswith("."))
-                    if len(raws) >= 2:
-                        rel_key = str(sess_dir.relative_to(dest_root)).replace("\\", "/")
-                        sessions[rel_key] = raws
-
-        # 3. Se nenhuma sessão encontrada, verifica se o source_path do projeto aponta diretamente para uma sessão ou raiz com fotos
-        if not sessions and getattr(project, "source_path", None):
+        # 2. Se o projeto não possui itens ingeridos (ex: projeto avulso apontando diretamente para pasta),
+        # verifica se o source_path aponta diretamente para uma sessão ou raiz com fotos
+        if not sessions and len(project.items) == 0 and getattr(project, "source_path", None):
             src_p = Path(project.source_path)
             if src_p.exists() and src_p.is_dir():
                 extensions = {".cr2", ".cr3", ".nef", ".arw", ".dng", ".raw", ".tif", ".tiff", ".png", ".jpg"}
@@ -92,7 +90,7 @@ class AstroStackStage(PipelineStage):
                                 sessions[rel_key] = raws
 
         if not sessions:
-            console.print("[dim]Nenhuma sessão de fotos lunares encontrada em '5_Astrofotografia/Lua' ou na origem. Prosseguindo.[/dim]")
+            console.print(f"[cyan]Nenhum arquivo de astrofotografia lunar identificado no projeto '{project.name}'. Etapa concluída.[/cyan]")
             return True
 
         runner = AstroStackRunner()

@@ -60,15 +60,9 @@ class AstroSharpenStage(PipelineStage):
                         if "preview" not in tiff_f.name and tiff_f not in stacks_to_process:
                             stacks_to_process.append(tiff_f)
 
-        # 2. Se nenhum registro no DB, faz scan direto em 8_Astro_Stack
-        stack_root = dest_root / "8_Astro_Stack"
-        if not stacks_to_process and stack_root.exists():
-            for tiff_f in stack_root.rglob("*.tif*"):
-                if tiff_f.is_file() and not tiff_f.name.startswith(".") and "preview" not in tiff_f.name.lower():
-                    stacks_to_process.append(tiff_f)
-
-        # 3. Se nenhum stack encontrado, faz scan no source_path do projeto
-        if not stacks_to_process and getattr(project, "source_path", None):
+        # 2. Se nenhum registro no DB e o projeto não possui itens ingeridos (ex: projeto avulso direto em pasta),
+        # verifica se o source_path possui arquivos TIFF
+        if not stacks_to_process and len(project.items) == 0 and getattr(project, "source_path", None):
             src_p = Path(project.source_path)
             if src_p.exists() and src_p.is_dir():
                 for tiff_f in src_p.rglob("*.tif*"):
@@ -76,7 +70,7 @@ class AstroSharpenStage(PipelineStage):
                         stacks_to_process.append(tiff_f)
 
         if not stacks_to_process:
-            console.print("[dim]Nenhum arquivo TIFF empilhado encontrado em '8_Astro_Stack' ou na origem. Prosseguindo.[/dim]")
+            console.print(f"[cyan]Nenhum arquivo TIFF empilhado identificado no projeto '{project.name}'. Etapa concluída.[/cyan]")
             return True
 
         console.print(f"Encontrados [bold green]{len(stacks_to_process)}[/bold green] stack(s) TIFF para aprimoramento.")

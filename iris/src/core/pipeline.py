@@ -8,7 +8,16 @@ from rich.console import Console
 console = Console()
 
 class PipelineStage(ABC):
-    """Classe base para todas as etapas do pipeline."""
+    """Classe base para todas as etapas do pipeline.
+    
+    Princípio de Isolamento de Projeto:
+    Cada PipelineStage deve processar exclusivamente itens e artefatos pertencentes
+    ao `Project` fornecido (project.items ou tabelas internas do projeto).
+    É terminantemente proibido realizar varreduras em diretórios globais de destino
+    (ex: dest_root) como fallback para encontrar trabalho.
+    Se um projeto não possuir itens da categoria esperada pelo estágio, a etapa
+    deve ser ignorada graciosamente retornando True.
+    """
     
     def __init__(self, stage_id: str, name: str):
         self.stage_id = stage_id

@@ -331,3 +331,122 @@ def test_stage_source_path_session_discovery(tmp_path: Path):
                 assert success is True
                 assert mock_runner.run_session.called
 
+
+def test_astro_stack_ignores_dest_root_sessions(tmp_path: Path):
+    """Garante que sessões históricas em dest_root não sejam empilhadas se não pertencerem ao projeto."""
+    dest_root = tmp_path / "dest"
+    old_session = dest_root / "5_Astrofotografia" / "Lua" / "2026" / "09" / "02" / "sessao_23-55-59"
+    old_session.mkdir(parents=True, exist_ok=True)
+    (old_session / "moon1.cr2").write_bytes(b"\x00" * 100)
+    (old_session / "moon2.cr2").write_bytes(b"\x00" * 100)
+
+    with patch("src.core.project.PROJECTS_DIR", tmp_path):
+        proj = Project("timelapse_proj", str(tmp_path / "src"))
+        from src.core.project import ProjectItem
+        tl_item = ProjectItem(
+            original_path=str(tmp_path / "src" / "tl_001.jpg"),
+            staging_path=str(tmp_path / "staging" / "tl_001.jpg"),
+            relative_dest_dir="4_Timelapses/GoPro/2026/10/12/timelapse_18-00-00",
+            target_filename="tl_001.jpg",
+            category="timelapse",
+            status="organized",
+            verified=True,
+        )
+        proj.items = [tl_item]
+
+        s_stack = get_stack_stage("astro_stack", "Empilhamento Lunar")
+
+        with patch("src.core.config.config.get", side_effect=lambda k, d=None: dest_root if "destination_root" in k else d):
+            with patch("src.modules.astro_stack.stage.AstroStackRunner") as mock_runner_cls:
+                mock_runner = MagicMock()
+                mock_runner_cls.return_value = mock_runner
+                res = s_stack.run(proj)
+                assert res is True
+                # Runner NÃO deve ser chamado pois as fotos de old_session não pertencem ao projeto!
+                assert not mock_runner.run_session.called
+
+
+def test_astro_sharpen_ignores_dest_root_stacks(tmp_path: Path):
+    """Garante que stacks TIFF históricos em dest_root não sejam aprimorados se não pertencerem ao projeto."""
+    dest_root = tmp_path / "dest"
+    old_stack_dir = dest_root / "8_Astro_Stack" / "Lua" / "2026" / "09" / "02" / "sessao_23-55-59"
+    old_stack_dir.mkdir(parents=True, exist_ok=True)
+    (old_stack_dir / "old_stack.tiff").write_bytes(b"\x00" * 100)
+
+    with patch("src.core.project.PROJECTS_DIR", tmp_path):
+        proj = Project("timelapse_proj", str(tmp_path / "src"))
+        from src.core.project import ProjectItem
+        tl_item = ProjectItem(
+            original_path=str(tmp_path / "src" / "tl_001.jpg"),
+            staging_path=str(tmp_path / "staging" / "tl_001.jpg"),
+            relative_dest_dir="4_Timelapses/GoPro/2026/10/12/timelapse_18-00-00",
+            target_filename="tl_001.jpg",
+            category="timelapse",
+            status="organized",
+            verified=True,
+        )
+        proj.items = [tl_item]
+
+        s_sharpen = get_sharpen_stage("astro_sharpen", "Aprimoramento de Astrofotografia")
+
+        with patch("src.core.config.config.get", side_effect=lambda k, d=None: dest_root if "destination_root" in k else d):
+            with patch("src.modules.astro_sharpen.stage.process_and_export_all_presets") as mock_sharpen:
+                res = s_sharpen.run(proj)
+                assert res is True
+                assert not mock_sharpen.called
+
+
+def test_astro_stack_processes_project_lunar_items(tmp_path: Path):
+    """Garante que fotos de astrofotografia lunar pertencentes ao projeto sejam processadas normalmente."""
+    dest_root = tmp_path / "dest"
+    lunar_dir = dest_root / "5_Astrofotografia" / "Lua" / "2026" / "10" / "13" / "sessao_20-00-00"
+    lunar_dir.mkdir(parents=True, exist_ok=True)
+    f1 = lunar_dir / "moon1.cr2"
+    f2 = lunar_dir / "moon2.cr2"
+    f1.write_bytes(b"\x00" * 100)
+    f2.write_bytes(b"\x00" * 100)
+
+    with patch("src.core.project.PROJECTS_DIR", tmp_path):
+        proj = Project("lunar_valid_proj", str(tmp_path / "src"))
+        from src.core.project import ProjectItem
+        it1 = ProjectItem(
+            original_path=str(f1),
+            staging_path=str(f1),
+            organized_path=str(f1),
+            relative_dest_dir="5_Astrofotografia/Lua/2026/10/13/sessao_20-00-00",
+            target_filename="moon1.cr2",
+            category="astro_lua",
+            status="organized",
+            verified=True,
+        )
+        it2 = ProjectItem(
+            original_path=str(f2),
+            staging_path=str(f2),
+            organized_path=str(f2),
+            relative_dest_dir="5_Astrofotografia/Lua/2026/10/13/sessao_20-00-00",
+            target_filename="moon2.cr2",
+            category="astro_lua",
+            status="organized",
+            verified=True,
+        )
+        proj.items = [it1, it2]
+
+        s_stack = get_stack_stage("astro_stack", "Empilhamento Lunar")
+
+        with patch("src.core.config.config.get", side_effect=lambda k, d=None: dest_root if "destination_root" in k else d):
+            with patch("src.modules.astro_stack.stage.AstroStackRunner") as mock_runner_cls:
+                mock_runner = MagicMock()
+                mock_runner.is_available.return_value = True
+                mock_runner.run_session.return_value = {
+                    "output_tiff_paths": {"10": str(dest_root / "out.tiff")},
+                    "crop_size": 200,
+                    "shared_gain": 1.5,
+                }
+                mock_runner_cls.return_value = mock_runner
+                with patch("src.modules.astro_stack.stage.send_windows_toast"), \
+                     patch("src.modules.astro_stack.stage.send_ntfy_notification"):
+                    res = s_stack.run(proj, force=True)
+                    assert res is True
+                    assert mock_runner.run_session.called
+
+
