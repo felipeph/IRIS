@@ -128,7 +128,7 @@ def test_presets_execution(synthetic_moon_16bit: Path):
     assert img_float.shape == (300, 300, 3)
 
     all_presets = list(LunarWaveletEngine.PRESETS.keys())
-    assert len(all_presets) == 12
+    assert len(all_presets) == 16
 
     for preset_name in all_presets:
         out = engine.process_preset(img_float, preset_name=preset_name, use_limb_guard=True)
@@ -295,10 +295,58 @@ def test_process_and_export_registax_group(synthetic_moon_16bit: Path, tmp_path:
         export_tiff=True,
     )
 
-    expected = ["registax_fiel", "registax_limb_guard", "registax_plus", "registax_mineral"]
-    assert len(results) == 4
+    expected = [
+        "registax_fiel",
+        "registax_clean",
+        "registax_iluminado",
+        "registax_pro",
+        "registax_dinamico",
+        "registax_limb_guard",
+        "registax_plus",
+        "registax_mineral",
+    ]
+    assert len(results) == len(expected)
     for p in expected:
         assert p in results
+        assert results[p]["tiff"].exists()
+        assert results[p]["png"].exists()
+
+
+def test_new_registax_variations_properties(synthetic_moon_16bit: Path, tmp_path: Path):
+    """Valida as características técnicas e físicas das novas variações RegiStax."""
+    engine = LunarWaveletEngine()
+    presets = engine.PRESETS
+
+    # 1. registax_clean: denoise em 1px e 2px ativo com ganhos idênticos ao fiel
+    assert presets["registax_clean"]["gains"] == presets["registax_fiel"]["gains"]
+    assert presets["registax_clean"]["denoise"][0] > 0
+    assert presets["registax_clean"]["denoise"][1] > 0
+    assert presets["registax_clean"]["use_limb_guard"] is True
+
+    # 2. registax_iluminado: iluminação de tons médios ativa
+    assert presets["registax_iluminado"]["illumination_boost"] >= 1.10
+    assert presets["registax_iluminado"]["disable_stretch"] is False
+
+    # 3. registax_pro: união de micro-relevo + denoise + iluminação + limb guard
+    assert presets["registax_pro"]["denoise"][0] > 0
+    assert presets["registax_pro"]["illumination_boost"] >= 1.10
+    assert presets["registax_pro"]["use_limb_guard"] is True
+
+    # 4. registax_dinamico: clarity e curva S de relevo
+    assert presets["registax_dinamico"]["clarity_amount"] > 0
+    assert presets["registax_dinamico"]["s_curve_contrast"] > 1.0
+
+    # 5. Processamento com sucesso das novas variações
+    dest_dir = tmp_path / "novas_variacoes"
+    results = process_and_export_all_presets(
+        input_path=synthetic_moon_16bit,
+        output_dir=dest_dir,
+        presets=["registax_clean", "registax_iluminado", "registax_pro", "registax_dinamico"],
+        export_png=True,
+        export_tiff=True,
+    )
+    assert len(results) == 4
+    for p in ["registax_clean", "registax_iluminado", "registax_pro", "registax_dinamico"]:
         assert results[p]["tiff"].exists()
         assert results[p]["png"].exists()
 

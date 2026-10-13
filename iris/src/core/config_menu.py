@@ -483,7 +483,7 @@ def _menu_astro(console: Console):
         sharpen_enabled = config.get("modules.astro_sharpen.enabled", True)
         table.add_row("6", "Ativar Sharpening Wavelets", "modules.astro_sharpen.enabled", "Ativado" if sharpen_enabled else "Desativado")
 
-        presets = config.get("modules.astro_sharpen.presets", ["registax_fiel", "registax_limb_guard", "registax_plus"])
+        presets = config.get("modules.astro_sharpen.presets", ["registax_fiel", "registax_clean", "registax_iluminado", "registax_pro"])
         table.add_row("7", "Presets de Wavelets Padrão", "modules.astro_sharpen.presets", str(presets))
 
         limb_guard = config.get("modules.astro_sharpen.use_limb_guard", True)
@@ -559,8 +559,8 @@ def _menu_astro(console: Console):
             console.print("[green]Salvo![/green]")
             time.sleep(1)
         elif choice == "7":
-            console.print("Presets sugeridos: [cyan]registax_fiel, registax_limb_guard, registax_plus, registax_mineral, suave, equilibrado, enfatico[/cyan]")
-            curr = config.get("modules.astro_sharpen.presets", ["registax_fiel", "registax_limb_guard", "registax_plus"])
+            console.print("Presets sugeridos: [cyan]registax_fiel, registax_clean, registax_iluminado, registax_pro, registax_dinamico, registax_limb_guard, registax_plus, suave, equilibrado[/cyan]")
+            curr = config.get("modules.astro_sharpen.presets", ["registax_fiel", "registax_clean", "registax_iluminado", "registax_pro"])
             curr_str = ",".join(curr) if isinstance(curr, list) else str(curr)
             new_val = Prompt.ask("Digite os presets separados por vírgula", default=curr_str)
             parsed = [p.strip() for p in new_val.split(",") if p.strip()]

@@ -86,7 +86,9 @@ class AstroSharpenStage(PipelineStage):
         use_limb_guard = sharpen_config.get("use_limb_guard", True)
 
         processed_count = 0
+        total_presets_generated = 0
         total_stacks = len(stacks_to_process)
+        batch_t0 = time.time()
 
         for idx, stack_file in enumerate(stacks_to_process, 1):
             console.print(f"\n[cyan][{idx}/{total_stacks}][/cyan] Processando: [bold white]{stack_file.name}[/bold white]")
@@ -119,6 +121,7 @@ class AstroSharpenStage(PipelineStage):
 
                 elapsed_sec = time.time() - t0
                 processed_count += 1
+                total_presets_generated += len(results)
 
                 # Registra cada preset gerado no SQLite
                 for p_name, paths in results.items():
@@ -144,27 +147,30 @@ class AstroSharpenStage(PipelineStage):
                     png_name = paths.get("png").name if "png" in paths else "-"
                     console.print(f"    • Preset {p_name}: [green]{tif_name}[/green] / [cyan]{png_name}[/cyan]")
 
-                # Notificações
-                enable_toast = sharpen_config.get("windows_toast", True)
-                if enable_toast:
-                    send_windows_toast(
-                        f"IRIS: Aprimoramento Lunar Concluído",
-                        f"Stack {stack_file.name} aprimorado ({len(results)} presets) em {elapsed_sec:.1f}s."
-                    )
-                ntfy_topic = sharpen_config.get("ntfy_topic", config.get("modules.timelapse.ntfy_topic", "iris-alerts"))
-                if ntfy_topic:
-                    send_ntfy_notification(
-                        topic=ntfy_topic,
-                        title=f"Sharpening Concluído: {stack_file.stem}",
-                        message=f"{len(results)} variações de wavelets e relevo geradas em {elapsed_sec:.1f}s.",
-                        tags=["sparkles", "moon"],
-                    )
-
             except Exception as e:
                 console.print(f"  [bold red]ERRO ao aprimorar {stack_file.name}: {e}[/bold red]")
                 log_event(f"Falha no aprimoramento de {stack_file.name}: {e}", "error")
 
-        console.print(f"\n[bold green]Concluído! {processed_count} stack(s) processado(s) com wavelets.[/bold green]")
+        total_batch_elapsed = time.time() - batch_t0
+        console.print(f"\n[bold green]Concluído! {processed_count} stack(s) processado(s) ({total_presets_generated} imagens geradas) em {total_batch_elapsed:.1f}s.[/bold green]")
+
+        # Dispara notificação consolidada única ao término de todo o lote
+        if processed_count > 0:
+            enable_toast = sharpen_config.get("windows_toast", True)
+            if enable_toast:
+                send_windows_toast(
+                    "IRIS: Aprimoramento Lunar Concluído",
+                    f"{processed_count} stack(s) aprimorado(s) • {total_presets_generated} variações de wavelets geradas em {total_batch_elapsed:.1f}s."
+                )
+            ntfy_topic = sharpen_config.get("ntfy_topic", config.get("modules.timelapse.ntfy_topic", "iris-alerts"))
+            if ntfy_topic:
+                send_ntfy_notification(
+                    topic=ntfy_topic,
+                    title="Aprimoramento Lunar Concluído",
+                    message=f"{processed_count} stack(s) • {total_presets_generated} variações geradas em {total_batch_elapsed:.1f}s.",
+                    tags=["sparkles", "moon"],
+                )
+
         return True
 
 

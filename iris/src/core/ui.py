@@ -203,3 +203,66 @@ class PipelineUI:
         
         return Group(top_panel, "", table)
 
+    @staticmethod
+    def generate_astro_stack_renderable(
+        stage_title: str,
+        start_str: str,
+        session_name: str,
+        total_photos: int,
+        keep_percents: list,
+        current_phase_msg: str,
+        current_item: str,
+        progress_pct: float,
+        crop_size: int,
+        shared_gain: float,
+        completed_stacks: dict,
+        elapsed_str: str,
+        eta_str: str,
+        previsao_fim_str: str,
+    ):
+        kp_str = ", ".join(f"{kp}%" for kp in keep_percents)
+        info_text = (
+            f"  [bold]• Início:[/bold]           {start_str}\n"
+            f"  [bold]• Sessão:[/bold]           {session_name}\n"
+            f"  [bold]• Fotos Originais:[/bold]  {total_photos} fotos\n"
+            f"  [bold]• Descarte PSS:[/bold]     {kp_str}"
+        )
+        top_panel = Panel(info_text, title=stage_title, title_align="left", border_style="cyan", expand=False)
+
+        pct = max(0.0, min(100.0, progress_pct))
+        bar = ProgressBar(total=100.0, completed=pct, width=40)
+
+        progress_table = Table.grid(padding=(0, 1))
+        progress_table.add_column()
+        progress_table.add_column()
+        progress_table.add_row(bar, f"{pct:.1f}%")
+
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="bold cyan")
+        table.add_column()
+
+        table.add_row("Operação:", current_phase_msg)
+        if current_item:
+            table.add_row("Item atual:", f"[yellow]{current_item}[/yellow]")
+        table.add_row("Progresso:", progress_table)
+
+        if crop_size > 0:
+            table.add_row("Geometria Lunar:", f"[white]{crop_size}x{crop_size} px • Ganho linear {shared_gain:.3f}x[/white]")
+
+        stack_badges = []
+        for kp in keep_percents:
+            kp_key = str(kp)
+            if kp_key in completed_stacks:
+                stack_badges.append(f"[green]✔ {kp}%[/green]")
+            elif f"{kp}%" in current_phase_msg:
+                stack_badges.append(f"[bold yellow]⏳ {kp}%[/bold yellow]")
+            else:
+                stack_badges.append(f"[dim]• {kp}%[/dim]")
+        table.add_row("Stacks PSS:", "  ".join(stack_badges) if stack_badges else "-")
+
+        table.add_row("Tempo decorrido:", elapsed_str)
+        table.add_row("Tempo restante:", f"[magenta]{eta_str}[/magenta]")
+        table.add_row("Previsão fim:", f"[bold cyan]{previsao_fim_str}[/bold cyan]")
+
+        return Group(top_panel, "", table)
+

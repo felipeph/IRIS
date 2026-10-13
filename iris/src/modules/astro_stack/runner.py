@@ -138,6 +138,17 @@ class AstroStackRunner:
                         report_data = json.loads(json_str)
                     except Exception:
                         pass
+                elif cleaned.startswith("PROGRESS_JSON:"):
+                    json_str = cleaned[len("PROGRESS_JSON:"):].strip()
+                    try:
+                        p_data = json.loads(json_str)
+                        if progress_callback:
+                            try:
+                                progress_callback(p_data, p_data.get("progress_pct"))
+                            except Exception:
+                                progress_callback(p_data.get("msg", ""), p_data.get("progress_pct"))
+                    except Exception:
+                        pass
                 elif cleaned.startswith("PROGRESS:"):
                     msg = cleaned[len("PROGRESS:"):].strip()
                     if progress_callback:

@@ -97,6 +97,8 @@ def main():
     metadata = []
     images = []
     for idx, f in enumerate(files):
+        pct = (idx + 1) / len(files) * 30.0
+        print(f"PROGRESS_JSON:{json.dumps({'phase': 'decode', 'current': idx + 1, 'total': len(files), 'item': f.name, 'progress_pct': pct, 'msg': f'Lendo e analisando frame {idx + 1}/{len(files)}'})}", flush=True)
         print(f"PROGRESS: Lendo e decodificando {f.name} ({idx + 1}/{len(files)})", flush=True)
         img = read_mono(f)
         bounds = moon_bounds(img)
@@ -115,6 +117,7 @@ def main():
 
     peak_global = max(float(np.max(im)) for im in images)
     gain = calculate_sequence_gain(peak_global)
+    print(f"PROGRESS_JSON:{json.dumps({'phase': 'geometry', 'crop_size': crop_size, 'gain': gain, 'progress_pct': 30.0, 'msg': f'Dimensões: {crop_size}x{crop_size} | Ganho: {gain:.3f}x'})}", flush=True)
     print(f"STATUS: Dimensão calculada: {crop_size}x{crop_size}. Ganho linear compartilhado: {gain:.4f}", flush=True)
 
     # 3. Preparação dos frames centralizados
@@ -123,6 +126,9 @@ def main():
         mono_prepared = np.uint16(np.clip(cropped.astype(np.float32) * gain, 0, 65535))
         frame_name = f"frame_{idx:04d}.tiff"
         tifffile.imwrite(prepared_dir / frame_name, mono_prepared, photometric="minisblack")
+        if (idx + 1) % 5 == 0 or (idx + 1) == len(images):
+            pct = 30.0 + ((idx + 1) / len(images) * 15.0)
+            print(f"PROGRESS_JSON:{json.dumps({'phase': 'prep', 'current': idx + 1, 'total': len(images), 'item': frame_name, 'crop_size': crop_size, 'gain': gain, 'progress_pct': pct, 'msg': f'Centralizando frame {idx + 1}/{len(images)}'})}", flush=True)
     del images  # Libera memória imediatamente
 
     # Extrai metadados de câmera/data do primeiro arquivo
@@ -140,7 +146,9 @@ def main():
     best_stack_final = None
 
     # 4. Execução do PSS para cada percentual configurado
-    for kp in keep_percents:
+    for kp_idx, kp in enumerate(keep_percents):
+        base_pct = 45.0 + (kp_idx / len(keep_percents) * 50.0)
+        print(f"PROGRESS_JSON:{json.dumps({'phase': 'pss', 'kp': kp, 'kp_index': kp_idx + 1, 'total_kps': len(keep_percents), 'crop_size': crop_size, 'gain': gain, 'progress_pct': base_pct, 'msg': f'Empilhando PSS (keep={kp}%) [{kp_idx + 1}/{len(keep_percents)}]'})}", flush=True)
         print(f"STATUS: Executando alinhamento e empilhamento PSS (keep_percent={kp}%)...", flush=True)
         cmd = [
             sys.executable, "-u", str(run_pss_script), str(prepared_dir),
@@ -202,6 +210,8 @@ def main():
             description=f"IRIS PSS lunar stack; keep={kp}%; mono uint16; centred",
         )
         output_tiff_paths[str(kp)] = str(final_tiff_path)
+        kp_done_pct = 45.0 + ((kp_idx + 1) / len(keep_percents) * 50.0)
+        print(f"PROGRESS_JSON:{json.dumps({'phase': 'kp_done', 'kp': kp, 'filename': final_tiff_path.name, 'crop_size': crop_size, 'gain': gain, 'progress_pct': kp_done_pct, 'completed_stacks': output_tiff_paths, 'msg': f'Stack {kp}% gerado com sucesso'})}", flush=True)
         print(f"SUCCESS: Stack {kp}% gerado: {final_tiff_path.name} (Erro centro: {centre_err})", flush=True)
 
         if best_stack_final is None or kp == keep_percents[0]:
@@ -217,6 +227,7 @@ def main():
     time_clean = time_str.replace(":", "-")
     preview_name = build_preview_filename(date_str, time_clean, camera_model)
     preview_path = output_dir / preview_name
+    print(f"PROGRESS_JSON:{json.dumps({'phase': 'preview', 'crop_size': crop_size, 'gain': gain, 'progress_pct': 96.0, 'completed_stacks': output_tiff_paths, 'msg': 'Gerando prévia PNG esticada'})}", flush=True)
     if best_stack_final is not None:
         p_peak = float(np.percentile(best_stack_final, 99.9))
         preview_img = np.uint8(np.clip(best_stack_final.astype(np.float32) * (255.0 / max(1.0, p_peak)), 0, 255))
@@ -250,6 +261,7 @@ def main():
     except Exception:
         pass
 
+    print(f"PROGRESS_JSON:{json.dumps({'phase': 'done', 'crop_size': crop_size, 'gain': gain, 'progress_pct': 100.0, 'completed_stacks': output_tiff_paths, 'msg': 'Sessão concluída com sucesso'})}", flush=True)
     print(f"REPORT_JSON:{json.dumps(report_data)}", flush=True)
     print(f"DONE: Sessão concluída com sucesso em {elapsed:.1f}s!", flush=True)
 

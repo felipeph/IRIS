@@ -184,7 +184,7 @@ class ConfigManager:
             if "astro_sharpen" not in mods:
                 mods["astro_sharpen"] = {
                     "enabled": True,
-                    "presets": ["registax_fiel", "registax_limb_guard", "registax_plus"],
+                    "presets": ["registax_fiel", "registax_clean", "registax_iluminado", "registax_pro"],
                     "enable_clahe": True,
                     "use_limb_guard": True,
                     "windows_toast": True,
@@ -239,7 +239,7 @@ class ConfigManager:
                 },
                 "astro_sharpen": {
                     "enabled": True,
-                    "presets": ["registax_fiel", "registax_limb_guard", "registax_plus"],
+                    "presets": ["registax_fiel", "registax_clean", "registax_iluminado", "registax_pro"],
                     "enable_clahe": True,
                     "use_limb_guard": True,
                     "windows_toast": True,

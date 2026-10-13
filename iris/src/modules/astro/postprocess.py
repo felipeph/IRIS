@@ -199,6 +199,27 @@ def apply_adaptive_s_curve(
     return np.clip(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB), 0.0, 1.0)
 
 
+def apply_illumination_boost(
+    image_float: np.ndarray,
+    boost: float = 1.15,
+) -> np.ndarray:
+    """
+    Eleva suavemente a iluminação dos tons médios e relevo lunar sem estourar picos claros de crateras.
+    Em imagens RGB, atua no canal de luminância L (LAB) preservando a integridade das cores.
+    """
+    if boost <= 1.0:
+        return image_float
+
+    if image_float.ndim == 2:
+        return np.clip(np.power(image_float, 1.0 / boost), 0.0, 1.0)
+
+    lab = cv2.cvtColor(image_float, cv2.COLOR_RGB2LAB)
+    l_norm = lab[:, :, 0] / 100.0
+    l_boosted = np.power(l_norm, 1.0 / boost)
+    lab[:, :, 0] = np.clip(l_boosted * 100.0, 0.0, 100.0)
+    return np.clip(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB), 0.0, 1.0)
+
+
 def apply_dual_scale_clahe(
     image_float: np.ndarray,
     fine_grid: Tuple[int, int] = (16, 16),
@@ -259,7 +280,16 @@ def process_and_export_all_presets(
     all_available = list(LunarWaveletEngine.PRESETS.keys())
     craters_group = ["enfatico", "crateras_profundas", "deconvolucao_extrema", "contraste_dramatico"]
     classic_group = ["suave", "equilibrado", "enfatico", "mineral"]
-    registax_group = ["registax_fiel", "registax_limb_guard", "registax_plus", "registax_mineral"]
+    registax_group = [
+        "registax_fiel",
+        "registax_clean",
+        "registax_iluminado",
+        "registax_pro",
+        "registax_dinamico",
+        "registax_limb_guard",
+        "registax_plus",
+        "registax_mineral",
+    ]
 
     resolved_presets: List[str] = []
     if presets is None or "all" in presets:
@@ -315,6 +345,11 @@ def process_and_export_all_presets(
         # 3. Curva S Adaptativa para Esculpir Crateras e Terminador
         contrast_factor = custom_contrast if custom_contrast is not None else p_cfg.get("s_curve_contrast", 1.0)
         tonal_sculpted = apply_adaptive_s_curve(clahe_enhanced, contrast=contrast_factor)
+
+        # 3.5. Realce de Iluminação Global de Tons Médios (se configurado no preset)
+        illum_boost = p_cfg.get("illumination_boost", 1.0)
+        if illum_boost > 1.0:
+            tonal_sculpted = apply_illumination_boost(tonal_sculpted, boost=illum_boost)
 
         # 4. Calibração Tonal Final (Esticamento Dinâmico)
         if p_cfg.get("disable_stretch", False):

@@ -52,3 +52,24 @@ def test_pipeline_ui_renderable():
     # Should be a Rich Group
     assert renderable is not None
     # Just asserting it doesn't crash during generation
+
+
+def test_pipeline_ui_astro_stack_renderable():
+    renderable = PipelineUI.generate_astro_stack_renderable(
+        stage_title="TEST ASTRO",
+        start_str="12:00:00",
+        session_name="sessao_01",
+        total_photos=50,
+        keep_percents=[10, 25, 50],
+        current_phase_msg="Alinhando PSS (keep=25%)",
+        current_item="frame_0012.tiff",
+        progress_pct=45.0,
+        crop_size=1400,
+        shared_gain=1.45,
+        completed_stacks={"10": "stack10p.tiff"},
+        elapsed_str="00:01:30",
+        eta_str="00:01:45",
+        previsao_fim_str="12:03:15",
+    )
+    assert renderable is not None
+

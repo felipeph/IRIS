@@ -30,7 +30,7 @@ modules:
     ntfy_topic: "iris-alerts"
   astro_sharpen:
     enabled: true
-    presets: ["registax_fiel", "registax_limb_guard", "registax_plus"]
+    presets: ["registax_fiel", "registax_clean", "registax_iluminado", "registax_pro"]
     enable_clahe: true                # Realce adaptativo de contraste local 16-bit
     use_limb_guard: true              # Proteção anti-halo/ringing no limbo lunar
     windows_toast: true
