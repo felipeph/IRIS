@@ -1,5 +1,6 @@
 """Orquestrador do subprocesso de empilhamento lunar (AstroStackRunner)."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -116,19 +117,24 @@ class AstroStackRunner:
         if progress_callback:
             progress_callback(f"Iniciando PSS para {input_dir.name}...", None)
 
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUNBUFFERED"] = "1"
+
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=env,
         )
 
         report_data: Optional[Dict[str, Any]] = None
         error_lines = []
 
-        # Streaming do output
+        # Streaming do output unificado em tempo real
         while True:
             line = proc.stdout.readline()
             if not line and proc.poll() is not None:
@@ -160,16 +166,18 @@ class AstroStackRunner:
                     msg = cleaned[len("STATUS:"):].strip()
                     if progress_callback:
                         progress_callback(msg, None)
-                elif cleaned.startswith("ERRO:"):
+                elif cleaned.startswith("ERRO:") or cleaned.startswith("ERRO FATAL:"):
+                    error_lines.append(cleaned)
+                elif "Traceback (most recent call last)" in cleaned or "Error:" in cleaned:
                     error_lines.append(cleaned)
 
-        stderr_output = proc.stderr.read()
         returncode = proc.wait()
 
         if returncode != 0:
-            err_msg = "\n".join(error_lines) or stderr_output.strip() or f"Código de saída {returncode}"
+            err_msg = "\n".join(error_lines) or f"Código de saída {returncode}"
             log_event(f"Falha no empilhamento de {input_dir.name}: {err_msg}", "error")
             raise RuntimeError(f"Erro no empilhamento da sessão: {err_msg}")
+
 
         if report_data is None:
             # Tenta ler do report.json no diretório de saída

@@ -190,7 +190,7 @@ class AstroStackStage(PipelineStage):
                 )
 
             try:
-                with Live(make_renderable(), console=console, refresh_per_second=4) as live:
+                with Live(get_renderable=make_renderable, console=console, refresh_per_second=4) as live:
                     def on_progress(event_or_msg, pct_val):
                         nonlocal current_phase_msg, current_item, progress_pct, crop_size, shared_gain, completed_stacks
                         nonlocal current_phase, decode_fps, decode_rem_seconds, last_kp_time

@@ -19,6 +19,7 @@ from src.modules.astro_stack.preprocessor import (
     moon_bounds,
     centred_crop,
     calculate_sequence_gain,
+    process_and_save_frame,
     process_single_frame,
     scale_single_frame,
 )
@@ -138,6 +139,31 @@ def test_process_and_scale_single_frame(tmp_path: Path):
     final_data = _read_tiff(final_out)
     assert final_data.shape == (160, 160)
     assert final_data[80, 80] == 60000
+
+
+def test_process_and_save_frame_single_pass(tmp_path: Path):
+    from src.modules.astro_stack.preprocessor import _read_tiff, _write_tiff
+
+    # Cria imagem sintética e salva em disco como TIFF
+    test_raw = tmp_path / "synthetic_moon_direct.tiff"
+    img = np.zeros((300, 300), dtype=np.uint16)
+    y, x = np.ogrid[:300, :300]
+    dist = np.sqrt((x - 150)**2 + (y - 150)**2)
+    img[dist <= 40] = 25000
+    _write_tiff(test_raw, img)
+
+    # Processamento em passo único direto
+    direct_out = tmp_path / "subfolder" / "direct_frame.tiff"
+    meta = process_and_save_frame(test_raw, crop_size=160, gain=2.0, output_tiff_path=direct_out, fast_demosaic=True)
+
+    assert meta["filename"] == "synthetic_moon_direct.tiff"
+    assert meta["peak"] == 25000.0
+    assert direct_out.exists()
+
+    result_data = _read_tiff(direct_out)
+    assert result_data.shape == (160, 160)
+    assert result_data[80, 80] == 50000
+
 
 
 # ==============================================================================

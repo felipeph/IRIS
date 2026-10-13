@@ -101,12 +101,14 @@ def calculate_sequence_gain(peak_val: float) -> float:
 
 
 def _write_tiff(path: Union[str, Path], img: np.ndarray) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
     try:
         import tifffile
-        tifffile.imwrite(path, img, photometric="minisblack")
+        tifffile.imwrite(str(p), img, photometric="minisblack")
     except ImportError:
         import cv2
-        cv2.imwrite(str(path), img)
+        cv2.imwrite(str(p), img)
 
 
 def _read_tiff(path: Union[str, Path]) -> np.ndarray:
@@ -116,6 +118,43 @@ def _read_tiff(path: Union[str, Path]) -> np.ndarray:
     except ImportError:
         import cv2
         return cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+
+
+def process_and_save_frame(
+    file_path: Union[str, Path],
+    crop_size: int,
+    gain: float,
+    output_tiff_path: Union[str, Path],
+    fast_demosaic: bool = True,
+) -> Dict[str, Any]:
+    """Processa um frame em passo único: decodifica, localiza bounds, recorta centrado,
+    aplica ganho escalar e grava diretamente o TIFF final pronto para o PSS.
+    
+    Elimina qualquer necessidade de arquivos ou pastas temporárias intermediárias.
+    """
+    path = Path(file_path)
+    out_path = Path(output_tiff_path)
+
+    img = read_mono(path, fast_demosaic=fast_demosaic)
+    bounds = moon_bounds(img)
+    peak = float(np.max(img))
+    cropped = centred_crop(img, crop_size, bounds=bounds)
+
+    if abs(gain - 1.0) >= 1e-4:
+        scaled = np.uint16(np.clip(cropped.astype(np.float32) * gain, 0, 65535))
+    else:
+        scaled = cropped
+
+    _write_tiff(out_path, scaled)
+
+    return {
+        "file": str(path),
+        "filename": path.name,
+        "tiff_path": str(out_path),
+        "shape": list(img.shape),
+        "moon_bounds": list(bounds),
+        "peak": peak,
+    }
 
 
 def process_single_frame(
@@ -173,3 +212,4 @@ def scale_single_frame(
             src_p.unlink()
         except Exception:
             pass
+
