@@ -401,7 +401,7 @@ def build_rich_youtube_description(record: Dict[str, Any], project_name: str = "
 
     # Montagem da Descrição
     description = f"""Vídeo Timelapse renderizado em alta definição 4K UHD ({res}) a {fps} FPS.
-Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IRIS (Integrated Recording and Ingestion System).
+Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IRIS (Imaging Resources and Integration System).
 
 ⏱️ TEMPO E CAPTURA:
 {period_line}
@@ -646,7 +646,7 @@ def build_edited_video_youtube_metadata(
         profile_tag = "Lanczos"
 
     description = f"""Vídeo capturado e masterizado em altíssima definição 4K UHD ({target_res}) a {target_fps} FPS.
-Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Integrated Recording and Ingestion System).
+Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Imaging Resources and Integration System).
 
 ⏱️ TEMPO, CAPTURA E VELOCIDADE:
 • Data e Hora de Captura: {dt_prefix}

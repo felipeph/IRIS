@@ -78,7 +78,7 @@ def run_pipeline_for_project(active_project):
             # Cabeçalho
             status = get_project_status_text(active_project)
             header_text = (
-                "[bold white]:camera: IRIS - ASSISTENTE INTEGRADO DE MÍDIA :rocket:[/bold white]\n"
+                "[bold white]:camera: IRIS - IMAGING RESOURCES AND INTEGRATION SYSTEM :rocket:[/bold white]\n"
                 f"[dim]Projeto Ativo:[/dim] [cyan][{active_project.name}][/cyan]\n"
                 f"[dim]Status:[/dim] [yellow][{status}][/yellow]"
             )
@@ -264,7 +264,7 @@ def main_menu():
         
         # Header principal
         console.print(Panel(
-            "[bold white]:camera: IRIS - ASSISTENTE INTEGRADO DE MÍDIA :rocket:[/bold white]\n"
+            "[bold white]:camera: IRIS - IMAGING RESOURCES AND INTEGRATION SYSTEM :rocket:[/bold white]\n"
             "[dim]Central de Processamento de Fotos e Vídeos[/dim]",
             expand=False,
             border_style="cyan"

@@ -1,0 +1,107 @@
+site_name: IRIS — Imaging Resources and Integration System
+site_description: Central de engenharia e automação de mídia para fotografia, vídeo 4K, astrofotografia lunar e publicação no YouTube.
+site_author: Felipe Heitmann
+site_url: https://felipeph.github.io/IRIS/
+repo_url: https://github.com/felipeph/IRIS
+repo_name: felipeph/IRIS
+
+theme:
+  name: material
+  language: pt-BR
+  palette:
+    # Modo Claro (Default)
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Alternar para modo escuro
+    # Modo Escuro
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Alternar para modo claro
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.instant
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - tables
+  - attr_list
+  - md_in_html
+  - def_list
+
+plugins:
+  - search
+
+nav:
+  - Início: index.md
+  - Visão Geral:
+      - O que é o IRIS: visao-geral/introducao.md
+      - Equipamentos & Câmeras: visao-geral/equipamentos.md
+      - Início Rápido: visao-geral/guia-rapido.md
+      - Configuração do Sistema: visao-geral/configuracao.md
+  - Arquitetura & Engenharia:
+      - Princípios de Design: arquitetura/principios-de-design.md
+      - O Princípio Zero Data Loss: arquitetura/zero-data-loss.md
+      - Persistência ACID & SQLite Duplo: arquitetura/persistencia-acid.md
+      - Concorrência & Locks: arquitetura/concorrencia-locks.md
+      - Aceleração por Hardware: arquitetura/aceleracao-hardware.md
+      - Taxonomia & Nomenclatura: arquitetura/taxonomia-nomenclatura.md
+      - Decisões Técnicas (ADRs):
+          - ADR-001 Ingestão Move vs Copy: arquitetura/adrs/adr-001-ingestao-move-vs-copy.md
+          - ADR-002 Dual SQLite WAL: arquitetura/adrs/adr-002-dual-sqlite-wal.md
+          - ADR-003 PSS Headless Subprocess: arquitetura/adrs/adr-003-pss-subprocess-isolation.md
+          - ADR-004 YouTube Resumable Upload: arquitetura/adrs/adr-004-youtube-resumable-upload.md
+  - Módulos do Pipeline:
+      - 01. Ingestão Segura: modulos/01-ingestao.md
+      - 02. Sanitização EXIF: modulos/02-sanitizacao.md
+      - 03. Planejamento & Metadados: modulos/03-planejamento.md
+      - 04. Organização Física: modulos/04-organizacao.md
+      - 05. Limpeza da Origem: modulos/05-limpeza.md
+      - 06. Timelapse 4K: modulos/06-timelapse-4k.md
+      - 07. Edição & Upscale 4K: modulos/07-edicao-video-4k.md
+      - 08. Publicação no YouTube: modulos/08-youtube.md
+      - 09. Empilhamento Lunar (PSS): modulos/09-astro-stack.md
+      - 10. Wavelets À Trous (Sharpening): modulos/10-astro-wavelets.md
+      - 11. CLI iris-astro: modulos/11-cli-astro.md
+  - IA & Engenharia:
+      - Guia para Agentes de IA: ia-e-engenharia/contexto-para-ia.md
+      - Suíte de Testes (pytest): ia-e-engenharia/suite-de-testes.md
+      - Como Estender o IRIS: ia-e-engenharia/guia-de-extensao.md
+      - Manifesto LLM (llms.txt): llms.md
+  - Referência Técnica:
+      - Dicionário de Dados SQLite: referencia/schema-banco-de-dados.md
+      - Ciclo de Vida do Pipeline: referencia/pipeline-lifecycle.md
