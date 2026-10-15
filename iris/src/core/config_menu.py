@@ -30,6 +30,9 @@ def _menu_storage_ingestion(console: Console):
         auto_clean_val = config.get("modules.cleanup.auto_clean", False)
         table.add_row("6", "Limpeza Automática SD (Global)", "modules.cleanup.auto_clean", "[green]Sim[/green]" if auto_clean_val else "[red]Não[/red]")
         
+        allow_perm_val = config.get("modules.cleanup.allow_permanent_sd_clean", False)
+        table.add_row("7", "Exclusão Permanente SD s/ Lixeira", "modules.cleanup.allow_permanent_sd_clean", "[green]Permitida[/green]" if allow_perm_val else "[yellow]Bloqueada (Segura)[/yellow]")
+        
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
         
@@ -81,6 +84,12 @@ def _menu_storage_ingestion(console: Console):
             curr = config.get("modules.cleanup.auto_clean", False)
             new_val = Confirm.ask("Ativar limpeza automática da origem por padrão em novos projetos?", default=curr)
             config.set("modules.cleanup.auto_clean", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "7":
+            curr = config.get("modules.cleanup.allow_permanent_sd_clean", False)
+            new_val = Confirm.ask("Permitir exclusão permanente no SD caso não suporte Lixeira (Zero Data Loss recomenda 'Não')?", default=curr)
+            config.set("modules.cleanup.allow_permanent_sd_clean", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
         else:

@@ -39,6 +39,7 @@ modules:
     enabled: true
   cleanup:
     auto_clean: true
+    allow_permanent_sd_clean: false   # Permite exclusão permanente no SD se Lixeira não for suportada (default: false - Zero Data Loss)
   dedup:
     enabled: true
   ingestion:

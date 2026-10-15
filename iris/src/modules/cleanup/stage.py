@@ -11,10 +11,32 @@ from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.prompt import Confirm
 
+from src.core.config import config
 from src.core.pipeline import PipelineStage
 from src.core.project import Project
+from src.modules.ingestion.strategies.base import compute_file_hash
 
 console = Console()
+
+def is_removable_media(path: Path) -> bool:
+    """
+    Verifica se o caminho reside em uma mídia removível (ex: Cartão SD, Pen Drive).
+    No Windows, mídias removíveis (DRIVE_REMOVABLE = 2) não possuem Lixeira ($RECYCLE.BIN).
+    """
+    if os.name != "nt":
+        return False
+    try:
+        resolved = path.resolve()
+        drive = resolved.drive
+        if not drive:
+            return False
+        root = drive if drive.endswith("\\") else drive + "\\"
+        import ctypes
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW(root)
+        # DRIVE_REMOVABLE = 2
+        return drive_type == 2
+    except Exception:
+        return False
 
 class CleanupTracker:
     def __init__(self, total_bytes):
@@ -109,7 +131,8 @@ class CleanupStage(PipelineStage):
     """
     Etapa para limpar (apagar) os arquivos da origem (SD)
     após terem sido verificados com sucesso no banco SQLite,
-    fazendo uma verificação extra (double check) no SSD.
+    fazendo uma verificação extra criptográfica (Hash-Guard xxHash64) no SSD
+    e protegendo mídias removíveis sem Lixeira (Zero Data Loss).
     """
 
     def run(self, project: Project, auto_clean: bool = False, **kwargs) -> bool:
@@ -146,13 +169,50 @@ class CleanupStage(PipelineStage):
         console.print(f"[cyan]Encontrados {total_files} arquivos marcados como verificados ({total_gb:.2f} GB) e prontos para limpeza no SD.[/cyan]")
         
         is_auto = auto_clean or getattr(project, "auto_cleanup", False)
+        allow_permanent_config = bool(config.get("modules.cleanup.allow_permanent_sd_clean", False))
+        is_removable = is_removable_media(source_dir)
+        allow_permanent = False
+
         if is_auto:
-            console.print("[bold yellow]⚡ Limpeza automática ativada: enviando arquivos verificados para a Lixeira sem confirmação...[/bold yellow]")
-        else:
-            # Pede confirmação (proteção)
-            if not Confirm.ask("[bold red]Deseja enviar estes arquivos verificados da origem para a Lixeira?[/bold red]"):
-                console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
+            if is_removable and not allow_permanent_config:
+                # Proteção Zero Data Loss: Recusa exclusão permanente em SD no modo automático
+                console.print(Panel(
+                    f"[bold yellow]AVISO ZERO DATA LOSS: Limpeza ignorada para '{source_dir}'.[/bold yellow]\n"
+                    f"[white]A unidade foi identificada como mídia removível (Cartão SD/USB) sem suporte a Lixeira.[/white]\n"
+                    f"[white]A flag [bold cyan]'modules.cleanup.allow_permanent_sd_clean'[/bold cyan] está desativada.[/white]\n"
+                    f"[green]✔ Todos os {total_files} arquivos originais foram preservados no cartão com segurança.[/green]\n"
+                    f"[dim]Para autorizar exclusão permanente autônoma, ative 'allow_permanent_sd_clean' nas configurações.[/dim]",
+                    title="[bold blue]Proteção Zero Data Loss[/bold blue]",
+                    border_style="yellow",
+                    expand=False
+                ))
                 return True
+            elif is_removable and allow_permanent_config:
+                console.print(f"[bold yellow]⚡ Limpeza automática autorizada para mídia removível ({source_dir.drive}) via allow_permanent_sd_clean=True.[/bold yellow]")
+                allow_permanent = True
+            else:
+                console.print("[bold yellow]⚡ Limpeza automática ativada: enviando arquivos verificados para a Lixeira sem confirmação...[/bold yellow]")
+                allow_permanent = allow_permanent_config
+        else:
+            # Modo Interativo
+            if is_removable:
+                console.print(Panel(
+                    f"[bold red]ATENÇÃO: A unidade '{source_dir.drive}' (Cartão SD / Mídia Removível) NÃO suporta Lixeira do sistema operacional.[/bold red]\n"
+                    f"[white]A exclusão dos arquivos originais será [/white][bold red]PERMANENTE[/bold red][white] e não poderá ser desfeita via Lixeira.[/white]\n"
+                    f"[dim]Total: {total_files} arquivos ({total_gb:.2f} GB) prontos para limpeza.[/dim]",
+                    title="[bold yellow]Mídia Removível Detectada[/bold yellow]",
+                    border_style="red",
+                    expand=False
+                ))
+                if not Confirm.ask("[bold red]Deseja EXCLUIR PERMANENTEMENTE os arquivos originais verificados do cartão?[/bold red]", default=False):
+                    console.print("[yellow]Operação cancelada pelo usuário. Arquivos originais preservados no cartão.[/yellow]")
+                    return True
+                allow_permanent = True
+            else:
+                if not Confirm.ask("[bold red]Deseja enviar estes arquivos verificados da origem para a Lixeira?[/bold red]"):
+                    console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
+                    return True
+                allow_permanent = allow_permanent_config
             
         tracker = CleanupTracker(total_bytes_to_delete)
         start_str = datetime.now().strftime("%H:%M:%S")
@@ -166,29 +226,56 @@ class CleanupStage(PipelineStage):
                 current_file_name = orig_path.name
                 
                 render_args = (start_str, total_files, total_gb, current_file_name)
-                live.update(generate_renderable(tracker, *render_args, "Limpando SD: Verificando destino..."))
+                live.update(generate_renderable(tracker, *render_args, "Limpando SD: Verificando integridade no SSD..."))
                 
-                # Double check no SSD
+                # Double check no SSD (suporta staging_path ou organized_path caso já tenha sido organizado)
                 dest_path = Path(item.staging_path)
+                if not dest_path.exists() and item.organized_path and Path(item.organized_path).exists():
+                    dest_path = Path(item.organized_path)
+
                 is_safe_to_delete = False
                 
-                if dest_path.exists() and dest_path.stat().st_size == file_size:
-                    is_safe_to_delete = True
+                if not dest_path.exists():
+                    # Destino no SSD ausente: perigo de perda de dados!
+                    is_safe_to_delete = False
+                elif dest_path.stat().st_size != item.file_size_bytes:
+                    # Tamanho no SSD divergente: perigo de arquivo corrompido/truncado!
+                    is_safe_to_delete = False
+                elif item.file_hash:
+                    # Validação criptográfica de integridade no SSD antes de qualquer exclusão
+                    dest_hash = compute_file_hash(dest_path)
+                    if dest_hash == item.file_hash:
+                        is_safe_to_delete = True
+                    else:
+                        # Hash divergente: corrupção ou alteração desconhecida no SSD!
+                        is_safe_to_delete = False
                 else:
+                    # Sem hash registrado no banco: recusa por segurança (Zero Data Loss)
                     is_safe_to_delete = False
                 
                 if is_safe_to_delete:
                     live.update(generate_renderable(tracker, *render_args, "Limpando SD: Enviando para a lixeira..."))
+                    trash_succeeded = False
                     try:
                         send2trash(str(orig_path))
+                        trash_succeeded = True
                         deleted_count += 1
                         tracker.update(file_size)
                     except Exception:
-                        try:
-                            orig_path.unlink()
-                            deleted_count += 1
-                            tracker.update(file_size)
-                        except Exception:
+                        trash_succeeded = False
+                    
+                    if not trash_succeeded:
+                        # Fallback seguro: só faz unlink() se a exclusão permanente foi explicitamente autorizada
+                        if allow_permanent:
+                            live.update(generate_renderable(tracker, *render_args, "Limpando SD: Exclusão permanente autorizada..."))
+                            try:
+                                orig_path.unlink()
+                                deleted_count += 1
+                                tracker.update(file_size)
+                            except Exception:
+                                skipped_count += 1
+                                tracker.update(file_size)
+                        else:
                             skipped_count += 1
                             tracker.update(file_size)
                 else:
@@ -211,8 +298,8 @@ class CleanupStage(PipelineStage):
                 pass
                 
         console.print(f"\n[green]Limpeza concluída![/green]")
-        console.print(f"  • [cyan]Arquivos removidos (enviados para a lixeira):[/cyan] {deleted_count}")
-        console.print(f"  • [yellow]Arquivos ignorados/falhas:[/yellow] {skipped_count}")
+        console.print(f"  • [cyan]Arquivos removidos:[/cyan] {deleted_count}")
+        console.print(f"  • [yellow]Arquivos preservados/falhas:[/yellow] {skipped_count}")
         console.print(f"  • [cyan]Pastas vazias removidas:[/cyan] {empty_dirs_removed}")
         
         return True
