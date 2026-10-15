@@ -19,125 +19,141 @@ def get_db_connection(db_path: Path, timeout: float = 30.0) -> sqlite3.Connectio
     conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
-def init_central_db():
+CURRENT_SCHEMA_VERSION = 1
+
+SHARED_TABLES_DDL = [
+    """CREATE TABLE IF NOT EXISTS timelapses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name TEXT,
+        sequence_dir TEXT,
+        output_video_path TEXT UNIQUE,
+        photo_count INTEGER,
+        fps INTEGER,
+        frames_per_image INTEGER,
+        resolution TEXT,
+        crop_mode TEXT,
+        encoder TEXT,
+        duration_seconds REAL,
+        speedup_factor INTEGER,
+        youtube_video_id TEXT,
+        youtube_url TEXT,
+        youtube_privacy TEXT,
+        status TEXT,
+        metadata_json TEXT DEFAULT '{}',
+        local_file_deleted INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS edited_videos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name TEXT,
+        source_video_paths TEXT,
+        output_video_path TEXT UNIQUE,
+        mode TEXT,
+        clip_count INTEGER DEFAULT 1,
+        speed_factor REAL DEFAULT 1.0,
+        orig_fps REAL,
+        target_fps REAL,
+        orig_resolution TEXT,
+        target_resolution TEXT,
+        trim_start_sec REAL DEFAULT 0.0,
+        trim_end_sec REAL DEFAULT 0.0,
+        audio_stripped INTEGER DEFAULT 0,
+        duration_seconds REAL,
+        encoder TEXT,
+        youtube_video_id TEXT,
+        youtube_url TEXT,
+        youtube_privacy TEXT,
+        status TEXT DEFAULT 'rendered',
+        metadata_json TEXT DEFAULT '{}',
+        local_file_deleted INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS astro_stacks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name TEXT,
+        session_dir TEXT,
+        raw_count INTEGER,
+        keep_percents TEXT,
+        output_dir TEXT,
+        output_tiff_paths_json TEXT DEFAULT '{}',
+        crop_size INTEGER,
+        shared_gain REAL,
+        status TEXT DEFAULT 'stacked',
+        metadata_json TEXT DEFAULT '{}',
+        elapsed_seconds REAL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(project_name, session_dir)
+    )""",
+    """CREATE TABLE IF NOT EXISTS astro_sharpens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name TEXT,
+        source_stack_path TEXT,
+        preset TEXT,
+        output_tiff_path TEXT UNIQUE,
+        output_png_path TEXT,
+        status TEXT DEFAULT 'sharpened',
+        metadata_json TEXT DEFAULT '{}',
+        elapsed_seconds REAL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"""
+]
+
+def init_central_db(force: bool = False):
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    if not force and CENTRAL_DB_PATH.exists():
+        with get_db_connection(CENTRAL_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA user_version")
+            row = cursor.fetchone()
+            if row and row[0] >= CURRENT_SCHEMA_VERSION:
+                return
+
     with get_db_connection(CENTRAL_DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS projects (
-                name TEXT PRIMARY KEY,
-                source_path TEXT,
-                current_stage_id TEXT,
-                total_source_files INTEGER,
-                total_source_size_bytes INTEGER,
-                auto_cleanup INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
-                updated_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
-            )
-        """)
-        try:
-            cursor.execute("ALTER TABLE projects ADD COLUMN auto_cleanup INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS timelapses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_name TEXT,
-                sequence_dir TEXT,
-                output_video_path TEXT UNIQUE,
-                photo_count INTEGER,
-                fps INTEGER,
-                frames_per_image INTEGER,
-                resolution TEXT,
-                crop_mode TEXT,
-                encoder TEXT,
-                duration_seconds REAL,
-                speedup_factor INTEGER,
-                youtube_video_id TEXT,
-                youtube_url TEXT,
-                youtube_privacy TEXT,
-                status TEXT,
-                metadata_json TEXT DEFAULT '{}',
-                local_file_deleted INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        try:
-            cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE timelapses ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS edited_videos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_name TEXT,
-                source_video_paths TEXT,
-                output_video_path TEXT UNIQUE,
-                mode TEXT,
-                clip_count INTEGER DEFAULT 1,
-                speed_factor REAL DEFAULT 1.0,
-                orig_fps REAL,
-                target_fps REAL,
-                orig_resolution TEXT,
-                target_resolution TEXT,
-                trim_start_sec REAL DEFAULT 0.0,
-                trim_end_sec REAL DEFAULT 0.0,
-                audio_stripped INTEGER DEFAULT 0,
-                duration_seconds REAL,
-                encoder TEXT,
-                youtube_video_id TEXT,
-                youtube_url TEXT,
-                youtube_privacy TEXT,
-                status TEXT DEFAULT 'rendered',
-                metadata_json TEXT DEFAULT '{}',
-                local_file_deleted INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        try:
-            cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS astro_stacks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_name TEXT,
-                session_dir TEXT,
-                raw_count INTEGER,
-                keep_percents TEXT,
-                output_dir TEXT,
-                output_tiff_paths_json TEXT DEFAULT '{}',
-                crop_size INTEGER,
-                shared_gain REAL,
-                status TEXT DEFAULT 'stacked',
-                metadata_json TEXT DEFAULT '{}',
-                elapsed_seconds REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(project_name, session_dir)
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS astro_sharpens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_name TEXT,
-                source_stack_path TEXT,
-                preset TEXT,
-                output_tiff_path TEXT UNIQUE,
-                output_png_path TEXT,
-                status TEXT DEFAULT 'sharpened',
-                metadata_json TEXT DEFAULT '{}',
-                elapsed_seconds REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        conn.commit()
+        cursor.execute("PRAGMA user_version")
+        row = cursor.fetchone()
+        ver = row[0] if row else 0
+
+        if ver < CURRENT_SCHEMA_VERSION or force:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS projects (
+                    name TEXT PRIMARY KEY,
+                    source_path TEXT,
+                    current_stage_id TEXT,
+                    total_source_files INTEGER,
+                    total_source_size_bytes INTEGER,
+                    auto_cleanup INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+                    updated_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+                )
+            """)
+            try:
+                cursor.execute("ALTER TABLE projects ADD COLUMN auto_cleanup INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+
+            for ddl in SHARED_TABLES_DDL:
+                cursor.execute(ddl)
+
+            try:
+                cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE timelapses ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+
+            cursor.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+            conn.commit()
 
 init_central_db()
 
@@ -182,7 +198,12 @@ class ProjectItem:
     
     @classmethod
     def from_dict(cls, data: dict) -> "ProjectItem":
-        return cls(**data)
+        valid = getattr(cls, "_valid_fields", None)
+        if valid is None:
+            import dataclasses
+            valid = {f.name for f in dataclasses.fields(cls)}
+            cls._valid_fields = valid
+        return cls(**{k: v for k, v in data.items() if k in valid})
 
 class Project:
     """Gerencia o estado de um projeto de ingestão e processamento."""
@@ -194,20 +215,23 @@ class Project:
         self.total_source_files = 0
         self.total_source_size_bytes = 0
         self.auto_cleanup: bool = False
+        self._db_initialized: bool = False
         
         self._project_db_file = PROJECTS_DIR / f"{self.name}.db"
 
-    def _init_project_db(self):
+    def _init_project_db(self, force: bool = False):
+        if getattr(self, "_db_initialized", False) and not force and self._project_db_file.exists():
+            return
+
         with get_db_connection(self._project_db_file) as conn:
             cursor = conn.cursor()
-            
-            # Destructive migration: Se houver coluna metadata_json, deleta a tabela!
-            try:
-                cursor.execute("SELECT metadata_json FROM items LIMIT 1")
-                cursor.execute("DROP TABLE items")
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass
+            cursor.execute("PRAGMA user_version")
+            row = cursor.fetchone()
+            ver = row[0] if row else 0
+
+            if ver >= CURRENT_SCHEMA_VERSION and not force:
+                self._db_initialized = True
+                return
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS items (
@@ -244,30 +268,12 @@ class Project:
                     extra_organized_paths_json TEXT DEFAULT '[]'
                 )
             """)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS timelapses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_name TEXT,
-                    sequence_dir TEXT,
-                    output_video_path TEXT UNIQUE,
-                    photo_count INTEGER,
-                    fps INTEGER,
-                    frames_per_image INTEGER,
-                    resolution TEXT,
-                    crop_mode TEXT,
-                    encoder TEXT,
-                    duration_seconds REAL,
-                    speedup_factor INTEGER,
-                    youtube_video_id TEXT,
-                    youtube_url TEXT,
-                    youtube_privacy TEXT,
-                    status TEXT,
-                    metadata_json TEXT DEFAULT '{}',
-                    local_file_deleted INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_category ON items(category)")
+
+            for ddl in SHARED_TABLES_DDL:
+                cursor.execute(ddl)
+
             try:
                 cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
             except sqlite3.OperationalError:
@@ -276,73 +282,15 @@ class Project:
                 cursor.execute("ALTER TABLE timelapses ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS edited_videos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_name TEXT,
-                    source_video_paths TEXT,
-                    output_video_path TEXT UNIQUE,
-                    mode TEXT,
-                    clip_count INTEGER DEFAULT 1,
-                    speed_factor REAL DEFAULT 1.0,
-                    orig_fps REAL,
-                    target_fps REAL,
-                    orig_resolution TEXT,
-                    target_resolution TEXT,
-                    trim_start_sec REAL DEFAULT 0.0,
-                    trim_end_sec REAL DEFAULT 0.0,
-                    audio_stripped INTEGER DEFAULT 0,
-                    duration_seconds REAL,
-                    encoder TEXT,
-                    youtube_video_id TEXT,
-                    youtube_url TEXT,
-                    youtube_privacy TEXT,
-                    status TEXT DEFAULT 'rendered',
-                    metadata_json TEXT DEFAULT '{}',
-                    local_file_deleted INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
             try:
                 cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS astro_stacks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_name TEXT,
-                    session_dir TEXT,
-                    raw_count INTEGER,
-                    keep_percents TEXT,
-                    output_dir TEXT,
-                    output_tiff_paths_json TEXT DEFAULT '{}',
-                    crop_size INTEGER,
-                    shared_gain REAL,
-                    status TEXT DEFAULT 'stacked',
-                    metadata_json TEXT DEFAULT '{}',
-                    elapsed_seconds REAL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(project_name, session_dir)
-                )
-            """)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS astro_sharpens (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    project_name TEXT,
-                    source_stack_path TEXT,
-                    preset TEXT,
-                    output_tiff_path TEXT UNIQUE,
-                    output_png_path TEXT,
-                    status TEXT DEFAULT 'sharpened',
-                    metadata_json TEXT DEFAULT '{}',
-                    elapsed_seconds REAL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+
+            cursor.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
             conn.commit()
+
+        self._db_initialized = True
 
     def save_metadata(self):
         """Salva metadados do projeto no banco central."""

@@ -90,3 +90,53 @@ def test_create_project_inherits_global_config(mock_projects_dir):
         p2 = create_project("proj_inherited_false", "Z:\\source")
         assert p2.auto_cleanup is False
 
+def test_init_project_db_does_not_drop_table_if_metadata_json_present(mock_projects_dir):
+    """Garante que a migração não é destrutiva mesmo se metadata_json existir na tabela."""
+    p = create_project("test_no_drop", "X:\\src")
+    p.items = [ProjectItem(original_path="/orig/photo1.jpg", staging_path="/dest/photo1.jpg", file_size_bytes=1000)]
+    
+    # Simula a adição da coluna metadata_json (ou existência prévia da coluna)
+    with sqlite3.connect(p._project_db_file) as conn:
+        conn.execute("ALTER TABLE items ADD COLUMN metadata_json TEXT DEFAULT '{}'")
+        conn.commit()
+        
+    # Re-executa _init_project_db forçando nova verificação
+    p._init_project_db(force=True)
+    
+    # Verifica que a tabela items NÃO foi deletada e os registros permanecem íntegros
+    items = p.items
+    assert len(items) == 1
+    assert items[0].original_path == "/orig/photo1.jpg"
+    assert items[0].file_size_bytes == 1000
+
+def test_user_version_and_indexes_created(mock_projects_dir):
+    """Verifica que PRAGMA user_version é gravado e os índices são criados."""
+    p = create_project("test_versioning", "X:\\src")
+    
+    with sqlite3.connect(p._project_db_file) as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA user_version")
+        ver = cursor.fetchone()[0]
+        assert ver == 1
+        
+        # Verifica criação dos índices
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='items'")
+        indexes = {row[0] for row in cursor.fetchall()}
+        assert "idx_items_status" in indexes
+        assert "idx_items_category" in indexes
+        
+    with sqlite3.connect(mock_projects_dir / "iris_central.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA user_version")
+        ver = cursor.fetchone()[0]
+        assert ver == 1
+
+def test_db_initialized_caching(mock_projects_dir):
+    """Testa se o cache de inicialização em memória evita re-execuções redundantes."""
+    p = create_project("test_caching", "X:\\src")
+    assert p._db_initialized is True
+    
+    # Chamar novamente _init_project_db não deve quebrar nem recalcular schema
+    p._init_project_db()
+    assert p._db_initialized is True
+
