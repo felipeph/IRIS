@@ -1,5 +1,9 @@
 # Proposta 03: Correção de Race Condition no Bloqueio Exclusivo (`ProjectLock`)
 
+> **Status**: ✅ **Implementada (Abordagem A: Criação Atômica Exclusiva via Kernel)**  
+> **Data de Conclusão**: 15/10/2026  
+> **Branch**: `fix/concurrency-race-condition-project-lock`
+
 ## Contexto e Localização do Problema
 
 - **Arquivo**: [`src/core/lock.py`](file:///c:/code/IRIS/iris/src/core/lock.py)

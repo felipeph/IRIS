@@ -161,3 +161,103 @@ def test_youtube_token_atomic_save(tmp_path):
     save_token_atomic(token_file, mock_creds)
     assert token_file.exists()
     assert '{"token": "xyz123"}' in token_file.read_text(encoding="utf-8")
+
+def test_project_lock_corrupt_empty_file_auto_recovery(tmp_path, monkeypatch):
+    """Garante que um arquivo .lock vazio (0 bytes) ou corrompido é limpo e recuperado com sucesso."""
+    monkeypatch.setattr("src.core.lock.PROJECTS_DIR", tmp_path)
+    proj_name = "test_corrupt_lock"
+    lock_file = tmp_path / f"{proj_name}.lock"
+    
+    # Simula arquivo de lock vazio deixado por crash anterior
+    lock_file.write_text("", encoding="utf-8")
+    assert lock_file.exists()
+    assert lock_file.stat().st_size == 0
+    
+    lock = ProjectLock(proj_name)
+    assert lock.acquire() is True
+    assert lock_file.exists()
+    
+    # O arquivo deve agora conter JSON válido com o PID atual
+    with open(lock_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        assert data["pid"] == os.getpid()
+        assert data["project_name"] == proj_name
+        
+    lock.release()
+    assert not lock_file.exists()
+
+def test_project_lock_write_failure_leaves_no_garbage(tmp_path, monkeypatch):
+    """Garante que, se a escrita do JSON falhar, o arquivo parcial é removido imediatamente."""
+    monkeypatch.setattr("src.core.lock.PROJECTS_DIR", tmp_path)
+    proj_name = "test_write_fail"
+    lock_file = tmp_path / f"{proj_name}.lock"
+    
+    def mock_dump_fail(*args, **kwargs):
+        raise OSError("Simulação de disco cheio ou erro de I/O na escrita do lock")
+        
+    monkeypatch.setattr("json.dump", mock_dump_fail)
+    
+    lock = ProjectLock(proj_name)
+    with pytest.raises(OSError, match="Simulação de disco cheio"):
+        lock.acquire()
+        
+    # O arquivo parcial deve ter sido apagado pelo bloco except
+    assert not lock_file.exists()
+
+def test_get_lock_info_retry_on_empty_content(tmp_path, monkeypatch):
+    """Garante que get_lock_info retenta ler quando o arquivo está temporariamente vazio."""
+    monkeypatch.setattr("src.core.lock.PROJECTS_DIR", tmp_path)
+    proj_name = "test_retry_read"
+    lock = ProjectLock(proj_name)
+    
+    # Arquivo inexistente retorna None imediatamente
+    assert lock.get_lock_info() is None
+    
+    # Arquivo vazio retorna None após esgotar as retentativas rápidas
+    lock.lock_file.write_text("", encoding="utf-8")
+    assert lock.get_lock_info(retries=2, retry_delay=0.01) is None
+
+def test_project_lock_real_multiprocess_collision(tmp_path):
+    """
+    Testa exclusão mútua atômica real entre processos distintos do SO via subprocess.
+    Valida que exatamente um processo adquire o lock e os demais recebem ProjectLockedError.
+    """
+    import subprocess
+    import sys
+    
+    proj_name = "multiprocess_test_proj"
+    
+    worker_code = """
+import sys
+import time
+from pathlib import Path
+from src.core.lock import ProjectLock, ProjectLockedError
+import src.core.lock as lock_mod
+
+lock_mod.PROJECTS_DIR = Path(sys.argv[1])
+proj = sys.argv[2]
+lock = ProjectLock(proj)
+try:
+    if lock.acquire():
+        # Mantém a posse por 400ms para que os concorrentes colidam
+        time.sleep(0.4)
+        lock.release()
+        sys.exit(0)
+    sys.exit(1)
+except ProjectLockedError:
+    # 42 indica que foi devidamente barrado por trava ativa de outro PID
+    sys.exit(42)
+except Exception:
+    sys.exit(99)
+"""
+
+    cmd = [sys.executable, "-c", worker_code, str(tmp_path), proj_name]
+    
+    # Dispara 3 processos simultâneos disputando exatamente o mesmo projeto
+    processes = [subprocess.Popen(cmd) for _ in range(3)]
+    exit_codes = [p.wait(timeout=10) for p in processes]
+    
+    exit_codes.sort()
+    # Exatamente um deve obter sucesso (0) e os outros dois devem ser bloqueados (42)
+    assert exit_codes == [0, 42, 42]
+

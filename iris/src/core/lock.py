@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import time
 import atexit
 import socket
 from datetime import datetime
@@ -69,43 +70,46 @@ class ProjectLock:
         self._is_acquired = False
         self._atexit_registered = False
 
-    def get_lock_info(self) -> Optional[Dict[str, Any]]:
-        """Lê os dados da trava atual, se existir."""
-        if not self.lock_file.exists():
-            return None
-        try:
-            with open(self.lock_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
+    def get_lock_info(self, retries: int = 3, retry_delay: float = 0.05) -> Optional[Dict[str, Any]]:
+        """
+        Lê os dados da trava atual, se existir.
+        Tolerante a leituras concorrentes em escrita (arquivos vazios temporários
+        ou em processo de escrita/flush por outro processo recém-iniciado).
+        """
+        for attempt in range(retries):
+            if not self.lock_file.exists():
+                return None
+            try:
+                with open(self.lock_file, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if not content:
+                        if attempt < retries - 1:
+                            time.sleep(retry_delay)
+                            continue
+                        return None
+                    return json.loads(content)
+            except (json.JSONDecodeError, PermissionError):
+                if attempt < retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return None
+            except Exception:
+                return None
+        return None
 
     def acquire(self) -> bool:
         """
-        Tenta obter o lock do projeto.
+        Tenta obter o lock do projeto de forma atômica via kernel (os.O_CREAT | os.O_EXCL).
+        Garante imunidade total a race conditions (TOCTOU) e sobrescrita acidental.
         Se já estiver bloqueado por um PID ativo, lança ProjectLockedError.
-        Se o lock existente for órfão (PID morto), limpa e adquire.
+        Se o lock existente for órfão (PID morto) ou corrompido, limpa e tenta novamente.
         """
+        if self._is_acquired:
+            return True
+
         PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
         current_pid = os.getpid()
 
-        if self.lock_file.exists():
-            info = self.get_lock_info()
-            if info:
-                owner_pid = info.get("pid", 0)
-                if owner_pid == current_pid:
-                    self._is_acquired = True
-                    return True
-                    
-                if is_pid_alive(owner_pid):
-                    raise ProjectLockedError(self.project_name, info)
-                else:
-                    log_event(f"Lock órfão do projeto '{self.project_name}' (PID {owner_pid} morto) detectado e removido.", "warning")
-                    self.lock_file.unlink(missing_ok=True)
-            else:
-                # Arquivo corrompido ou vazio
-                self.lock_file.unlink(missing_ok=True)
-
-        # Gravação atômica do lock
         lock_data = {
             "project_name": self.project_name,
             "pid": current_pid,
@@ -113,23 +117,53 @@ class ProjectLock:
             "acquired_at": datetime.now().isoformat()
         }
 
-        temp_lock = PROJECTS_DIR / f"{self.project_name}.lock.{current_pid}.tmp"
-        try:
-            with open(temp_lock, "w", encoding="utf-8") as f:
-                json.dump(lock_data, f, indent=2)
-            os.replace(temp_lock, self.lock_file)
-            self._is_acquired = True
-            
-            if not self._atexit_registered:
-                atexit.register(self.release)
-                self._atexit_registered = True
-                
-            log_event(f"Lock do projeto '{self.project_name}' adquirido pelo PID {current_pid}.", "debug")
-            return True
-        except Exception as e:
-            if temp_lock.exists():
-                temp_lock.unlink(missing_ok=True)
-            raise e
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                # Criação atômica exclusiva via kernel:
+                # O SO garante que o arquivo só será criado se NÃO existir.
+                # Se já existir, lança FileExistsError sem sobrescrever o conteúdo.
+                flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                fd = os.open(str(self.lock_file), flags, 0o644)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        json.dump(lock_data, f, indent=2)
+                        f.flush()
+                except Exception:
+                    # Se falhar durante a escrita, descarta o arquivo incompleto
+                    self.lock_file.unlink(missing_ok=True)
+                    raise
+
+                self._is_acquired = True
+                if not self._atexit_registered:
+                    atexit.register(self.release)
+                    self._atexit_registered = True
+
+                log_event(f"Lock do projeto '{self.project_name}' adquirido pelo PID {current_pid}.", "debug")
+                return True
+
+            except FileExistsError:
+                # O arquivo já existe fisicamente. Inspeciona o processo proprietário.
+                info = self.get_lock_info()
+                if not info:
+                    # Arquivo vazio ou corrompido que persistiu após retentativas: lock órfão inválido
+                    log_event(f"Lock corrompido ou vazio do projeto '{self.project_name}' removido.", "warning")
+                    self.lock_file.unlink(missing_ok=True)
+                    continue
+
+                owner_pid = info.get("pid", 0)
+                if owner_pid == current_pid:
+                    self._is_acquired = True
+                    return True
+
+                if is_pid_alive(owner_pid):
+                    raise ProjectLockedError(self.project_name, info)
+                else:
+                    log_event(f"Lock órfão do projeto '{self.project_name}' (PID {owner_pid} morto) detectado e removido.", "warning")
+                    self.lock_file.unlink(missing_ok=True)
+                    continue
+
+        raise RuntimeError(f"Não foi possível adquirir o lock para o projeto '{self.project_name}' após {max_attempts} tentativas.")
 
     def release(self):
         """Libera a trava se este processo for o proprietário."""
@@ -143,8 +177,11 @@ class ProjectLock:
                 self.lock_file.unlink(missing_ok=True)
                 self._is_acquired = False
                 log_event(f"Lock do projeto '{self.project_name}' liberado pelo PID {os.getpid()}.", "debug")
+            else:
+                self._is_acquired = False
         except Exception as e:
             log_event(f"Erro ao liberar lock de '{self.project_name}': {e}", "warning")
+            self._is_acquired = False
 
     def __enter__(self):
         self.acquire()

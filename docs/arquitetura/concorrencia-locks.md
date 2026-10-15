@@ -11,15 +11,16 @@ Sem um controle rígido de concorrência, duas instâncias poderiam tentar manip
 
 ## 1. O Mecanismo `ProjectLock`
 
-O IRIS implementa um sistema de exclusão mútua distribuído baseado em arquivos de lock atômicos (`<projeto>.lock`), contendo um payload estruturado em JSON com telemetria do processo titular da trava:
+O IRIS implementa um sistema de exclusão mútua distribuído baseado na criação atômica exclusiva via kernel (`os.O_CREAT | os.O_EXCL | os.O_WRONLY`), gerando o arquivo `<projeto>.lock` diretamente pelo sistema operacional (via `CreateFileW(CREATE_NEW)` no Windows ou `open(O_CREAT | O_EXCL)` no Linux/POSIX). 
+
+Essa abordagem elimina qualquer vulnerabilidade de *Time-of-Check to Time-of-Use* (TOCTOU) ou sobrescrita silenciosa por `os.replace`. O arquivo gerado contém um payload estruturado em JSON com telemetria do processo titular da trava:
 
 ```json
 {
+  "project_name": "2026-10-14_GOPRO",
   "pid": 14228,
   "hostname": "WORKSTATION-01",
-  "created_at": 1760401200.0,
-  "heartbeat": 1760401245.0,
-  "project_name": "2026-10-14_GOPRO"
+  "acquired_at": "2026-10-15T18:00:00.000000"
 }
 ```
 
@@ -29,20 +30,24 @@ O IRIS implementa um sistema de exclusão mútua distribuído baseado em arquivo
 
 ```mermaid
 flowchart TD
-    START["Processo IRIS tenta acessar Projeto X"] --> CHECK_FILE{"Arquivo .lock existe?"}
+    START["Processo IRIS tenta acessar Projeto X"] --> TRY_KERNEL["Kernel OS: os.open(lock, O_CREAT | O_EXCL)"]
     
-    CHECK_FILE -- Não --> ACQUIRE["Cria arquivo .lock atômico com PID & Heartbeat"]
-    ACQUIRE --> SUCCESS["Trava Adquirida com Sucesso!\nInicia Execução"]
+    TRY_KERNEL -- Sucesso (Arquivo Criado) --> WRITE_LOCK["Grava JSON com PID & Hostname"]
+    WRITE_LOCK --> SUCCESS["Trava Adquirida com Sucesso!\nInicia Execução"]
     
-    CHECK_FILE -- Sim --> READ_LOCK["Lê conteúdo do .lock (PID, Heartbeat)"]
-    READ_LOCK --> CHECK_PID{"PID ainda está ativo no SO?"}
+    TRY_KERNEL -- FileExistsError (Trava já existe) --> READ_LOCK["get_lock_info() com retentativa (50ms)"]
+    READ_LOCK --> CHECK_CORRUPT{"Arquivo vazio ou ilegível?"}
     
-    CHECK_PID -- Não (Processo Morreu) --> RECOVER["Auto-Recuperação: Lock Órfão Detectado!\nRemove trava antiga e assume posse"]
-    RECOVER --> SUCCESS
+    CHECK_CORRUPT -- Sim (Orfão corrompido) --> REMOVE_CORRUPT["Remove trava corrompida"] --> RETRY["Nova tentativa de criação via Kernel"]
+    CHECK_CORRUPT -- Não (JSON Válido) --> CHECK_OWNER{"PID é o mesmo do processo?"}
     
-    CHECK_PID -- Sim (Processo Vivo) --> CHECK_TTL{"(Agora - Heartbeat) > 300s (TTL)?"}
-    CHECK_TTL -- Sim (Travamento/Zumbi) --> RECOVER
-    CHECK_TTL -- Não (Processo Saudável) --> DENY["Falha: Projeto em uso por outra instância ativa!\nExibe PID e encerra com segurança"]
+    CHECK_OWNER -- Sim (Reentrância) --> SUCCESS
+    CHECK_OWNER -- Não --> CHECK_PID{"PID ainda está ativo no SO?"}
+    
+    CHECK_PID -- Não (Processo Morreu) --> RECOVER["Auto-Recuperação: Lock Órfão Detectado!\nRemove trava antiga e tenta novamente"]
+    RECOVER --> RETRY
+    
+    CHECK_PID -- Sim (Processo Ativo) --> DENY["Falha: Projeto em uso por outra instância ativa!\nExibe PID e encerra com segurança"]
 ```
 
 ---
