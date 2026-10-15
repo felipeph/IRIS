@@ -18,38 +18,12 @@ class MoveStrategy(IngestionStrategy):
     """
     Estratégia Turbo de Ingestão: Movimenta arquivos nativamente via SO
     (os.replace no mesmo volume, shutil.move cross-volume), com pool multithreaded,
-    deduplicação preliminar, cálculo de xxHash64 pós-mover no SSD e limpeza
-    automática de pastas vazias na origem.
+    resolução estrita de colisões no staging por sufixo incremental (Abordagem C),
+    cálculo de xxHash64 pós-mover no SSD e limpeza automática de pastas vazias na origem.
     """
 
     def __init__(self, max_workers: int = 4):
         self.max_workers = max_workers
-
-    def _resolve_collision(self, target_path: Path, src_size: int) -> tuple[Path, bool]:
-        """
-        Resolve colisões de nomes no destino.
-        Retorna (target_path_resolvido, is_identical).
-        """
-        if not target_path.exists():
-            return target_path, False
-
-        # Se já existe arquivo no destino com mesmo tamanho, considera idêntico
-        if target_path.stat().st_size == src_size:
-            return target_path, True
-
-        # Se existe com tamanho diferente, gera sufixo incremental (_1, _2...)
-        base_stem = target_path.stem
-        suffix = target_path.suffix
-        parent_dir = target_path.parent
-        counter = 1
-        
-        while True:
-            candidate = parent_dir / f"{base_stem}_{counter}{suffix}"
-            if not candidate.exists():
-                return candidate, False
-            if candidate.stat().st_size == src_size:
-                return candidate, True
-            counter += 1
 
     def execute(self, project: Project, source_dir: Path, dest_dir: Path) -> bool:
         # FASE 1: Varredura rápida da origem
@@ -71,9 +45,10 @@ class MoveStrategy(IngestionStrategy):
         # FASE 2: Mapeamento do destino
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        # FASE 3: Comparação e Deduplicação Preliminar
+        # FASE 3: Resolução de Colisões e Planejamento de Movimentação (Abordagem C)
         tasks_to_move = []
         already_ingested_bytes = 0
+        reserved_paths: set[Path] = set()
 
         for src_path in media_files:
             orig_key = str(src_path.resolve())
@@ -81,34 +56,17 @@ class MoveStrategy(IngestionStrategy):
             rel_path = src_path.relative_to(source_dir)
             target_candidate = dest_dir / rel_path
 
-            # Checar se já consta registrado e verificado no banco do projeto
+            # Checar se já consta registrado e verificado no banco do projeto (retomada idempotente)
             db_item = project.get_item(orig_key)
             if db_item and db_item.status == "copied" and db_item.verified:
                 dest_file = Path(db_item.staging_path)
                 if dest_file.exists() and dest_file.stat().st_size == src_size:
                     already_ingested_bytes += src_size
+                    reserved_paths.add(dest_file)
                     continue
 
-            # Resolução de colisão e duplicata preliminar
-            resolved_target, is_identical = self._resolve_collision(target_candidate, src_size)
-
-            if is_identical:
-                # Arquivo idêntico já presente no destino
-                already_ingested_bytes += src_size
-                # Se não estiver no banco, registra-o como ingerido
-                if not db_item or not db_item.verified:
-                    file_hash = db_item.file_hash if (db_item and db_item.file_hash) else compute_file_hash(resolved_target)
-                    item = ProjectItem(
-                        original_path=orig_key,
-                        staging_path=str(resolved_target.resolve()),
-                        status="copied",
-                        file_size_bytes=src_size,
-                        file_hash=file_hash,
-                        verified=True
-                    )
-                    project.save_item(item)
-                continue
-
+            # Resolução estrita de colisão de nomes por sufixo incremental (_1, _2...)
+            resolved_target = self._resolve_collision(target_candidate, reserved_paths)
             tasks_to_move.append((src_path, resolved_target, src_size, orig_key))
 
         if not tasks_to_move:

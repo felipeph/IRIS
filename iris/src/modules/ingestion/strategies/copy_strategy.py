@@ -88,8 +88,9 @@ class CopyStrategy(IngestionStrategy):
         total_gb = total_bytes / (1024**3)
         files_to_copy = []
         already_copied_bytes = 0
+        reserved_paths: set[Path] = set()
 
-        # Verificando no DB local do projeto quais arquivos já foram copiados e verificados
+        # Verificando no DB local do projeto quais arquivos já foram copiados e verificados (retomada idempotente)
         for src_path in media_files:
             orig_key = str(src_path.resolve())
             item = project.get_item(orig_key)
@@ -99,6 +100,7 @@ class CopyStrategy(IngestionStrategy):
                 dest_path = Path(item.staging_path)
                 if dest_path.exists() and dest_path.stat().st_size == src_size:
                     already_copied_bytes += src_size
+                    reserved_paths.add(dest_path)
                     continue
                     
             files_to_copy.append(src_path)
@@ -123,7 +125,8 @@ class CopyStrategy(IngestionStrategy):
                 live.update(PipelineUI.generate_renderable(tracker, stage_title, *render_args, "Iniciando arquivo..."))
                 
                 rel_path = src_path.relative_to(source_dir)
-                target_path = dest_dir / rel_path
+                target_candidate = dest_dir / rel_path
+                target_path = self._resolve_collision(target_candidate, reserved_paths)
                 orig_key = str(src_path.resolve())
                 fn_copy_and_verify = _get_copy_and_verify()
                 success, final_hash = fn_copy_and_verify(src_path, target_path, live, tracker, render_args)

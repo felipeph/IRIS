@@ -1,6 +1,7 @@
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Optional
 import xxhash
 
 from src.core.project import Project
@@ -59,3 +60,28 @@ class IngestionStrategy(ABC):
     def is_media_file(self, file_path: Path) -> bool:
         """Verifica se o arquivo possui extensão suportada e não é oculto/temporário."""
         return file_path.suffix.lower() in self.VALID_EXTENSIONS and not file_path.name.startswith('.')
+
+    def _resolve_collision(self, target_path: Path, reserved_paths: Optional[set[Path]] = None) -> Path:
+        """
+        Resolve colisões de nomes no destino gerando sufixo incremental (_1, _2...).
+        Nunca deduplica por conteúdo no staging (Abordagem C: desativação de deduplicação no staging).
+        Garante que target_path não colida com arquivos em disco nem com caminhos reservados no lote.
+        """
+        if not target_path.exists() and (reserved_paths is None or target_path not in reserved_paths):
+            if reserved_paths is not None:
+                reserved_paths.add(target_path)
+            return target_path
+
+        base_stem = target_path.stem
+        suffix = target_path.suffix
+        parent_dir = target_path.parent
+        counter = 1
+
+        while True:
+            candidate = parent_dir / f"{base_stem}_{counter}{suffix}"
+            if not candidate.exists() and (reserved_paths is None or candidate not in reserved_paths):
+                if reserved_paths is not None:
+                    reserved_paths.add(candidate)
+                return candidate
+            counter += 1
+

@@ -7,6 +7,15 @@ from unittest.mock import patch, MagicMock
 from src.core.project import Project, ProjectItem, init_central_db
 from src.modules.ingestion.stage import IngestionStage
 
+@pytest.fixture(autouse=True)
+def isolate_project_dbs(tmp_path_factory):
+    """Garante que todos os testes deste arquivo tenham seus DBs isolados em pasta temporária."""
+    d = tmp_path_factory.mktemp("iris_test_dbs")
+    with patch("src.core.project.PROJECTS_DIR", d), \
+         patch("src.core.project.CENTRAL_DB_PATH", d / "iris_central.db"):
+        init_central_db()
+        yield d
+
 @pytest.fixture
 def ingestion_env(tmp_path):
     """Cria um ambiente de arquivos temporários para teste de cópia."""
@@ -158,16 +167,16 @@ def test_move_strategy_basic(ingestion_env, tmp_path):
         assert len(it.file_hash) > 0
 
 def test_move_strategy_collision_and_duplicate(ingestion_env):
-    """Garante tratamento de colisão com sufixo e deduplicação de arquivo idêntico."""
+    """Garante que colisões no staging geram sufixo incremental (_1) sem perda de dados (Abordagem C)."""
     from src.modules.ingestion.strategies import MoveStrategy
 
     src_dir, dest_root = ingestion_env
     dest_dir = dest_root / "1_Entrada" / "test_collision" / "raw"
     dest_dir.mkdir(parents=True)
 
-    # 1. Arquivo idêntico já presente no destino (mesmo nome, mesmo tamanho)
+    # 1. Arquivo já presente no destino com mesmo tamanho e conteúdo
     foto1_dest = dest_dir / "foto1.jpg"
-    foto1_dest.write_text("dummy image content") # exatamente o mesmo texto de foto1.jpg
+    foto1_dest.write_text("dummy image content")
 
     # 2. Arquivo com mesmo nome mas tamanho diferente no destino
     video1_dest = dest_dir / "video1.mp4"
@@ -181,14 +190,122 @@ def test_move_strategy_collision_and_duplicate(ingestion_env):
 
     assert success is True
 
-    # foto1 era idêntico: arquivo no destino preservado
+    # foto1 original no destino preservado e arquivo da origem movido com sufixo _1
     assert foto1_dest.exists()
+    assert (dest_dir / "foto1_1.jpg").exists()
+    assert (dest_dir / "foto1_1.jpg").read_text() == "dummy image content"
+    assert not (src_dir / "foto1.jpg").exists()  # Movido da origem, sem perda
 
-    # video1 colidiu com tamanho diferente: destino deve conter video1.mp4 (original do destino)
-    # e video1_1.mp4 (movido da origem com sufixo incremental)
+    # video1 no destino preservado e arquivo da origem movido com sufixo _1
     assert (dest_dir / "video1.mp4").exists()
     assert (dest_dir / "video1_1.mp4").exists()
     assert (dest_dir / "video1_1.mp4").read_text() == "dummy video content"
+    assert not (src_dir / "video1.mp4").exists()
+
+    # Banco do projeto deve registrar os 2 itens movidos
+    items = project.get_items()
+    assert len(items) == 2
+    staging_paths = [it.staging_path for it in items]
+    assert str((dest_dir / "foto1_1.jpg").resolve()) in staging_paths
+    assert str((dest_dir / "video1_1.mp4").resolve()) in staging_paths
+
+def test_move_strategy_same_size_different_content(tmp_path):
+    """
+    Garante que arquivos com exatamente o mesmo tamanho em bytes mas conteúdos
+    distintos (caso típico de RAWs de mesmo sensor) NÃO são descartados (Zero Data Loss).
+    """
+    from src.modules.ingestion.strategies import MoveStrategy
+
+    src_dir = tmp_path / "DCIM_SAME_SIZE"
+    dest_dir = tmp_path / "DEST_SAME_SIZE"
+    src_dir.mkdir()
+    dest_dir.mkdir()
+
+    # Simula arquivo existente no destino com 5000 bytes
+    dest_file = dest_dir / "IMG_0001.CR2"
+    dest_file.write_bytes(b"A" * 5000)
+
+    # Simula arquivo na origem com os mesmos 5000 bytes, mas dados diferentes
+    src_file = src_dir / "IMG_0001.CR2"
+    src_file.write_bytes(b"B" * 5000)
+
+    project = Project("test_same_size", str(src_dir))
+    project._init_project_db()
+
+    strategy = MoveStrategy(max_workers=2)
+    success = strategy.execute(project, src_dir, dest_dir)
+
+    assert success is True
+    # Nenhum arquivo deve ser descartado
+    assert dest_file.exists()
+    assert dest_file.read_bytes() == b"A" * 5000
+
+    resolved_moved = dest_dir / "IMG_0001_1.CR2"
+    assert resolved_moved.exists()
+    assert resolved_moved.read_bytes() == b"B" * 5000
+    assert not src_file.exists()  # Movido com sucesso da origem
+
+    items = project.get_items()
+    assert len(items) == 1
+    assert items[0].staging_path == str(resolved_moved.resolve())
+    assert items[0].verified is True
+
+def test_move_strategy_reserved_paths_in_batch(tmp_path):
+    """
+    Garante que colisões no mesmo lote geram sufixos sequenciais (_1, _2...)
+    usando reserved_paths sem sobrescrita mútua no pool multithreaded.
+    """
+    from src.modules.ingestion.strategies import MoveStrategy
+
+    src_dir = tmp_path / "DCIM_RESERVED"
+    dest_dir = tmp_path / "DEST_RESERVED"
+    src_dir.mkdir()
+    dest_dir.mkdir()
+
+    # Cria arquivo base no destino
+    (dest_dir / "foto.jpg").write_text("base")
+    (dest_dir / "foto_1.jpg").write_text("existente_1")
+
+    # Arquivo da origem deve pular foto.jpg e foto_1.jpg, resolvendo para foto_2.jpg
+    (src_dir / "foto.jpg").write_text("novo_foto")
+
+    project = Project("test_reserved", str(src_dir))
+    project._init_project_db()
+
+    strategy = MoveStrategy(max_workers=2)
+    success = strategy.execute(project, src_dir, dest_dir)
+
+    assert success is True
+    assert (dest_dir / "foto.jpg").read_text() == "base"
+    assert (dest_dir / "foto_1.jpg").read_text() == "existente_1"
+    assert (dest_dir / "foto_2.jpg").exists()
+    assert (dest_dir / "foto_2.jpg").read_text() == "novo_foto"
+    assert not (src_dir / "foto.jpg").exists()
+
+def test_copy_strategy_collision_suffix(tmp_path):
+    """Garante que CopyStrategy também resolve colisão de nomes com sufixo _1."""
+    from src.modules.ingestion.strategies import CopyStrategy
+
+    src_dir = tmp_path / "DCIM_COPY"
+    dest_dir = tmp_path / "DEST_COPY"
+    src_dir.mkdir()
+    dest_dir.mkdir()
+
+    (dest_dir / "foto.jpg").write_text("original no destino")
+    (src_dir / "foto.jpg").write_text("foto nova na origem")
+
+    project = Project("test_copy_col", str(src_dir))
+    project._init_project_db()
+
+    strategy = CopyStrategy()
+    success = strategy.execute(project, src_dir, dest_dir)
+
+    assert success is True
+    assert (dest_dir / "foto.jpg").read_text() == "original no destino"
+    assert (dest_dir / "foto_1.jpg").exists()
+    assert (dest_dir / "foto_1.jpg").read_text() == "foto nova na origem"
+    # CopyStrategy não remove da origem
+    assert (src_dir / "foto.jpg").exists()
 
 def test_move_strategy_legacy_extensions(tmp_path):
     """Garante que formatos de mídia legados e diversos são ingeridos."""

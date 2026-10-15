@@ -24,7 +24,7 @@ graph TD
     
     B -->|copy (Padrão para Cartão SD)| C["CopyStrategy:\nCópia Chunkada em RAM (4MB)\n+ xxHash64 Simultâneo\n+ os.fsync() + Releitura no SSD"]
     
-    B -->|move (Padrão para SSD Local)| D["MoveStrategy:\nMultithreaded 5 Fases\n+ Deduplicação Prévia\n+ os.replace() atômico\n+ Hashing Pós-Movimentação no SSD"]
+    B -->|move (Padrão para SSD Local)| D["MoveStrategy:\nMultithreaded 5 Fases\n+ Resolução Estrita de Colisão\n+ os.replace() atômico\n+ Hashing Pós-Movimentação no SSD"]
     
     C --> E[("Registra no SQLite do Projeto\n(status: verified=1)")]
     D --> E
@@ -54,7 +54,7 @@ Esta estratégia é calibrada para suportes de gravação lentos ou com conexõe
 Desenvolvida para máxima velocidade em discos de alta velocidade ou movimentações locais no mesmo volume:
 
 - **Fase 1 (Planning):** Varredura dos arquivos na origem montando o catálogo inicial na memória.
-- **Fase 2 (Deduplication):** Consulta de duplicatas por tamanho e hash rápido prévio, impedindo o reprocessamento de arquivos já ingeridos.
+- **Fase 2 (Collision Resolution & Planning):** Resolução estrita de colisões de nomes via sufixo incremental (`_1`, `_2`...) com rastreamento de caminhos reservados no lote (`reserved_paths`). Nenhuma foto é descartada no staging (garantia de **Zero Data Loss**; deduplicação real por conteúdo delegada ao `OrganizeStage`).
 - **Fase 3 (Moving):** Movimentação paralela via `ThreadPoolExecutor(max_workers=4)`. Quando origem e destino residem no mesmo sistema de arquivos do Windows (ex: NTFS), a chamada `os.replace` executa em **milissegundos**, apenas atualizando as entradas da Master File Table (MFT).
 - **Fase 4 (Verification):** O cálculo do hash `xxHash64` ocorre diretamente no SSD de destino, aproveitando velocidades de barramento de múltiplos gigabytes por segundo.
 - **Fase 5 (Cleanup):** Higienização de diretórios vazios residuais deixados na pasta de origem.

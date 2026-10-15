@@ -22,7 +22,7 @@ Implementamos o **Strategy Pattern** na etapa de ingestão (`IngestionStage`), p
 - **`strategy: "copy"` (CopyStrategy clássica)**: Recomendada para cartões SD externos com conexão instável.
 - **`strategy: "move"` (MoveStrategy multithreaded em 5 fases)**: Arquitetura acelerada que utiliza chamadas de sistema atômicas (`os.replace` ou `shutil.move`), executada nas seguintes fases:
   1. *Fase 1 (Planning)*: Varredura dos arquivos na origem.
-  2. *Fase 2 (Deduplication)*: Comparação rápida por tamanho e hash prévio para não mover arquivos redundantes.
+  2. *Fase 2 (Collision Resolution & Planning)*: Resolução estrita de colisões de nomes via sufixo incremental (_1, _2...) com proteção de lote (reserved_paths) sem descarte prematuro no staging (Zero Data Loss).
   3. *Fase 3 (Moving)*: Movimentação multithreaded via `ThreadPoolExecutor(max_workers=4)`. No mesmo sistema de arquivos, a movimentação é instantânea (apenas alteração de ponteiro de diretório no inode/MFT do SO).
   4. *Fase 4 (Verification)*: Hashing rápido executado diretamente no SSD de destino a velocidades de vários gigabytes por segundo.
   5. *Fase 5 (Cleanup)*: Remoção de diretórios residuais vazios na origem.
