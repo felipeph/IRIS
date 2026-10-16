@@ -115,42 +115,61 @@ class MoveStrategy(IngestionStrategy):
                     for task in tasks_to_move
                 }
 
-                for future in concurrent.futures.as_completed(future_to_task):
-                    task = future_to_task[future]
-                    orig_key = task[3]
-                    src_size = task[2]
-                    file_name = task[0].name
+                batch_size = 50
+                current_tx = None
+                items_in_tx = 0
+                try:
+                    for future in concurrent.futures.as_completed(future_to_task):
+                        if current_tx is None:
+                            current_tx = project.transaction()
+                            current_tx.__enter__()
+                            items_in_tx = 0
 
-                    render_args = (start_str, total_files, total_gb, file_name)
+                        task = future_to_task[future]
+                        orig_key = task[3]
+                        src_size = task[2]
+                        file_name = task[0].name
 
-                    try:
-                        key, staging_path, size_bytes, final_hash, fname = future.result()
-                        
-                        tracker.update(size_bytes)
-                        live.update(PipelineUI.generate_renderable(tracker, stage_title, *render_args, "Movido e verificado"))
+                        render_args = (start_str, total_files, total_gb, file_name)
 
-                        # Salva atomicamente no SQLite na thread principal
-                        item = ProjectItem(
-                            original_path=key,
-                            staging_path=staging_path,
-                            status="copied",
-                            file_size_bytes=size_bytes,
-                            file_hash=final_hash,
-                            verified=True
-                        )
-                        project.save_item(item)
+                        try:
+                            key, staging_path, size_bytes, final_hash, fname = future.result()
+                            
+                            tracker.update(size_bytes)
+                            live.update(PipelineUI.generate_renderable(tracker, stage_title, *render_args, "Movido e verificado"))
 
-                    except Exception as exc:
-                        errors += 1
-                        console.print(f"\n[red]Erro ao mover/verificar {file_name}: {exc}[/red]")
-                        item = ProjectItem(
-                            original_path=orig_key,
-                            staging_path=str(task[1].resolve()),
-                            status="error",
-                            file_size_bytes=src_size,
-                            verified=False
-                        )
-                        project.save_item(item)
+                            # Salva atomicamente no SQLite na thread principal
+                            item = ProjectItem(
+                                original_path=key,
+                                staging_path=staging_path,
+                                status="copied",
+                                file_size_bytes=size_bytes,
+                                file_hash=final_hash,
+                                verified=True
+                            )
+                            project.save_item(item)
+                            items_in_tx += 1
+
+                        except Exception as exc:
+                            errors += 1
+                            console.print(f"\n[red]Erro ao mover/verificar {file_name}: {exc}[/red]")
+                            item = ProjectItem(
+                                original_path=orig_key,
+                                staging_path=str(task[1].resolve()),
+                                status="error",
+                                file_size_bytes=src_size,
+                                verified=False
+                            )
+                            project.save_item(item)
+                            items_in_tx += 1
+
+                        if items_in_tx >= batch_size:
+                            current_tx.__exit__(None, None, None)
+                            current_tx = None
+                            items_in_tx = 0
+                finally:
+                    if current_tx is not None:
+                        current_tx.__exit__(None, None, None)
 
         if errors > 0:
             console.print(f"\n[yellow]Ingestão finalizada com {errors} erro(s).[/yellow]")

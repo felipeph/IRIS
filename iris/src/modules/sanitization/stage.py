@@ -76,15 +76,16 @@ class SanitizationStage(PipelineStage):
                         # Warnings do exiftool também vão para o stderr
                         pass
                     
-                    # Atualiza os tamanhos e hashes dos arquivos sanitizados
-                    for it in chunk_items:
-                        p = Path(it.staging_path)
-                        if p.exists():
-                            new_size = p.stat().st_size
-                            if new_size != it.file_size_bytes:
-                                it.file_size_bytes = new_size
-                                it.file_hash = compute_file_hash(p)
-                                project.save_item(it)
+                    # Atualiza os tamanhos e hashes dos arquivos sanitizados em transação única por lote
+                    with project.transaction():
+                        for it in chunk_items:
+                            p = Path(it.staging_path)
+                            if p.exists():
+                                new_size = p.stat().st_size
+                                if new_size != it.file_size_bytes:
+                                    it.file_size_bytes = new_size
+                                    it.file_hash = compute_file_hash(p)
+                                    project.save_item(it)
                         
                     tracker.update(len(chunk_items))
                     live.update(PipelineUI.generate_renderable(tracker, "ETAPA: SANITIZAÇÃO DE METADADOS", start_str, total_files, 0.0, cur_name, "Progresso"))

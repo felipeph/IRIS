@@ -1,5 +1,7 @@
 import json
 import sqlite3
+import threading
+import dataclasses
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
@@ -200,10 +202,89 @@ class ProjectItem:
     def from_dict(cls, data: dict) -> "ProjectItem":
         valid = getattr(cls, "_valid_fields", None)
         if valid is None:
-            import dataclasses
             valid = {f.name for f in dataclasses.fields(cls)}
             cls._valid_fields = valid
         return cls(**{k: v for k, v in data.items() if k in valid})
+
+ITEM_FIELDS = [f.name for f in dataclasses.fields(ProjectItem)]
+_ITEM_PLACEHOLDERS = ", ".join(["?"] * len(ITEM_FIELDS))
+_ITEM_UPDATES = ", ".join([f"{c}=excluded.{c}" for c in ITEM_FIELDS if c != "original_path"])
+ITEMS_UPSERT_SQL = f"""
+    INSERT INTO items ({", ".join(ITEM_FIELDS)})
+    VALUES ({_ITEM_PLACEHOLDERS})
+    ON CONFLICT(original_path) DO UPDATE SET
+        {_ITEM_UPDATES}
+"""
+
+def _serialize_item(item: ProjectItem) -> tuple:
+    vals = []
+    for f in ITEM_FIELDS:
+        v = getattr(item, f)
+        if f == "verified":
+            vals.append(int(v))
+        elif f in ("meta_is_video", "meta_is_raw") and v is not None:
+            vals.append(int(v))
+        else:
+            vals.append(v)
+    return tuple(vals)
+
+class _ProjectTransactionContext:
+    """Gerenciador de contexto para transações SQLite com suporte a savepoints aninhados."""
+    def __init__(self, project: "Project"):
+        self.project = project
+        self._sp_name: Optional[str] = None
+        self._is_top_level: bool = False
+
+    def __enter__(self) -> "Project":
+        self.project._ensure_db_initialized()
+        conn = self.project._get_active_conn()
+        if conn is None:
+            self._is_top_level = True
+            conn = get_db_connection(self.project._project_db_file)
+            conn.execute("BEGIN IMMEDIATE;")
+            self.project._set_active_conn(conn)
+        else:
+            self._is_top_level = False
+            depth = self.project._increment_tx_depth()
+            self._sp_name = f"sp_{depth}"
+            conn.execute(f"SAVEPOINT {self._sp_name};")
+        return self.project
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        conn = self.project._get_active_conn()
+        if conn is None:
+            return False
+
+        try:
+            if exc_type is not None:
+                if self._is_top_level:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                else:
+                    if self._sp_name:
+                        try:
+                            conn.execute(f"ROLLBACK TO {self._sp_name};")
+                            conn.execute(f"RELEASE {self._sp_name};")
+                        except Exception:
+                            pass
+            else:
+                if self._is_top_level:
+                    conn.commit()
+                else:
+                    if self._sp_name:
+                        conn.execute(f"RELEASE {self._sp_name};")
+        finally:
+            if self._is_top_level:
+                try:
+                    conn.close()
+                finally:
+                    self.project._clear_active_conn()
+            else:
+                self.project._decrement_tx_depth()
+
+        return False
 
 class Project:
     """Gerencia o estado de um projeto de ingestão e processamento."""
@@ -216,8 +297,39 @@ class Project:
         self.total_source_size_bytes = 0
         self.auto_cleanup: bool = False
         self._db_initialized: bool = False
+        self._tx_local = threading.local()
         
         self._project_db_file = PROJECTS_DIR / f"{self.name}.db"
+
+    def _get_active_conn(self) -> Optional[sqlite3.Connection]:
+        return getattr(self._tx_local, "conn", None)
+
+    def _set_active_conn(self, conn: sqlite3.Connection):
+        self._tx_local.conn = conn
+        self._tx_local.depth = 1
+
+    def _clear_active_conn(self):
+        self._tx_local.conn = None
+        self._tx_local.depth = 0
+
+    def _increment_tx_depth(self) -> int:
+        depth = getattr(self._tx_local, "depth", 1) + 1
+        self._tx_local.depth = depth
+        return depth
+
+    def _decrement_tx_depth(self) -> int:
+        depth = max(1, getattr(self._tx_local, "depth", 1) - 1)
+        self._tx_local.depth = depth
+        return depth
+
+    def _ensure_db_initialized(self):
+        """Garante inicialização do esquema sem chamadas redundantes ao filesystem."""
+        if not getattr(self, "_db_initialized", False):
+            self._init_project_db()
+
+    def transaction(self) -> _ProjectTransactionContext:
+        """Context manager para agrupar operações em uma transação única no SQLite."""
+        return _ProjectTransactionContext(self)
 
     def _init_project_db(self, force: bool = False):
         if getattr(self, "_db_initialized", False) and not force and self._project_db_file.exists():
@@ -330,6 +442,19 @@ class Project:
         if not self._project_db_file.exists():
             return []
         items = []
+        active_conn = self._get_active_conn()
+        if active_conn is not None:
+            active_conn.row_factory = sqlite3.Row
+            cursor = active_conn.cursor()
+            cursor.execute("SELECT * FROM items")
+            for row in cursor.fetchall():
+                d = dict(row)
+                d['verified'] = bool(d['verified'])
+                if d['meta_is_video'] is not None: d['meta_is_video'] = bool(d['meta_is_video'])
+                if d['meta_is_raw'] is not None: d['meta_is_raw'] = bool(d['meta_is_raw'])
+                items.append(ProjectItem.from_dict(d))
+            return items
+
         with get_db_connection(self._project_db_file) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -343,32 +468,50 @@ class Project:
         return items
 
     def save_item(self, item: ProjectItem):
-        """Salva ou atualiza um item no banco do projeto atomicamente."""
-        self._init_project_db()
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            d = asdict(item)
-            d['verified'] = int(d['verified'])
-            if d['meta_is_video'] is not None: d['meta_is_video'] = int(d['meta_is_video'])
-            if d['meta_is_raw'] is not None: d['meta_is_raw'] = int(d['meta_is_raw'])
-            
-            columns = list(d.keys())
-            placeholders = ", ".join(["?"] * len(columns))
-            updates = ", ".join([f"{c}=excluded.{c}" for c in columns if c != "original_path"])
-            
-            sql = f"""
-                INSERT INTO items ({", ".join(columns)})
-                VALUES ({placeholders})
-                ON CONFLICT(original_path) DO UPDATE SET
-                    {updates}
-            """
-            cursor.execute(sql, tuple(d.values()))
-            conn.commit()
+        """Salva ou atualiza um item no banco do projeto atomicamente ou na transação ativa."""
+        self._ensure_db_initialized()
+        params = _serialize_item(item)
+        active_conn = self._get_active_conn()
+        if active_conn is not None:
+            active_conn.execute(ITEMS_UPSERT_SQL, params)
+        else:
+            with get_db_connection(self._project_db_file) as conn:
+                conn.execute(ITEMS_UPSERT_SQL, params)
+                conn.commit()
+
+    def save_items_batch(self, items: List[ProjectItem]):
+        """Salva uma coleção de itens via executemany em lote de alta performance."""
+        if not items:
+            return
+        self._ensure_db_initialized()
+        params_list = [_serialize_item(it) for it in items]
+        active_conn = self._get_active_conn()
+        if active_conn is not None:
+            active_conn.executemany(ITEMS_UPSERT_SQL, params_list)
+        else:
+            with self.transaction():
+                conn = self._get_active_conn()
+                if conn:
+                    conn.executemany(ITEMS_UPSERT_SQL, params_list)
 
     def get_item(self, original_path: str) -> Optional[ProjectItem]:
         """Busca um item especifico no banco pelo original_path."""
         if not self._project_db_file.exists():
             return None
+        active_conn = self._get_active_conn()
+        if active_conn is not None:
+            active_conn.row_factory = sqlite3.Row
+            cursor = active_conn.cursor()
+            cursor.execute("SELECT * FROM items WHERE original_path=?", (original_path,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d['verified'] = bool(d['verified'])
+                if d['meta_is_video'] is not None: d['meta_is_video'] = bool(d['meta_is_video'])
+                if d['meta_is_raw'] is not None: d['meta_is_raw'] = bool(d['meta_is_raw'])
+                return ProjectItem.from_dict(d)
+            return None
+
         with get_db_connection(self._project_db_file) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -389,9 +532,8 @@ class Project:
         
     @items.setter
     def items(self, value: List[ProjectItem]):
-        # O setter da propriedade fará upsert
-        for item in value:
-            self.save_item(item)
+        # Grava todos os itens em lote via transação única e executemany
+        self.save_items_batch(value)
 
     def touch(self):
         """Atualiza a data de acesso do projeto no banco central."""

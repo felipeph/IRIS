@@ -116,45 +116,49 @@ class CopyStrategy(IngestionStrategy):
 
         stage_title = "ETAPA 1: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)"
 
+        batch_size = 50
         with Live(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, total_gb, "Preparando...", "Inicializando"), console=console, refresh_per_second=4) as live:
-            for i, src_path in enumerate(files_to_copy, 1):
-                src_size = src_path.stat().st_size
-                current_file_name = src_path.name
-                
-                render_args = (start_str, total_files, total_gb, current_file_name)
-                live.update(PipelineUI.generate_renderable(tracker, stage_title, *render_args, "Iniciando arquivo..."))
-                
-                rel_path = src_path.relative_to(source_dir)
-                target_candidate = dest_dir / rel_path
-                target_path = self._resolve_collision(target_candidate, reserved_paths)
-                orig_key = str(src_path.resolve())
-                fn_copy_and_verify = _get_copy_and_verify()
-                success, final_hash = fn_copy_and_verify(src_path, target_path, live, tracker, render_args)
-                
-                if success:
-                    item = ProjectItem(
-                        original_path=orig_key,
-                        staging_path=str(target_path.resolve()),
-                        status="copied",
-                        file_size_bytes=src_size,
-                        file_hash=final_hash,
-                        verified=True
-                    )
-                    project.save_item(item)
-                    live.update(PipelineUI.generate_renderable(tracker, stage_title, *render_args, "Verificação concluída"))
-                else:
-                    live.stop()
-                    console.print(f"[red]Erro na cópia ou falha de verificação (hash mismatch) em {src_path.name}.[/red]")
-                    target_path.unlink(missing_ok=True)
-                    item = ProjectItem(
-                        original_path=orig_key,
-                        staging_path=str(target_path.resolve()),
-                        status="error",
-                        file_size_bytes=src_size,
-                        verified=False
-                    )
-                    project.save_item(item)
-                    return False
+            for chunk_idx in range(0, len(files_to_copy), batch_size):
+                chunk = files_to_copy[chunk_idx:chunk_idx + batch_size]
+                with project.transaction():
+                    for src_path in chunk:
+                        src_size = src_path.stat().st_size
+                        current_file_name = src_path.name
+                        
+                        render_args = (start_str, total_files, total_gb, current_file_name)
+                        live.update(PipelineUI.generate_renderable(tracker, stage_title, *render_args, "Iniciando arquivo..."))
+                        
+                        rel_path = src_path.relative_to(source_dir)
+                        target_candidate = dest_dir / rel_path
+                        target_path = self._resolve_collision(target_candidate, reserved_paths)
+                        orig_key = str(src_path.resolve())
+                        fn_copy_and_verify = _get_copy_and_verify()
+                        success, final_hash = fn_copy_and_verify(src_path, target_path, live, tracker, render_args)
+                        
+                        if success:
+                            item = ProjectItem(
+                                original_path=orig_key,
+                                staging_path=str(target_path.resolve()),
+                                status="copied",
+                                file_size_bytes=src_size,
+                                file_hash=final_hash,
+                                verified=True
+                            )
+                            project.save_item(item)
+                            live.update(PipelineUI.generate_renderable(tracker, stage_title, *render_args, "Verificação concluída"))
+                        else:
+                            live.stop()
+                            console.print(f"[red]Erro na cópia ou falha de verificação (hash mismatch) em {src_path.name}.[/red]")
+                            target_path.unlink(missing_ok=True)
+                            item = ProjectItem(
+                                original_path=orig_key,
+                                staging_path=str(target_path.resolve()),
+                                status="error",
+                                file_size_bytes=src_size,
+                                verified=False
+                            )
+                            project.save_item(item)
+                            return False
 
         console.print(f"\n[green]Ingestão de {total_files} arquivos concluída e verificada com sucesso![/green]")
         return True

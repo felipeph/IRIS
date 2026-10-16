@@ -126,97 +126,101 @@ class OrganizeStage(PipelineStage):
         start_str = datetime.now().strftime("%H:%M:%S")
         errors = 0
 
+        batch_size = 50
         with Live(PipelineUI.generate_renderable(tracker, "ETAPA 4: ORGANIZAÇÃO FÍSICA (SSD)", start_str, total_files, total_gb, "Preparando...", "Inicializando"), console=console, refresh_per_second=4) as live:
-            for item in items_to_organize:
-                staging_path = Path(item.staging_path)
-                current_file_name = item.target_filename or staging_path.name
-                live.update(PipelineUI.generate_renderable(tracker, "ETAPA 4: ORGANIZAÇÃO FÍSICA (SSD)", start_str, total_files, total_gb, current_file_name, "Organizando..."))
+            for chunk_idx in range(0, len(items_to_organize), batch_size):
+                chunk = items_to_organize[chunk_idx:chunk_idx + batch_size]
+                with project.transaction():
+                    for item in chunk:
+                        staging_path = Path(item.staging_path)
+                        current_file_name = item.target_filename or staging_path.name
+                        live.update(PipelineUI.generate_renderable(tracker, "ETAPA 4: ORGANIZAÇÃO FÍSICA (SSD)", start_str, total_files, total_gb, current_file_name, "Organizando..."))
 
-                rel_dir = Path(item.relative_dest_dir)
-                target_name = item.target_filename
-                final_dir = dest_root / rel_dir
-                final_path = final_dir / target_name
+                        rel_dir = Path(item.relative_dest_dir)
+                        target_name = item.target_filename
+                        final_dir = dest_root / rel_dir
+                        final_path = final_dir / target_name
 
-                # Caso o arquivo não esteja no staging: verificar auto-recuperação
-                if not staging_path.exists():
-                    if final_path.exists() and final_path.stat().st_size == item.file_size_bytes:
-                        # Checar se o hash confere
-                        dest_hash = compute_file_hash(final_path)
-                        if dest_hash == item.file_hash:
-                            item.organized_path = str(final_path.resolve())
+                        # Caso o arquivo não esteja no staging: verificar auto-recuperação
+                        if not staging_path.exists():
+                            if final_path.exists() and final_path.stat().st_size == item.file_size_bytes:
+                                # Checar se o hash confere
+                                dest_hash = compute_file_hash(final_path)
+                                if dest_hash == item.file_hash:
+                                    item.organized_path = str(final_path.resolve())
+                                    item.status = "organized"
+                                    project.save_item(item)
+                                    tracker.update(item.file_size_bytes)
+                                    continue
+                            
+                            console.print(f"[red]Arquivo não encontrado no staging: {staging_path}[/red]")
+                            errors += 1
+                            continue
+
+                        try:
+                            final_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            # Verificação e Resolução de Colisões
+                            is_already_identical = False
+                            if final_path.exists():
+                                if final_path.stat().st_size == item.file_size_bytes and compute_file_hash(final_path) == item.file_hash:
+                                    is_already_identical = True
+                                else:
+                                    # Conteúdo diferente: aplicar sufixo incremental _1, _2...
+                                    base_name = final_path.stem
+                                    ext = final_path.suffix
+                                    counter = 1
+                                    while final_path.exists():
+                                        if final_path.stat().st_size == item.file_size_bytes and compute_file_hash(final_path) == item.file_hash:
+                                            is_already_identical = True
+                                            break
+                                        final_path = final_dir / f"{base_name}_{counter}{ext}"
+                                        counter += 1
+
+                            if is_already_identical:
+                                # Já existe arquivo idêntico no destino: remove duplicata do staging
+                                staging_path.unlink()
+                                item.organized_path = str(final_path.resolve())
+                            else:
+                                # Movimentação física
+                                same_vol = is_same_volume(staging_path, final_path)
+                                if same_vol:
+                                    shutil.move(str(staging_path), str(final_path))
+                                    if not (final_path.exists() and final_path.stat().st_size == item.file_size_bytes):
+                                        raise IOError(f"Falha na validação pós-movimento de {staging_path.name}")
+                                else:
+                                    # Volumes distintos: cópia segura + verificação de integridade antes de descartar a origem
+                                    shutil.copy2(str(staging_path), str(final_path))
+                                    dest_hash = compute_file_hash(final_path)
+                                    if dest_hash != item.file_hash:
+                                        if final_path.exists():
+                                            final_path.unlink()
+                                        raise IOError(f"Hash divergente no destino para {staging_path.name}")
+                                    staging_path.unlink()
+
+                                item.organized_path = str(final_path.resolve())
+
+                            # Cópia para destinos extras (se houver)
+                            extra_dirs = json.loads(item.extra_dest_dirs_json) if item.extra_dest_dirs_json else []
+                            extra_paths = []
+                            for edir in extra_dirs:
+                                try:
+                                    e_dir_path = dest_root / Path(edir)
+                                    e_dir_path.mkdir(parents=True, exist_ok=True)
+                                    e_file_path = e_dir_path / final_path.name
+                                    shutil.copy2(str(final_path), str(e_file_path))
+                                    extra_paths.append(str(e_file_path.resolve()))
+                                except Exception as extra_err:
+                                    console.print(f"[yellow]Aviso ao copiar extra para {edir}: {extra_err}[/yellow]")
+                            
+                            item.extra_organized_paths_json = json.dumps(extra_paths)
                             item.status = "organized"
                             project.save_item(item)
                             tracker.update(item.file_size_bytes)
-                            continue
-                    
-                    console.print(f"[red]Arquivo não encontrado no staging: {staging_path}[/red]")
-                    errors += 1
-                    continue
 
-                try:
-                    final_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # Verificação e Resolução de Colisões
-                    is_already_identical = False
-                    if final_path.exists():
-                        if final_path.stat().st_size == item.file_size_bytes and compute_file_hash(final_path) == item.file_hash:
-                            is_already_identical = True
-                        else:
-                            # Conteúdo diferente: aplicar sufixo incremental _1, _2...
-                            base_name = final_path.stem
-                            ext = final_path.suffix
-                            counter = 1
-                            while final_path.exists():
-                                if final_path.stat().st_size == item.file_size_bytes and compute_file_hash(final_path) == item.file_hash:
-                                    is_already_identical = True
-                                    break
-                                final_path = final_dir / f"{base_name}_{counter}{ext}"
-                                counter += 1
-
-                    if is_already_identical:
-                        # Já existe arquivo idêntico no destino: remove duplicata do staging
-                        staging_path.unlink()
-                        item.organized_path = str(final_path.resolve())
-                    else:
-                        # Movimentação física
-                        same_vol = is_same_volume(staging_path, final_path)
-                        if same_vol:
-                            shutil.move(str(staging_path), str(final_path))
-                            if not (final_path.exists() and final_path.stat().st_size == item.file_size_bytes):
-                                raise IOError(f"Falha na validação pós-movimento de {staging_path.name}")
-                        else:
-                            # Volumes distintos: cópia segura + verificação de integridade antes de descartar a origem
-                            shutil.copy2(str(staging_path), str(final_path))
-                            dest_hash = compute_file_hash(final_path)
-                            if dest_hash != item.file_hash:
-                                if final_path.exists():
-                                    final_path.unlink()
-                                raise IOError(f"Hash divergente no destino para {staging_path.name}")
-                            staging_path.unlink()
-
-                        item.organized_path = str(final_path.resolve())
-
-                    # Cópia para destinos extras (se houver)
-                    extra_dirs = json.loads(item.extra_dest_dirs_json) if item.extra_dest_dirs_json else []
-                    extra_paths = []
-                    for edir in extra_dirs:
-                        try:
-                            e_dir_path = dest_root / Path(edir)
-                            e_dir_path.mkdir(parents=True, exist_ok=True)
-                            e_file_path = e_dir_path / final_path.name
-                            shutil.copy2(str(final_path), str(e_file_path))
-                            extra_paths.append(str(e_file_path.resolve()))
-                        except Exception as extra_err:
-                            console.print(f"[yellow]Aviso ao copiar extra para {edir}: {extra_err}[/yellow]")
-                    
-                    item.extra_organized_paths_json = json.dumps(extra_paths)
-                    item.status = "organized"
-                    project.save_item(item)
-                    tracker.update(item.file_size_bytes)
-
-                except Exception as e:
-                    console.print(f"[red]Erro ao organizar {staging_path.name}: {e}[/red]")
-                    errors += 1
+                        except Exception as e:
+                            console.print(f"[red]Erro ao organizar {staging_path.name}: {e}[/red]")
+                            errors += 1
 
             live.update(PipelineUI.generate_renderable(tracker, "ETAPA 4: ORGANIZAÇÃO FÍSICA (SSD)", start_str, total_files, total_gb, "Concluído", "Finalizando"))
 

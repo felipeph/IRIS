@@ -69,32 +69,33 @@ class PlanningStage(PipelineStage):
                     # Extrai metadados do lote
                     chunk_metadatas = extract_metadata_batch(chunk_paths, progress_callback=progress_cb)
                     
-                    # Salva no banco progressivamente
+                    # Salva no banco progressivamente em transação única por lote
                     meta_lookup = {str(m.file_path.resolve()): m for m in chunk_metadatas}
-                    for item in chunk_items:
-                        path_key = str(Path(item.staging_path).resolve())
-                        if path_key in meta_lookup:
-                            m = meta_lookup[path_key]
-                            item.meta_is_video = m.is_video
-                            item.meta_date_str = m.date_str
-                            item.meta_time_str = m.time_str
-                            item.meta_timestamp = m.timestamp.isoformat() if m.timestamp else ""
-                            item.meta_camera_model = m.camera_model
-                            item.meta_camera_make = m.camera_make
-                            item.meta_focal_length_equiv = m.focal_length_equiv
-                            item.meta_focal_str = m.focal_str
-                            item.meta_aperture_str = m.aperture_str
-                            item.meta_shutter_str = m.shutter_str
-                            item.meta_iso_str = m.iso_str
-                            item.meta_resolution_str = m.resolution_str
-                            item.meta_fps_str = m.fps_str
-                            item.meta_duration_str = m.duration_str
-                            item.meta_original_stem = m.original_stem
-                            item.meta_extension = m.extension
-                            item.meta_is_raw = m.is_raw
-                            item.meta_width = m.width
-                            item.meta_height = m.height
-                            project.save_item(item)
+                    with project.transaction():
+                        for item in chunk_items:
+                            path_key = str(Path(item.staging_path).resolve())
+                            if path_key in meta_lookup:
+                                m = meta_lookup[path_key]
+                                item.meta_is_video = m.is_video
+                                item.meta_date_str = m.date_str
+                                item.meta_time_str = m.time_str
+                                item.meta_timestamp = m.timestamp.isoformat() if m.timestamp else ""
+                                item.meta_camera_model = m.camera_model
+                                item.meta_camera_make = m.camera_make
+                                item.meta_focal_length_equiv = m.focal_length_equiv
+                                item.meta_focal_str = m.focal_str
+                                item.meta_aperture_str = m.aperture_str
+                                item.meta_shutter_str = m.shutter_str
+                                item.meta_iso_str = m.iso_str
+                                item.meta_resolution_str = m.resolution_str
+                                item.meta_fps_str = m.fps_str
+                                item.meta_duration_str = m.duration_str
+                                item.meta_original_stem = m.original_stem
+                                item.meta_extension = m.extension
+                                item.meta_is_raw = m.is_raw
+                                item.meta_width = m.width
+                                item.meta_height = m.height
+                                project.save_item(item)
                     
                 live.update(PipelineUI.generate_renderable(tracker, "ETAPA 3: EXTRAÇÃO DE METADADOS", start_str, total_files, 0.0, "Concluído", "Finalizando"))
 
@@ -144,15 +145,16 @@ class PlanningStage(PipelineStage):
 
         classified_items = classify_media_batch(all_metadatas, class_config, name_config)
         
-        for c_item in classified_items:
-            path_key = str(c_item.metadata.file_path.resolve())
-            p_item = item_lookup.get(path_key)
-            if p_item:
-                p_item.category = c_item.category
-                p_item.target_filename = c_item.target_filename
-                p_item.relative_dest_dir = str(c_item.relative_dest_dir)
-                p_item.extra_dest_dirs_json = json.dumps([str(p) for p in c_item.extra_dest_dirs])
-                project.save_item(p_item)
+        with project.transaction():
+            for c_item in classified_items:
+                path_key = str(c_item.metadata.file_path.resolve())
+                p_item = item_lookup.get(path_key)
+                if p_item:
+                    p_item.category = c_item.category
+                    p_item.target_filename = c_item.target_filename
+                    p_item.relative_dest_dir = str(c_item.relative_dest_dir)
+                    p_item.extra_dest_dirs_json = json.dumps([str(p) for p in c_item.extra_dest_dirs])
+                    project.save_item(p_item)
         
         console.print("[bold green]Planejamento concluído![/bold green]")
         return True
