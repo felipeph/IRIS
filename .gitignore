@@ -54,6 +54,7 @@ secrets/
 # Específicos do IRIS
 _old/
 scratch.py
+scratch/
 iris/docs/features_and_use_cases.md
 iris/docs/ai_system_context.md
 iris/experiments/

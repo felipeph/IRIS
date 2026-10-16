@@ -30,8 +30,7 @@ class TimelapseStage(PipelineStage):
         tl_config = config.get("modules.timelapse", {})
         
         # 1. Buscar itens de timelapse do projeto
-        all_items = project.items
-        tl_items = [it for it in all_items if it.category == "timelapse"]
+        tl_items = project.get_items(category="timelapse")
 
         if not tl_items:
             console.print(f"[cyan]Nenhum arquivo de timelapse identificado no projeto '{project.name}'. Etapa concluída.[/cyan]")

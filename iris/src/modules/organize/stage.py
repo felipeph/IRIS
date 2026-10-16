@@ -62,13 +62,12 @@ def clean_empty_directories(root_dir: Path):
 class OrganizeStage(PipelineStage):
     def run(self, project: Project, interactive: bool = True) -> bool:
         items_to_organize = [
-            item for item in project.items 
-            if item.status == "copied" and item.verified and item.category
+            item for item in project.get_items(status="copied", verified=True) 
+            if item.category
         ]
 
         if not items_to_organize:
-            already_organized = [item for item in project.items if item.status == "organized"]
-            if already_organized:
+            if project.has_items(status="organized"):
                 console.print("[green]Todos os itens deste projeto já foram organizados fisicamente.[/green]")
             else:
                 console.print("[yellow]Nenhum arquivo planejado/pronto para organização.[/yellow]")

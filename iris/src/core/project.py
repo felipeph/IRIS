@@ -228,6 +228,43 @@ def _serialize_item(item: ProjectItem) -> tuple:
             vals.append(v)
     return tuple(vals)
 
+def _row_to_item(row: sqlite3.Row) -> ProjectItem:
+    """Deserializa uma linha SQLite em instância de ProjectItem."""
+    d = dict(row)
+    d['verified'] = bool(d['verified'])
+    if d.get('meta_is_video') is not None:
+        d['meta_is_video'] = bool(d['meta_is_video'])
+    if d.get('meta_is_raw') is not None:
+        d['meta_is_raw'] = bool(d['meta_is_raw'])
+    return ProjectItem.from_dict(d)
+
+def _build_items_filter_query(
+    base_sql: str,
+    status: Optional[str] = None,
+    category: Optional[str] = None,
+    verified: Optional[bool] = None,
+    limit: Optional[int] = None,
+) -> tuple[str, list]:
+    """Constrói dinamicamente cláusula WHERE parametrizada para filtros na tabela items."""
+    conditions = []
+    params = []
+    if status is not None:
+        conditions.append("status = ?")
+        params.append(status)
+    if category is not None:
+        conditions.append("category = ?")
+        params.append(category)
+    if verified is not None:
+        conditions.append("verified = ?")
+        params.append(1 if verified else 0)
+
+    sql = base_sql
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
+    if limit is not None:
+        sql += f" LIMIT {int(limit)}"
+    return sql, params
+
 class _ProjectTransactionContext:
     """Gerenciador de contexto para transações SQLite com suporte a savepoints aninhados."""
     def __init__(self, project: "Project"):
@@ -382,6 +419,7 @@ class Project:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_category ON items(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_status_verified ON items(status, verified)")
 
             for ddl in SHARED_TABLES_DDL:
                 cursor.execute(ddl)
@@ -437,35 +475,102 @@ class Project:
                 return True
             return False
 
-    def get_items(self) -> List[ProjectItem]:
-        """Recupera todos os itens do banco de dados do projeto."""
-        if not self._project_db_file.exists():
+    def get_items(
+        self,
+        status: Optional[str] = None,
+        category: Optional[str] = None,
+        verified: Optional[bool] = None,
+    ) -> List[ProjectItem]:
+        """Recupera itens do banco de dados do projeto, com suporte a filtros diretos no SQLite."""
+        if not self._project_db_file.exists() and self._get_active_conn() is None:
             return []
+        sql, params = _build_items_filter_query(
+            "SELECT * FROM items",
+            status=status,
+            category=category,
+            verified=verified,
+        )
+
         items = []
         active_conn = self._get_active_conn()
         if active_conn is not None:
             active_conn.row_factory = sqlite3.Row
             cursor = active_conn.cursor()
-            cursor.execute("SELECT * FROM items")
+            cursor.execute(sql, params)
             for row in cursor.fetchall():
-                d = dict(row)
-                d['verified'] = bool(d['verified'])
-                if d['meta_is_video'] is not None: d['meta_is_video'] = bool(d['meta_is_video'])
-                if d['meta_is_raw'] is not None: d['meta_is_raw'] = bool(d['meta_is_raw'])
-                items.append(ProjectItem.from_dict(d))
+                items.append(_row_to_item(row))
             return items
 
         with get_db_connection(self._project_db_file) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM items")
+            cursor.execute(sql, params)
             for row in cursor.fetchall():
-                d = dict(row)
-                d['verified'] = bool(d['verified'])
-                if d['meta_is_video'] is not None: d['meta_is_video'] = bool(d['meta_is_video'])
-                if d['meta_is_raw'] is not None: d['meta_is_raw'] = bool(d['meta_is_raw'])
-                items.append(ProjectItem.from_dict(d))
+                items.append(_row_to_item(row))
         return items
+
+    def get_items_count(
+        self,
+        status: Optional[str] = None,
+        category: Optional[str] = None,
+        verified: Optional[bool] = None,
+    ) -> int:
+        """Retorna a contagem de itens instantaneamente via SELECT COUNT(*) no SQLite."""
+        active_conn = self._get_active_conn()
+        if active_conn is None and not self._project_db_file.exists():
+            return 0
+
+        sql, params = _build_items_filter_query(
+            "SELECT COUNT(*) FROM items",
+            status=status,
+            category=category,
+            verified=verified,
+        )
+
+        if active_conn is not None:
+            cursor = active_conn.cursor()
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+            return row[0] if row else 0
+
+        with get_db_connection(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+            return row[0] if row else 0
+
+    def has_items(
+        self,
+        status: Optional[str] = None,
+        category: Optional[str] = None,
+        verified: Optional[bool] = None,
+    ) -> bool:
+        """Verifica se existem itens correspondentes aos critérios com custo O(1) via SELECT 1 ... LIMIT 1."""
+        active_conn = self._get_active_conn()
+        if active_conn is None and not self._project_db_file.exists():
+            return False
+
+        sql, params = _build_items_filter_query(
+            "SELECT 1 FROM items",
+            status=status,
+            category=category,
+            verified=verified,
+            limit=1,
+        )
+
+        if active_conn is not None:
+            cursor = active_conn.cursor()
+            cursor.execute(sql, params)
+            return cursor.fetchone() is not None
+
+        with get_db_connection(self._project_db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return cursor.fetchone() is not None
+
+    def get_items_by_category(self, category: str) -> List[ProjectItem]:
+        """Busca itens da categoria desejada com filtro direto no banco."""
+        return self.get_items(category=category)
 
     def save_item(self, item: ProjectItem):
         """Salva ou atualiza um item no banco do projeto atomicamente ou na transação ativa."""
@@ -504,13 +609,7 @@ class Project:
             cursor = active_conn.cursor()
             cursor.execute("SELECT * FROM items WHERE original_path=?", (original_path,))
             row = cursor.fetchone()
-            if row:
-                d = dict(row)
-                d['verified'] = bool(d['verified'])
-                if d['meta_is_video'] is not None: d['meta_is_video'] = bool(d['meta_is_video'])
-                if d['meta_is_raw'] is not None: d['meta_is_raw'] = bool(d['meta_is_raw'])
-                return ProjectItem.from_dict(d)
-            return None
+            return _row_to_item(row) if row else None
 
         with get_db_connection(self._project_db_file) as conn:
             conn.row_factory = sqlite3.Row
@@ -518,11 +617,7 @@ class Project:
             cursor.execute("SELECT * FROM items WHERE original_path=?", (original_path,))
             row = cursor.fetchone()
             if row:
-                d = dict(row)
-                d['verified'] = bool(d['verified'])
-                if d['meta_is_video'] is not None: d['meta_is_video'] = bool(d['meta_is_video'])
-                if d['meta_is_raw'] is not None: d['meta_is_raw'] = bool(d['meta_is_raw'])
-                return ProjectItem.from_dict(d)
+                return _row_to_item(row)
         return None
             
     @property

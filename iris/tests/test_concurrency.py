@@ -253,8 +253,9 @@ except Exception:
 
     cmd = [sys.executable, "-c", worker_code, str(tmp_path), proj_name]
     
+    iris_dir = str(Path(__file__).resolve().parent.parent)
     # Dispara 3 processos simultâneos disputando exatamente o mesmo projeto
-    processes = [subprocess.Popen(cmd) for _ in range(3)]
+    processes = [subprocess.Popen(cmd, cwd=iris_dir) for _ in range(3)]
     exit_codes = [p.wait(timeout=10) for p in processes]
     
     exit_codes.sort()

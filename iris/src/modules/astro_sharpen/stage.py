@@ -62,7 +62,7 @@ class AstroSharpenStage(PipelineStage):
 
         # 2. Se nenhum registro no DB e o projeto não possui itens ingeridos (ex: projeto avulso direto em pasta),
         # verifica se o source_path possui arquivos TIFF
-        if not stacks_to_process and len(project.items) == 0 and getattr(project, "source_path", None):
+        if not stacks_to_process and not project.has_items() and getattr(project, "source_path", None):
             src_p = Path(project.source_path)
             if src_p.exists() and src_p.is_dir():
                 for tiff_f in src_p.rglob("*.tif*"):

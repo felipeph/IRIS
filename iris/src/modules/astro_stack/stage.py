@@ -63,7 +63,7 @@ class AstroStackStage(PipelineStage):
 
         # 2. Se o projeto não possui itens ingeridos (ex: projeto avulso apontando diretamente para pasta),
         # verifica se o source_path aponta diretamente para uma sessão ou raiz com fotos
-        if not sessions and len(project.items) == 0 and getattr(project, "source_path", None):
+        if not sessions and not project.has_items() and getattr(project, "source_path", None):
             src_p = Path(project.source_path)
             if src_p.exists() and src_p.is_dir():
                 extensions = {".cr2", ".cr3", ".nef", ".arw", ".dng", ".raw", ".tif", ".tiff", ".png", ".jpg"}

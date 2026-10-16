@@ -193,8 +193,9 @@ def build_timelapse_youtube_metadata(
         # Se houver itens do projeto correspondentes à sequência
         seq_dir = record_copy.get("sequence_dir")
         if project and hasattr(project, "items") and seq_dir:
+            source_items = project.get_items() if hasattr(project, "get_items") else project.items
             matched_items = [
-                it for it in project.items 
+                it for it in source_items 
                 if it.organized_path and Path(it.organized_path).parent.resolve() == Path(seq_dir).resolve()
             ]
             if matched_items:

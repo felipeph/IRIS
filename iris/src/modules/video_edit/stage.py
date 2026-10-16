@@ -64,8 +64,7 @@ class VideoEditStage(PipelineStage):
             ve_config["render_profile"] = str(ve_config.get("render_profile", "fast")).lower().strip()
 
         # 1. Buscar vídeos do projeto
-        all_items = project.items
-        video_items = [it for it in all_items if it.category == "video"]
+        video_items = project.get_items(category="video")
 
         if not video_items:
             console.print(f"[cyan]Nenhum arquivo de vídeo identificado no projeto '{project.name}'. Etapa concluída.[/cyan]")

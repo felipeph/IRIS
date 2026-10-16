@@ -124,6 +124,7 @@ def test_user_version_and_indexes_created(mock_projects_dir):
         indexes = {row[0] for row in cursor.fetchall()}
         assert "idx_items_status" in indexes
         assert "idx_items_category" in indexes
+        assert "idx_items_status_verified" in indexes
         
     with sqlite3.connect(mock_projects_dir / "iris_central.db") as conn:
         cursor = conn.cursor()
@@ -139,4 +140,87 @@ def test_db_initialized_caching(mock_projects_dir):
     # Chamar novamente _init_project_db não deve quebrar nem recalcular schema
     p._init_project_db()
     assert p._db_initialized is True
+
+def test_has_items_and_get_items_count_empty_project(mock_projects_dir):
+    """Testa has_items e get_items_count com projeto inexistente e sem itens."""
+    p_non_existent = Project("empty_non_existent")
+    assert p_non_existent.has_items() is False
+    assert p_non_existent.get_items_count() == 0
+    assert p_non_existent.get_items() == []
+
+    p_created = create_project("empty_created", "X:\\src")
+    assert p_created.has_items() is False
+    assert p_created.get_items_count() == 0
+    assert p_created.get_items() == []
+
+def test_has_items_and_get_items_count_with_filters(mock_projects_dir):
+    """Testa has_items e get_items_count com filtros específicos de status, category e verified."""
+    p = create_project("test_filters", "X:\\src")
+    items = [
+        ProjectItem(original_path="/p1.jpg", staging_path="/dest/p1.jpg", status="copied", category="timelapse", verified=True),
+        ProjectItem(original_path="/p2.jpg", staging_path="/dest/p2.jpg", status="copied", category="timelapse", verified=False),
+        ProjectItem(original_path="/p3.jpg", staging_path="/dest/p3.jpg", status="organized", category="timelapse", verified=True),
+        ProjectItem(original_path="/v1.mp4", staging_path="/dest/v1.mp4", status="copied", category="video", verified=True),
+        ProjectItem(original_path="/f1.jpg", staging_path="/dest/f1.jpg", status="copied", category="foto_unica", verified=True),
+    ]
+    p.save_items_batch(items)
+
+    # Contagens gerais e existência
+    assert p.has_items() is True
+    assert p.get_items_count() == 5
+
+    # Filtros por status
+    assert p.has_items(status="copied") is True
+    assert p.get_items_count(status="copied") == 4
+    assert p.has_items(status="organized") is True
+    assert p.get_items_count(status="organized") == 1
+    assert p.has_items(status="non_existent") is False
+    assert p.get_items_count(status="non_existent") == 0
+
+    # Filtros por category
+    assert p.has_items(category="timelapse") is True
+    assert p.get_items_count(category="timelapse") == 3
+    assert p.has_items(category="video") is True
+    assert p.get_items_count(category="video") == 1
+    assert p.has_items(category="astro_lua") is False
+    assert p.get_items_count(category="astro_lua") == 0
+
+    # Filtros por verified
+    assert p.get_items_count(verified=True) == 4
+    assert p.get_items_count(verified=False) == 1
+
+    # Filtros combinados
+    assert p.has_items(status="copied", verified=True) is True
+    assert p.get_items_count(status="copied", verified=True) == 3
+    assert p.get_items_count(status="copied", category="timelapse", verified=True) == 1
+    assert p.get_items_count(status="organized", category="video") == 0
+
+def test_get_items_filtered_and_by_category(mock_projects_dir):
+    """Testa get_items com parâmetros de filtragem e get_items_by_category."""
+    p = create_project("test_get_filtered", "X:\\src")
+    items = [
+        ProjectItem(original_path="/t1.jpg", staging_path="/dest/t1.jpg", status="copied", category="timelapse", verified=True),
+        ProjectItem(original_path="/t2.jpg", staging_path="/dest/t2.jpg", status="copied", category="timelapse", verified=False),
+        ProjectItem(original_path="/v1.mp4", staging_path="/dest/v1.mp4", status="copied", category="video", verified=True),
+    ]
+    p.save_items_batch(items)
+
+    # get_items sem filtros retorna todos
+    assert len(p.get_items()) == 3
+
+    # get_items filtrado por categoria
+    tl_items = p.get_items(category="timelapse")
+    assert len(tl_items) == 2
+    assert {it.original_path for it in tl_items} == {"/t1.jpg", "/t2.jpg"}
+
+    # get_items_by_category
+    v_items = p.get_items_by_category("video")
+    assert len(v_items) == 1
+    assert v_items[0].original_path == "/v1.mp4"
+
+    # get_items filtrado por status e verified
+    verified_copied = p.get_items(status="copied", verified=True)
+    assert len(verified_copied) == 2
+    assert {it.original_path for it in verified_copied} == {"/t1.jpg", "/v1.mp4"}
+
 

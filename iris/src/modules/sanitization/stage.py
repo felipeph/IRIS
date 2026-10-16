@@ -16,7 +16,7 @@ console = Console()
 
 class SanitizationStage(PipelineStage):
     def run(self, project: Project) -> bool:
-        if not project.items:
+        if not project.has_items():
             console.print("[yellow]Nenhum arquivo no projeto para sanitizar.[/yellow]")
             return True
 
@@ -29,8 +29,8 @@ class SanitizationStage(PipelineStage):
 
         # Identificar arquivos .jpg e .jpeg na pasta _iris_staging
         items_to_sanitize = []
-        for item in project.items:
-            if item.status == "copied" and item.staging_path:
+        for item in project.get_items(status="copied"):
+            if item.staging_path:
                 ext = Path(item.staging_path).suffix.lower()
                 if ext in [".jpg", ".jpeg"]:
                     items_to_sanitize.append(item)

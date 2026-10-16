@@ -42,7 +42,7 @@ def get_project_status_text(project) -> str:
     """Retorna uma string amigável descrevendo o status atual do projeto."""
     if project.current_stage_id:
         return f"Última etapa: {project.current_stage_id}"
-    elif len(project.items) > 0:
+    elif project.has_items():
         return "Ingestão (Em andamento / Interrompida)"
     else:
         return "Novo Projeto (Não iniciado)"
@@ -89,7 +89,7 @@ def run_pipeline_for_project(active_project):
             free_space = get_free_space_gb(dest_root)
             
             # Realiza scan rápido se o projeto for novo e não tiver dados de contagem
-            if active_project.total_source_files == 0:
+            if active_project.total_source_files == 0 and not active_project.has_items():
                 from pathlib import Path
                 source_dir = Path(active_project.source_path)
                 if source_dir.exists():
@@ -105,7 +105,7 @@ def run_pipeline_for_project(active_project):
             
             total_size_gb = active_project.total_source_size_bytes / (1024**3)
             medias_count = active_project.total_source_files
-            copied_count = len(active_project.items)
+            copied_count = active_project.get_items_count()
             
             space_status = "[green]:white_check_mark: Suficiente[/green]" if free_space > total_size_gb else "[red]:x: Insuficiente[/red]"
             
@@ -277,7 +277,7 @@ def main_menu():
         if last_project:
             status = get_project_status_text(last_project)
             medias_count = last_project.total_source_files
-            copied_count = len(last_project.items)
+            copied_count = last_project.get_items_count()
             
             project_info = (
                 f"[bold yellow]:open_file_folder: Último projeto acessado:[/bold yellow] [cyan][{last_project.name}][/cyan]\n"

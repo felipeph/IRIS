@@ -216,3 +216,67 @@ def test_performance_benchmark_transaction_vs_churn(mock_projects_dir):
     
     assert len(p_tx.get_items()) == count
     assert dur_tx < 0.5
+
+def test_read_your_own_writes_aggregation_in_transaction(mock_projects_dir):
+    """Garante que has_items(), get_items_count() e get_items(filtros) enxergam itens não commitados na transação."""
+    proj = create_project("test_tx_ryw_agg", "X:\\src")
+
+    with proj.transaction() as p:
+        assert p.has_items() is False
+        assert p.get_items_count() == 0
+
+        p.save_item(ProjectItem(original_path="/p1.jpg", staging_path="/d1.jpg", status="copied", category="timelapse", verified=True))
+        p.save_item(ProjectItem(original_path="/p2.jpg", staging_path="/d2.jpg", status="copied", category="video", verified=False))
+
+        # Agregações dentro da transação antes do commit
+        assert p.has_items() is True
+        assert p.get_items_count() == 2
+        assert p.has_items(category="timelapse") is True
+        assert p.get_items_count(category="timelapse") == 1
+        assert p.has_items(category="astro_lua") is False
+        assert p.get_items_count(status="copied", verified=True) == 1
+        assert len(p.get_items(category="timelapse")) == 1
+
+def test_benchmark_has_items_and_count_vs_items_instantiation(mock_projects_dir):
+    """Mede e comprova a disparidade de performance de has_items e get_items_count em relação a len(project.items)."""
+    p = create_project("test_benchmark_agg", "X:\\src")
+    total = 500
+    items = [
+        ProjectItem(
+            original_path=f"/orig/img_{i}.jpg",
+            staging_path=f"/dest/img_{i}.jpg",
+            status="copied" if i % 2 == 0 else "organized",
+            category="timelapse" if i % 3 == 0 else "video",
+            verified=bool(i % 2 == 0),
+            file_size_bytes=1024 * 1024 * 2
+        )
+        for i in range(total)
+    ]
+    p.save_items_batch(items)
+
+    # 1. Medição de has_items (O(1))
+    t0 = time.perf_counter()
+    for _ in range(20):
+        exists = p.has_items()
+    dur_has = (time.perf_counter() - t0) / 20
+    assert exists is True
+
+    # 2. Medição de get_items_count (SELECT COUNT(*))
+    t0 = time.perf_counter()
+    for _ in range(20):
+        cnt = p.get_items_count(status="copied")
+    dur_count = (time.perf_counter() - t0) / 20
+    assert cnt == 250
+
+    # 3. Medição de len(project.items) (SELECT * + instanciação de 500 dataclasses)
+    t0 = time.perf_counter()
+    for _ in range(20):
+        cnt_legacy = len([it for it in p.items if it.status == "copied"])
+    dur_legacy = (time.perf_counter() - t0) / 20
+    assert cnt_legacy == 250
+
+    # A agregação direta deve ser ordens de grandeza mais rápida que carregar tudo na memória
+    assert dur_has < 0.005  # < 5ms
+    assert dur_count < 0.005  # < 5ms
+    assert dur_count < dur_legacy
+

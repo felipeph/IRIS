@@ -18,7 +18,7 @@ console = Console()
 
 class PlanningStage(PipelineStage):
     def run(self, project: Project) -> bool:
-        if not project.items:
+        if not project.has_items():
             console.print("[yellow]Nenhum arquivo no projeto para planejar.[/yellow]")
             return True
 
@@ -36,7 +36,7 @@ class PlanningStage(PipelineStage):
             return False
 
         # Obter todos os itens aptos a planejar
-        all_planning_items = [item for item in project.items if item.status == "copied" and item.verified]
+        all_planning_items = project.get_items(status="copied", verified=True)
         
         if not all_planning_items:
             console.print("[yellow]Nenhum arquivo copiado/verificado encontrado na staging para planejar.[/yellow]")

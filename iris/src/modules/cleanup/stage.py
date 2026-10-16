@@ -144,7 +144,7 @@ class CleanupStage(PipelineStage):
             return False
 
         # Verifica no DB local do projeto quais arquivos estão com verified=True
-        items = project.get_items()
+        items = project.get_items(status="copied", verified=True)
         verified_items = [item for item in items if item.status == "copied" and item.verified]
         
         if not verified_items:
