@@ -217,11 +217,20 @@ class ConfigManager:
             },
             "classification": {
                 "moon_zoom_threshold_mm": 1000.0,
-                "timelapse_min_photos": 300,
+                "recognize_timelapse_folders": True,
+                "timelapse_min_photos": 60,
+                "timelapse_min_photos_folder": 30,
                 "timelapse_max_interval_seconds": 60.0,
                 "timelapse_tolerance_ratio": 1.5,
+                "enable_timelapse_album_samples": True,
+                "timelapse_sample_interval_minutes": 10.0,
                 "enable_burst_detection": False,
-                "burst_interval_seconds": 1.5
+                "burst_interval_seconds": 1.5,
+                "astro_timelapse": {
+                    "min_shutter_seconds": 5.0,
+                    "max_interval_seconds": 180.0,
+                    "max_gap_seconds": 600.0
+                }
             },
             "modules": {
                 "dedup": {"enabled": True},

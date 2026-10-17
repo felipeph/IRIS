@@ -3,7 +3,7 @@ from pathlib import Path
 from datetime import datetime
 import statistics
 
-from src.core.metadata import MediaMetadata
+from src.core.metadata import MediaMetadata, parse_shutter_seconds
 from src.core.namer import generate_target_filename
 
 @dataclass
@@ -14,13 +14,27 @@ class ClassifiedItem:
     target_filename: str
     extra_dest_dirs: list[Path] = field(default_factory=list)
 
+def is_timelapse_folder_name(folder_name: str) -> bool:
+    """Verifica se o nome de uma pasta indica explicitamente ser um timelapse."""
+    if not folder_name:
+        return False
+    clean = folder_name.lower().replace("_", " ").replace("-", " ")
+    return "timelapse" in clean or "time lapse" in clean
+
 def find_timelapse_segments(photos: list[MediaMetadata], config: dict) -> list[tuple[int, int]]:
     """
     Identifica segmentos contíguos de fotos da mesma câmera que formam timelapses.
+    Em astrofotografia de longa exposição (shutter >= 5s), ajusta dinamicamente
+    o intervalo tolerado e permite gaps harmônicos decorrentes de gravação do buffer.
+    Para fotos diurnas / pássaros (shutter < 5s), mantém tolerância estrita sem pontes de pausa.
     """
-    tl_min_photos = config.get("timelapse_min_photos", 300)
-    tl_max_interval = config.get("timelapse_max_interval_seconds", 60.0)
+    tl_min_photos = config.get("timelapse_min_photos", 60)
+    base_max_interval = config.get("timelapse_max_interval_seconds", 60.0)
     tl_tolerance = config.get("timelapse_tolerance_ratio", 1.5)
+
+    astro_cfg = config.get("astro_timelapse", {})
+    astro_min_shutter = astro_cfg.get("min_shutter_seconds", 5.0)
+    astro_max_gap = astro_cfg.get("max_gap_seconds", 600.0)
 
     if len(photos) < tl_min_photos:
         return []
@@ -29,6 +43,7 @@ def find_timelapse_segments(photos: list[MediaMetadata], config: dict) -> list[t
         (photos[i].timestamp - photos[i - 1].timestamp).total_seconds()
         for i in range(1, len(photos))
     ]
+    shutters = [parse_shutter_seconds(p.shutter_str) or 0.0 for p in photos]
 
     segments: list[tuple[int, int]] = []
     n_deltas = len(deltas)
@@ -36,7 +51,13 @@ def find_timelapse_segments(photos: list[MediaMetadata], config: dict) -> list[t
 
     while i < n_deltas:
         d_start = deltas[i]
-        if d_start < 0 or d_start > tl_max_interval:
+        shutter_i = shutters[i]
+        is_long_exposure = shutter_i >= astro_min_shutter
+
+        # Em longa exposição, o tempo de obturador é somado ao teto base
+        max_start = max(base_max_interval, shutter_i + base_max_interval) if is_long_exposure else base_max_interval
+
+        if d_start < 0 or d_start > max_start:
             i += 1
             continue
 
@@ -46,22 +67,42 @@ def find_timelapse_segments(photos: list[MediaMetadata], config: dict) -> list[t
 
         while j < n_deltas:
             d_next = deltas[j]
-            if d_next < 0 or d_next > tl_max_interval:
-                break
+            shutter_j = shutters[j]
+            is_le_j = shutter_j >= astro_min_shutter
+            max_allowed_j = max(base_max_interval, shutter_j + base_max_interval) if is_le_j else base_max_interval
 
-            allowed = max(1.5, cadence * tl_tolerance)
+            allowed = max(2.0, cadence * tl_tolerance)
+
+            # Caso 1: Próximo intervalo está dentro da cadência normal
             if abs(d_next - cadence) <= allowed:
                 recent_deltas.append(d_next)
                 if len(recent_deltas) > 20:
                     recent_deltas.pop(0)
                 cadence = statistics.median(recent_deltas)
                 j += 1
+            # Caso 2: Em longa exposição (astrofotografia), permite frames pulados (2x/3x cadência) ou pausas noturnas
+            elif is_long_exposure and is_le_j and (
+                abs(d_next - 2 * cadence) <= allowed or
+                abs(d_next - 3 * cadence) <= allowed or
+                (d_next <= astro_max_gap)
+            ):
+                if j + 1 < n_deltas:
+                    d_after = deltas[j + 1]
+                    if abs(d_after - cadence) <= allowed or abs(d_after - 2 * cadence) <= allowed:
+                        recent_deltas.append(cadence)
+                        j += 1
+                        continue
+                if d_next <= astro_max_gap:
+                    recent_deltas.append(cadence)
+                    j += 1
+                    continue
+                break
             else:
-                # Tolerância a 1 frame com jitter de buffer de gravação
+                # Tolerância padrão a 1 frame com jitter de gravação (se não ultrapassar o teto)
                 if j + 1 < n_deltas:
                     d_lookahead = deltas[j + 1]
-                    if abs(d_lookahead - cadence) <= allowed and d_next <= tl_max_interval:
-                        recent_deltas.append(d_next)
+                    if abs(d_lookahead - cadence) <= allowed and d_next <= max_allowed_j:
+                        recent_deltas.append(cadence)
                         recent_deltas.append(d_lookahead)
                         if len(recent_deltas) > 20:
                             recent_deltas = recent_deltas[-20:]
@@ -255,25 +296,48 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
 
     # Processar Fotos Gerais por Câmera / Fonte
     if general_photo_items:
-        by_camera: dict[tuple[str, str], list[MediaMetadata]] = {}
-        for item in general_photo_items:
-            cam_key = (item.camera_make or "Cam", item.camera_model or "Model")
-            by_camera.setdefault(cam_key, []).append(item)
+        # Camada 1: Reconhecimento Estrutural por Pasta Pré-Organizada
+        recognize_folders = class_config.get("recognize_timelapse_folders", True)
+        min_folder_photos = class_config.get("timelapse_min_photos_folder", 30)
 
-        for _, cam_photos in by_camera.items():
-            cam_photos.sort(key=lambda x: x.timestamp)
-            segments = find_timelapse_segments(cam_photos, class_config)
+        remaining_general_photos: list[MediaMetadata] = []
 
-            if not segments:
-                _classify_bursts_and_singles(cam_photos, class_config, name_config, classified)
-            else:
-                cur_idx = 0
-                for start_idx, end_idx in segments:
-                    if start_idx > cur_idx:
-                        _classify_bursts_and_singles(cam_photos[cur_idx:start_idx], class_config, name_config, classified)
-                    _classify_timelapse(cam_photos[start_idx:end_idx + 1], name_config, classified, class_config=class_config)
-                    cur_idx = end_idx + 1
-                if cur_idx < len(cam_photos):
-                    _classify_bursts_and_singles(cam_photos[cur_idx:], class_config, name_config, classified)
+        if recognize_folders:
+            by_folder: dict[str, list[MediaMetadata]] = {}
+            for item in general_photo_items:
+                folder_name = getattr(item, "source_folder_name", "") or item.file_path.parent.name
+                by_folder.setdefault(folder_name, []).append(item)
+
+            for folder_name, f_photos in by_folder.items():
+                if is_timelapse_folder_name(folder_name) and len(f_photos) >= min_folder_photos:
+                    f_photos.sort(key=lambda x: x.timestamp)
+                    _classify_timelapse(f_photos, name_config, classified, class_config=class_config)
+                else:
+                    remaining_general_photos.extend(f_photos)
+        else:
+            remaining_general_photos = general_photo_items
+
+        # Camada 2: Classificação Heurística por Câmera (para cartões SD / DCIM)
+        if remaining_general_photos:
+            by_camera: dict[tuple[str, str], list[MediaMetadata]] = {}
+            for item in remaining_general_photos:
+                cam_key = (item.camera_make or "Cam", item.camera_model or "Model")
+                by_camera.setdefault(cam_key, []).append(item)
+
+            for _, cam_photos in by_camera.items():
+                cam_photos.sort(key=lambda x: x.timestamp)
+                segments = find_timelapse_segments(cam_photos, class_config)
+
+                if not segments:
+                    _classify_bursts_and_singles(cam_photos, class_config, name_config, classified)
+                else:
+                    cur_idx = 0
+                    for start_idx, end_idx in segments:
+                        if start_idx > cur_idx:
+                            _classify_bursts_and_singles(cam_photos[cur_idx:start_idx], class_config, name_config, classified)
+                        _classify_timelapse(cam_photos[start_idx:end_idx + 1], name_config, classified, class_config=class_config)
+                        cur_idx = end_idx + 1
+                    if cur_idx < len(cam_photos):
+                        _classify_bursts_and_singles(cam_photos[cur_idx:], class_config, name_config, classified)
 
     return classified

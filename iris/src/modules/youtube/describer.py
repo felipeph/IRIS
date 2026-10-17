@@ -48,22 +48,11 @@ def format_bytes_human(num_bytes: int) -> str:
     return f"{num_bytes} B"
 
 
+from src.core.metadata import parse_shutter_seconds
+
 def _parse_shutter_value(val: str) -> Optional[float]:
     """Converte representações de obturador (ex: '1/1000s', '1-500s', '2s', '0.5s') em segundos (float)."""
-    clean = val.lower().replace("s", "").replace("-", "/").strip()
-    if "/" in clean:
-        parts = clean.split("/")
-        try:
-            num = float(parts[0])
-            den = float(parts[1])
-            if den != 0:
-                return num / den
-        except (ValueError, IndexError):
-            pass
-    try:
-        return float(clean)
-    except ValueError:
-        return None
+    return parse_shutter_seconds(val)
 
 
 def _parse_iso_value(val: str) -> Optional[int]:

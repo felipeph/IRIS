@@ -178,3 +178,105 @@ def test_classify_timelapse_samples_disabled():
     sampled = [it for it in items if it.extra_dest_dirs]
     assert len(sampled) == 0
 
+
+def test_classify_astro_long_exposure_timelapse():
+    """Valida detecção de timelapse de astrofotografia com exposição longa (60s) e intervalo de 65s."""
+    base_time = datetime(2015, 4, 25, 21, 0, 0)
+    photos = []
+    current_time = base_time
+    
+    # 80 fotos de 60s de exposição espaçadas por 65s
+    for i in range(80):
+        # Inserir um gap harmônico de 3 frames (195s) no meio (ex: foto 40)
+        if i == 40:
+            current_time += timedelta(seconds=195)
+        else:
+            current_time += timedelta(seconds=65)
+            
+        photos.append(MediaMetadata(
+            file_path=Path(f"IMG_{i:04d}.CR2"),
+            is_video=False,
+            date_str="2015-04-25",
+            time_str=current_time.strftime("%H-%M-%S"),
+            timestamp=current_time,
+            camera_model="EOS 6D",
+            camera_make="Canon",
+            focal_length_equiv=14.0,
+            shutter_str="60",
+            original_stem=f"IMG_{i:04d}",
+            extension="CR2",
+            is_raw=True,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 80
+    assert all(it.category == "timelapse" for it in items)
+    assert "4_Timelapses" in str(items[0].relative_dest_dir)
+
+
+def test_classify_timelapse_folder_name_recognition():
+    """Valida reconhecimento estrutural quando a pasta de origem contém 'timelapse'."""
+    base_time = datetime(2015, 4, 25, 20, 0, 0)
+    photos = []
+    
+    # 35 fotos numa pasta com nome de timelapse
+    for i in range(35):
+        dt = base_time + timedelta(seconds=i * 120)  # Intervalo de 2 minutos
+        photos.append(MediaMetadata(
+            file_path=Path(f"IMG_{i:04d}.JPG"),
+            source_folder_name="2015-04-25 Sítio - Timelapse das estrelas",
+            is_video=False,
+            date_str="2015-04-25",
+            time_str=dt.strftime("%H-%M-%S"),
+            timestamp=dt,
+            camera_model="EOS 6D",
+            camera_make="Canon",
+            original_stem=f"IMG_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 35
+    assert all(it.category == "timelapse" for it in items)
+
+
+def test_classify_bird_burst_sequences_not_timelapse():
+    """Garante que rajadas em fotografia de aves NÃO se transformem em timelapse.
+    Cenário: 5 rajadas de 15 fotos com obturador rápido (1/2000s) e 3 minutos de pausa entre aparições.
+    """
+    base_time = datetime(2026, 9, 6, 8, 0, 0)
+    photos = []
+    current_time = base_time
+    photo_count = 0
+    
+    for burst_idx in range(5):
+        # Disparo de 15 fotos em rajada rápida (0.2s entre cada)
+        for f in range(15):
+            current_time += timedelta(seconds=0.2)
+            photo_count += 1
+            photos.append(MediaMetadata(
+                file_path=Path(f"BIRD_{photo_count:04d}.JPG"),
+                source_folder_name="DCIM/100CANON",
+                is_video=False,
+                date_str="2026-09-06",
+                time_str=current_time.strftime("%H-%M-%S"),
+                timestamp=current_time,
+                camera_model="EOS R7",
+                camera_make="Canon",
+                focal_length_equiv=600.0,
+                shutter_str="1/2000",
+                original_stem=f"BIRD_{photo_count:04d}",
+                extension="JPG",
+                is_raw=False,
+            ))
+        # Pausa de 3 minutos aguardando o próximo pássaro pousar
+        current_time += timedelta(minutes=3)
+
+    assert len(photos) == 75
+    items = classify_media_batch(photos)
+    assert len(items) == 75
+    # NENHUMA foto deve virar timelapse! Devem ser classificadas como avulsa ou rajada
+    assert all(it.category != "timelapse" for it in items)
+
+

@@ -108,8 +108,10 @@ class PlanningStage(PipelineStage):
             if item.meta_is_video is not None:
                 try:
                     ts = datetime.fromisoformat(item.meta_timestamp) if item.meta_timestamp else None
+                    folder_name = Path(item.original_path).parent.name if item.original_path else Path(item.staging_path).parent.name
                     meta = MediaMetadata(
                         file_path=Path(item.staging_path),
+                        source_folder_name=folder_name,
                         is_video=item.meta_is_video,
                         date_str=item.meta_date_str,
                         time_str=item.meta_time_str,

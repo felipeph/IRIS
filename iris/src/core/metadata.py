@@ -73,6 +73,7 @@ class MediaMetadata:
     camera_make: str = "Cam" # e.g. "GoPro", "Canon", "Sony"
     width: Optional[int] = None
     height: Optional[int] = None
+    source_folder_name: str = ""
 
     @property
     def dimensions_str(self) -> str:
@@ -121,6 +122,25 @@ def parse_camera_generic(raw_make: str, raw_model: str) -> tuple[str, str, str]:
 def sanitize_camera_name(raw_model: str) -> str:
     _, model, _ = parse_camera_generic("", raw_model)
     return model
+
+def parse_shutter_seconds(val: str) -> Optional[float]:
+    """Converte representações de obturador (ex: '60s', '1/1000s', '1-500s', '2s', '0.5s') em float (segundos)."""
+    if not val:
+        return None
+    clean = str(val).lower().replace("s", "").replace("-", "/").strip()
+    if "/" in clean:
+        parts = clean.split("/")
+        try:
+            num = float(parts[0])
+            den = float(parts[1])
+            if den != 0:
+                return num / den
+        except (ValueError, IndexError):
+            pass
+    try:
+        return float(clean)
+    except ValueError:
+        return None
 
 def format_shutter(exposure_time) -> str:
     if exposure_time is None:

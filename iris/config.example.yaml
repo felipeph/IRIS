@@ -9,13 +9,19 @@ naming:
   video_pattern: "{date}_{time}_{camera}_{resolution}_{dimensions}_{fps}_{duration}_{original}.{ext}"
 classification:
   moon_zoom_threshold_mm: 1000.0
-  timelapse_min_photos: 300
-  timelapse_max_interval_seconds: 60.0
+  recognize_timelapse_folders: true       # Reconhece pastas pré-organizadas com 'timelapse' no nome
+  timelapse_min_photos: 60                # Quantidade mínima de fotos para formar timelapse (heurística)
+  timelapse_min_photos_folder: 30         # Quantidade mínima de fotos em pastas dedicadas a timelapse
+  timelapse_max_interval_seconds: 60.0    # Teto base para fotos gerais/diurnas
   timelapse_tolerance_ratio: 1.5
   enable_burst_detection: false
   burst_interval_seconds: 1.5
   enable_timelapse_album_samples: true
   timelapse_sample_interval_minutes: 5.0
+  astro_timelapse:
+    min_shutter_seconds: 5.0              # Só ativa tolerância de astrofotografia se shutter >= 5s
+    max_interval_seconds: 180.0           # Teto para astrofotografia noturna
+    max_gap_seconds: 600.0                # Pausa tolerada entre disparos noturnos (10 min)
 modules:
   astro_stack:
     enabled: true
