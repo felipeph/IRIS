@@ -8,23 +8,28 @@ O estágio de Timelapse (`TimelapseStage`) identifica sequências de centenas ou
 
 Câmeras fotográficas de sensor 1/2.3" (como a GoPro Hero 5 e a Canon SX60 HS) capturam fotos no formato clássico **4:3** (ex.: 4000x3000 ou 4608x3456). No entanto, o padrão moderno de exibição em televisores, monitores e no YouTube é **16:9** (4K UHD: 3840x2160).
 
-Se uma imagem 4:3 for forçada em 16:9 sem tratamento, os objetos ficam achatados. Se forem aplicadas barras pretas laterais (*pillarbox*), a experiência visual em telas modernas é degradada.
+Se uma imagem 4:3 for forçada em 16:9 sem tratamento, os objetos ficam achatados. Para atender a diferentes preferências visuais e propósitos de gravação, o IRIS oferece opções flexíveis de enquadramento através do parâmetro `crop_mode`:
 
-### A Solução: Aspect Ratio Crop Inteligente com Lanczos
-O IRIS aplica um corte milimétrico vertical na proporção 16:9, permitindo que o usuário escolha no `config.yaml` qual região da imagem deve ser priorizada através do parâmetro `crop_mode`:
+### Modos de Enquadramento (`crop_mode`)
+O IRIS permite que o usuário escolha no `config.yaml` qual região da imagem deve ser priorizada através do parâmetro `crop_mode`, ou optar por preservar 100% do quadro original:
 
 ```text
-┌──────────────────────────────────────────────┐
-│ [crop_mode: top]    - Prioriza Céu e Nuvens │
-├──────────────────────────────────────────────┤
-│ [crop_mode: center] - Corte Central Padrão   │
-├──────────────────────────────────────────────┤
-│ [crop_mode: bottom] - Prioriza Chão e Linha  │
-│                       do Horizonte           │
-└──────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ [crop_mode: top]    - Prioriza Céu e Nuvens            │
+├────────────────────────────────────────────────────────┤
+│ [crop_mode: center] - Corte Central Padrão              │
+├────────────────────────────────────────────────────────┤
+│ [crop_mode: bottom] - Prioriza Chão e Linha do Horizonte│
+├────────────────────────────────────────────────────────┤
+│ [crop_mode: full]   - Quadro Completo 100% (Pillarbox   │
+│                       com Barras Pretas Laterais 4K)    │
+└────────────────────────────────────────────────────────┘
 ```
 
-A interpolação utiliza o algoritmo **Lanczos**, reconhecido na indústria por preservar arestas finas e textura de folhagens sem gerar borrões.
+- Nos modos de corte (`top`, `center`, `bottom`), o IRIS realiza o corte milimétrico vertical na proporção 16:9 para preenchimento total do monitor/TV 4K UHD.
+- No modo `full`, **100% do sensor da câmera é preservado** sem qualquer corte, aplicando barras pretas laterais (*pillarbox*) centralizadas para compor a resolução master 4K UHD (3840x2160) com taxa de 60 FPS.
+
+A interpolação utiliza os algoritmos de alta eficiência e qualidade (**Bicúbico** ou **Lanczos**), reconhecidos na indústria por preservar arestas finas e textura de folhagens sem gerar borrões.
 
 ---
 
@@ -34,8 +39,8 @@ A renderização é orquestrada por uma complexa cadeia de filtros (*filtergraph
 
 ```mermaid
 flowchart LR
-    INPUT["Fotos JPG 4:3 (4000x3000)"] --> CROP["Crop Inteligente 16:9\n(top / center / bottom)"]
-    CROP --> SCALE["Escala Lanczos\n(3840x2160 4K UHD)"]
+    INPUT["Fotos JPG 4:3 (4000x3000)"] --> CROP["Enquadramento 16:9\n(top / center / bottom / full)"]
+    CROP --> SCALE["Escala Proporcional 4K UHD\n(Bicúbico / Lanczos 3840x2160)"]
     SCALE --> FPS["Reamostragem de FPS\n(fps=60:round=near)"]
     FPS --> DEBAND["Deband 16-bit com Dither\n(Elimina Color Banding no YouTube)"]
     DEBAND --> ENCODER["Encoder GPU\n(NVENC / QSV / AMF com CRF 15)"]

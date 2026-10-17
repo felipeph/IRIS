@@ -44,7 +44,7 @@ modules:
     fps: 60
     target_width: 3840
     target_height: 2160
-    crop_mode: "bottom"       # "bottom", "center" ou "top"
+    crop_mode: "bottom"       # "bottom", "center", "top" ou "full"
     render_profile: "fast"    # "fast" (GPU) ou "quality" (CPU)
     deband:
       enabled: false

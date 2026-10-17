@@ -369,7 +369,9 @@ def build_rich_youtube_description(record: Dict[str, Any], project_name: str = "
 
     is_direct_crop = meta.get("is_direct_crop", False)
     tl_render_profile = meta.get("render_profile")
-    if is_direct_crop:
+    if crop_mode.lower() == "full":
+        framing_desc = "Quadro Completo 100% com Bordas Laterais (Pillarbox 4K UHD Nativo) • Sem Cortes de Sensor"
+    elif is_direct_crop:
         framing_desc = f"Corte Direto 1:1 Nativo 4K do Sensor (Alinhamento: {crop_mode}) • Sem Redimensionamento"
     elif tl_render_profile == "fast":
         framing_desc = f"Intel QSV VPP Escala HQ em Hardware (Alinhamento: {crop_mode})"

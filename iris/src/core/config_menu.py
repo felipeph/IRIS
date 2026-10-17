@@ -232,13 +232,13 @@ def _menu_timelapse(console: Console):
                 console.print("[red]Valor deve ser um número inteiro![/red]")
             time.sleep(1)
         elif choice == "4":
-            console.print("Modos de Enquadramento: [bold]bottom[/bold] (Base), [bold]center[/bold] (Centro), [bold]top[/bold] (Topo)")
+            console.print("Modos de Enquadramento: [bold]bottom[/bold] (Base), [bold]center[/bold] (Centro), [bold]top[/bold] (Topo), [bold]full[/bold] (Quadro Completo com Bordas / Pillarbox)")
             new_val = Prompt.ask("Novo Modo de Corte", default=str(config.get("modules.timelapse.crop_mode", "bottom"))).lower()
-            if new_val in ["bottom", "center", "top"]:
+            if new_val in ["bottom", "center", "top", "full"]:
                 config.set("modules.timelapse.crop_mode", new_val)
                 console.print("[green]Salvo![/green]")
             else:
-                console.print("[red]Opção inválida! Escolha bottom, center ou top.[/red]")
+                console.print("[red]Opção inválida! Escolha bottom, center, top ou full.[/red]")
             time.sleep(1)
         elif choice == "5":
             new_val = Prompt.ask("Fator de Qualidade CRF (0-51, menor = melhor)", default=str(config.get("modules.timelapse.crf", 15)))

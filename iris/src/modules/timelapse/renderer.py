@@ -32,11 +32,17 @@ def build_video_filter_chain(
     """
     is_direct = bool(orig_w >= target_w and orig_h >= target_h)
     crop_m = crop_mode.lower().strip()
-    if crop_m not in ("top", "center", "bottom"):
+    if crop_m not in ("top", "center", "bottom", "full"):
         crop_m = "bottom"
 
     filters = []
-    if is_direct:
+    if crop_m == "full":
+        scale_flag = "bicubic" if render_profile == "balanced" else "lanczos"
+        scale_w = f"trunc(min({target_w}\\,iw*{target_h}/ih)/2)*2"
+        scale_h = f"trunc(min({target_h}\\,ih*{target_w}/iw)/2)*2"
+        full_filter = f"scale=w='{scale_w}':h='{scale_h}':flags={scale_flag},pad={target_w}:{target_h}:({target_w}-iw)/2:({target_h}-ih)/2:black"
+        filters.append(full_filter)
+    elif is_direct:
         if crop_m == "top":
             cy_val = "0"
         elif crop_m == "center":
@@ -99,12 +105,13 @@ def build_timelapse_render_cmd(
         "-an"
     ]
 
-    is_direct_crop = bool(orig_w >= target_w and orig_h >= target_h)
     crop_m = crop_mode.lower().strip()
-    if crop_m not in ("top", "center", "bottom"):
+    if crop_m not in ("top", "center", "bottom", "full"):
         crop_m = "bottom"
 
-    use_qsv_hw = (profile == "fast" and not force_software and "qsv" in encoder_name.lower())
+    is_direct_crop = bool(orig_w >= target_w and orig_h >= target_h) if crop_m != "full" else False
+
+    use_qsv_hw = (profile == "fast" and not force_software and "qsv" in encoder_name.lower() and crop_m != "full")
 
     if use_qsv_hw:
         # Pipeline 100% em hardware Intel QSV (mjpeg_qsv decode + vpp_qsv crop/scale + h264_qsv encode)
@@ -150,7 +157,7 @@ def build_timelapse_render_cmd(
         ]
         return cmd, is_direct_crop, False
 
-    # Pipeline Software / CPU (balanced ou quality)
+    # Pipeline Software / CPU (balanced ou quality) ou modo full com codificador acelerado
     input_args = [
         "-f", "image2",
         "-framerate", str(input_fps),
@@ -159,7 +166,14 @@ def build_timelapse_render_cmd(
     ]
 
     filters = []
-    if is_direct_crop:
+    if crop_m == "full":
+        # Modo Full: 100% do quadro original centralizado em canvas 4K com bordas pretas (pillarbox)
+        scale_flag = "bicubic" if profile in ("fast", "balanced") else "lanczos"
+        scale_w = f"trunc(min({target_w}\\,iw*{target_h}/ih)/2)*2"
+        scale_h = f"trunc(min({target_h}\\,ih*{target_w}/iw)/2)*2"
+        full_filter = f"scale=w='{scale_w}':h='{scale_h}':flags={scale_flag},pad={target_w}:{target_h}:({target_w}-iw)/2:({target_h}-ih)/2:black"
+        filters.append(full_filter)
+    elif is_direct_crop:
         # Corte direto 1:1 sem redimensionamento
         if crop_m == "top":
             cy_val = "0"

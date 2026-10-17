@@ -166,7 +166,10 @@ class TimelapseStage(PipelineStage):
                 success_count += 1
                 continue
 
-            is_direct_desc = "Corte Direto 1:1 sem redimensionamento" if (orig_w >= target_w and orig_h >= target_h) else "Escala Proporcional"
+            if crop_mode.lower() == "full":
+                is_direct_desc = "Quadro Completo 100% (Pillarbox 4K com Bordas Laterais)"
+            else:
+                is_direct_desc = "Corte Direto 1:1 sem redimensionamento" if (orig_w >= target_w and orig_h >= target_h) else "Escala Proporcional"
             console.print(f"[cyan]Destino final 6_Produzidos: {output_video_path}[/cyan]")
             console.print(f"[cyan]Configuração: Perfil [bold]{render_profile.upper()}[/bold] | Enquadramento: [bold]{crop_mode}[/bold] ({is_direct_desc})[/cyan]")
 
@@ -269,7 +272,10 @@ class TimelapseStage(PipelineStage):
                 # Notificar
                 topic = tl_config.get("ntfy_topic", "timelapse-studio-2026")
                 enable_toast = tl_config.get("windows_toast", True)
-                crop_tag = "Corte 1:1" if render_stats.get("is_direct_crop") else "Escala"
+                if crop_mode.lower() == "full":
+                    crop_tag = "Pillarbox 4K"
+                else:
+                    crop_tag = "Corte 1:1" if render_stats.get("is_direct_crop") else "Escala"
                 notify_timelapse_render_done(
                     project_name=project.name,
                     video_name=output_video_path.name,

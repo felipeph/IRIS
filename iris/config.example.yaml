@@ -52,7 +52,7 @@ modules:
     frames_per_image: 1
     target_width: 3840
     target_height: 2160
-    crop_mode: "bottom"
+    crop_mode: "bottom"             # 'bottom' (Base), 'center' (Centro), 'top' (Topo) ou 'full' (Quadro completo 100% com barras laterais)
     crf: 15
     preset: "ultrafast"
     downscale_mode: "scale"

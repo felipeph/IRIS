@@ -63,7 +63,7 @@ Rastreia as sequências de timelapse renderizadas em 4K.
 | `photo_count` | `INTEGER` | | Quantidade de fotos utilizadas na sequência |
 | `frames_per_image`| `INTEGER` | | Multiplicador de quadros por foto |
 | `resolution` | `TEXT` | DEFAULT '3840x2160' | Resolução do vídeo master |
-| `crop_mode` | `TEXT` | | Modo de corte de aspecto (`bottom`, `center`, `top`) |
+| `crop_mode` | `TEXT` | | Modo de enquadramento (`bottom`, `center`, `top`, `full`) |
 | `encoder` | `TEXT` | | Encoder FFmpeg utilizado (`h264_nvenc`, etc.) |
 | `duration_seconds`| `REAL` | | Duração total do vídeo em segundos |
 | `speedup_factor` | `INTEGER` | | Fator de aceleração em relação ao tempo real |

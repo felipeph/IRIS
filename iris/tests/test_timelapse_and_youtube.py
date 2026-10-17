@@ -72,6 +72,12 @@ def test_generate_timelapse_video_name():
     )
     assert "_4K_bottom_60fps_" in name_bottom
 
+    name_full = generate_timelapse_video_name(
+        first_dt=d1, last_dt=d2, camera_model="Canon", orig_w=4000, orig_h=3000,
+        total_photos=100, crop_mode="full"
+    )
+    assert "_4K_full_60fps_" in name_full
+
 def test_resolve_produced_output_path(tmp_path):
     d1 = datetime(2026, 9, 21, 10, 0, 0)
     video_name = "test_timelapse.mp4"
@@ -762,6 +768,97 @@ def test_timelapse_describer_direct_crop_and_profiles():
     }
     desc_bal_up = build_rich_youtube_description(rec_bal_up)
     assert "Escalonamento Bicúbico 4K com corte inteligente (Alinhamento: Top)" in desc_bal_up
+
+    # 4. Registro com modo full (pillarbox)
+    rec_full = {
+        "project_name": "p_test",
+        "photo_count": 500,
+        "metadata_json": {
+            "crop_mode": "full",
+            "is_direct_crop": False,
+            "render_profile": "fast",
+            "render_stats": {}
+        }
+    }
+    desc_full = build_rich_youtube_description(rec_full)
+    assert "Quadro Completo 100% com Bordas Laterais (Pillarbox 4K UHD Nativo) • Sem Cortes de Sensor" in desc_full
+
+
+def test_build_video_filter_chain_full_mode():
+    # Modo full no perfil balanced (bicubic)
+    vf_bal = build_video_filter_chain(
+        crop_mode="full",
+        target_w=3840,
+        target_h=2160,
+        render_profile="balanced"
+    )
+    assert "scale=w='trunc(min(3840\\,iw*2160/ih)/2)*2'" in vf_bal
+    assert "pad=3840:2160:(3840-iw)/2:(2160-ih)/2:black" in vf_bal
+    assert "flags=bicubic" in vf_bal
+
+    # Modo full no perfil quality (lanczos + deband)
+    vf_qual = build_video_filter_chain(
+        crop_mode="full",
+        target_w=3840,
+        target_h=2160,
+        render_profile="quality",
+        deband_config={"enabled": True, "add_grain": True}
+    )
+    assert "flags=lanczos" in vf_qual
+    assert "pad=3840:2160:(3840-iw)/2:(2160-ih)/2:black" in vf_qual
+    assert "deband=" in vf_qual
+    assert "noise=" in vf_qual
+
+
+def test_build_timelapse_render_cmd_full_mode(tmp_path):
+    out_path = tmp_path / "tl_full.mp4"
+    pattern = "C:/seq/%06d.jpg"
+
+    # Perfil Fast com GPU QSV: usa decodificação flexível + escala e pad + encoder h264_qsv
+    cmd_fast, direct_fast, deband_fast = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=4000,
+        orig_h=3000,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="full",
+        render_profile="fast",
+        encoder_name="h264_qsv (Intel Quick Sync)"
+    )
+    assert direct_fast is False
+    assert deband_fast is False
+    assert "-c:v" in cmd_fast and "h264_qsv" in cmd_fast
+    vf_str = cmd_fast[cmd_fast.index("-vf") + 1]
+    assert "scale=w='trunc(min(3840\\,iw*2160/ih)/2)*2'" in vf_str
+    assert "pad=3840:2160:(3840-iw)/2:(2160-ih)/2:black" in vf_str
+    assert "flags=bicubic" in vf_str
+    assert "-pix_fmt" in cmd_fast and "yuv420p" in cmd_fast
+
+    # Perfil Quality: Lanczos + Deband + Noise
+    cmd_qual, direct_qual, deband_qual = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=4608,
+        orig_h=3456,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="full",
+        render_profile="quality",
+        deband_cfg={"enabled": True, "add_grain": True}
+    )
+    assert direct_qual is False
+    assert deband_qual is True
+    vf_qual = cmd_qual[cmd_qual.index("-vf") + 1]
+    assert "flags=lanczos" in vf_qual
+    assert "pad=3840:2160:(3840-iw)/2:(2160-ih)/2:black" in vf_qual
+    assert "deband=" in vf_qual
+    assert "noise=" in vf_qual
+
 
 
 
