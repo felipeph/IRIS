@@ -192,6 +192,59 @@ class ConfigManager:
                 }
                 has_changes = True
 
+            if "timelapse_long_exposure" not in mods:
+                mods["timelapse_long_exposure"] = {
+                    "enabled": True,
+                    "render_profile": "quality",
+                    "crop_mode": "center",
+                    "target_width": 3840,
+                    "target_height": 2160,
+                    "fps": 30,
+                    "crf": 15,
+                    "deband": {
+                        "enabled": True,
+                        "add_grain": True
+                    }
+                }
+                has_changes = True
+
+            if "youtube" in mods:
+                if "timelapse_long_exposure_playlist" not in mods["youtube"]:
+                    mods["youtube"]["timelapse_long_exposure_playlist"] = "Timelapses Longa Exposição"
+                    has_changes = True
+
+            if "classification" not in self.config:
+                self.config["classification"] = {}
+            cls_cfg = self.config["classification"]
+
+            if "timelapse_normal" not in cls_cfg:
+                cls_cfg["timelapse_normal"] = {
+                    "min_photos": 200,
+                    "min_interval_seconds": 0.3,
+                    "max_interval_seconds": 60.0,
+                    "tolerance_ratio": 0.25,
+                    "tolerance_min_seconds": 0.5,
+                    "stall_factor_max": 4.0,
+                    "max_stall_fraction": 0.05,
+                    "min_regular_fraction": 0.90
+                }
+                has_changes = True
+
+            if "timelapse_long_exposure" not in cls_cfg:
+                cls_cfg["timelapse_long_exposure"] = {
+                    "enabled": True,
+                    "folder": "4_Timelapses_LongaExposicao",
+                    "min_shutter_seconds": 5.0,
+                    "min_photos": 60,
+                    "max_interval_seconds": 180.0,
+                    "tolerance_ratio": 0.15,
+                    "tolerance_min_seconds": 3.0,
+                    "stall_factor_max": 5.0,
+                    "max_stall_fraction": 0.15,
+                    "min_regular_fraction": 0.85
+                }
+                has_changes = True
+
             if has_changes:
                 self.save()
         except Exception as e:
@@ -218,14 +271,36 @@ class ConfigManager:
             "classification": {
                 "moon_zoom_threshold_mm": 1000.0,
                 "recognize_timelapse_folders": True,
-                "timelapse_min_photos": 60,
+                "timelapse_min_photos": 200,
                 "timelapse_min_photos_folder": 30,
                 "timelapse_max_interval_seconds": 60.0,
-                "timelapse_tolerance_ratio": 1.5,
+                "timelapse_tolerance_ratio": 0.25,
                 "enable_timelapse_album_samples": True,
                 "timelapse_sample_interval_minutes": 10.0,
                 "enable_burst_detection": False,
                 "burst_interval_seconds": 1.5,
+                "timelapse_normal": {
+                    "min_photos": 200,
+                    "min_interval_seconds": 0.3,
+                    "max_interval_seconds": 60.0,
+                    "tolerance_ratio": 0.25,
+                    "tolerance_min_seconds": 0.5,
+                    "stall_factor_max": 4.0,
+                    "max_stall_fraction": 0.05,
+                    "min_regular_fraction": 0.90
+                },
+                "timelapse_long_exposure": {
+                    "enabled": True,
+                    "folder": "4_Timelapses_LongaExposicao",
+                    "min_shutter_seconds": 5.0,
+                    "min_photos": 60,
+                    "max_interval_seconds": 180.0,
+                    "tolerance_ratio": 0.15,
+                    "tolerance_min_seconds": 3.0,
+                    "stall_factor_max": 5.0,
+                    "max_stall_fraction": 0.15,
+                    "min_regular_fraction": 0.85
+                },
                 "astro_timelapse": {
                     "min_shutter_seconds": 5.0,
                     "max_interval_seconds": 180.0,
@@ -263,6 +338,19 @@ class ConfigManager:
                     "fps": 60,
                     "crf": 15
                 },
+                "timelapse_long_exposure": {
+                    "enabled": True,
+                    "render_profile": "quality",
+                    "crop_mode": "center",
+                    "target_width": 3840,
+                    "target_height": 2160,
+                    "fps": 30,
+                    "crf": 15,
+                    "deband": {
+                        "enabled": True,
+                        "add_grain": True
+                    }
+                },
                 "video_edit": {
                     "enabled": True,
                     "render_profile": "fast",
@@ -282,6 +370,7 @@ class ConfigManager:
                 "youtube": {
                     "enabled": True,
                     "playlist": "Timelapses",
+                    "timelapse_long_exposure_playlist": "Timelapses Longa Exposição",
                     "video_playlist": "Natureza 4K UHD",
                     "privacy_status": "unlisted"
                 },

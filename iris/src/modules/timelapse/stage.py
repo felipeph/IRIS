@@ -27,10 +27,10 @@ class TimelapseStage(PipelineStage):
 
     def run(self, project: Project, **kwargs) -> bool:
         dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
-        tl_config = config.get("modules.timelapse", {})
+        base_tl_config = config.get("modules.timelapse", {})
         
-        # 1. Buscar itens de timelapse do projeto
-        tl_items = project.get_items(category="timelapse")
+        # 1. Buscar itens de timelapse do projeto (convencional e longa exposição)
+        tl_items = project.get_items(category="timelapse") + project.get_items(category="timelapse_long_exposure")
 
         if not tl_items:
             console.print(f"[cyan]Nenhum arquivo de timelapse identificado no projeto '{project.name}'. Etapa concluída.[/cyan]")
@@ -39,8 +39,8 @@ class TimelapseStage(PipelineStage):
         # 2. Agrupar itens por pasta de sequência organizada
         groups: Dict[str, List[ProjectItem]] = defaultdict(list)
         for it in tl_items:
-            # Chave de agrupamento: relative_dest_dir (ex: 4_Timelapses/Canon/2026/08/17/timelapse_16-55-00)
-            key = it.relative_dest_dir or "4_Timelapses/Geral"
+            default_key = "4_Timelapses_LongaExposicao/Geral" if it.category == "timelapse_long_exposure" else "4_Timelapses/Geral"
+            key = it.relative_dest_dir or default_key
             groups[key].append(it)
 
         total_sequences = len(groups)
@@ -134,14 +134,21 @@ class TimelapseStage(PipelineStage):
                 except Exception:
                     pass
 
-            fps = tl_config.get("fps", 60)
+            is_long_exp = any(it.category == "timelapse_long_exposure" for it in items) or "4_Timelapses_LongaExposicao" in seq_rel
+            if is_long_exp:
+                le_cfg = config.get("modules.timelapse_long_exposure", {})
+                tl_config = {**base_tl_config, **le_cfg}
+            else:
+                tl_config = base_tl_config
+
+            fps = tl_config.get("fps", 30 if is_long_exp else 60)
             fpi = max(1, tl_config.get("frames_per_image", 1))
             target_h = tl_config.get("target_height", 2160)
             target_w = tl_config.get("target_width", 3840)
             crop_mode = tl_config.get("crop_mode", "center")
-            render_profile = tl_config.get("render_profile", "fast").lower().strip()
+            render_profile = tl_config.get("render_profile", "quality" if is_long_exp else "fast").lower().strip()
             if render_profile not in ("fast", "balanced", "quality"):
-                render_profile = "fast"
+                render_profile = "quality" if is_long_exp else "fast"
 
             video_name = generate_timelapse_video_name(
                 first_dt=first_dt,
@@ -154,7 +161,8 @@ class TimelapseStage(PipelineStage):
                 fpi=fpi,
                 target_height=target_h,
                 crop_mode=crop_mode,
-                is_test=False
+                is_test=False,
+                is_long_exposure=is_long_exp
             )
 
             output_video_path = resolve_produced_output_path(dest_root, first_dt, video_name)

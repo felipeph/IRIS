@@ -210,8 +210,8 @@ def test_classify_astro_long_exposure_timelapse():
 
     items = classify_media_batch(photos)
     assert len(items) == 80
-    assert all(it.category == "timelapse" for it in items)
-    assert "4_Timelapses" in str(items[0].relative_dest_dir)
+    assert all(it.category == "timelapse_long_exposure" for it in items)
+    assert "4_Timelapses_LongaExposicao" in str(items[0].relative_dest_dir)
 
 
 def test_classify_timelapse_folder_name_recognition():
@@ -277,6 +277,126 @@ def test_classify_bird_burst_sequences_not_timelapse():
     items = classify_media_batch(photos)
     assert len(items) == 75
     # NENHUMA foto deve virar timelapse! Devem ser classificadas como avulsa ou rajada
+    assert all(it.category != "timelapse" and it.category != "timelapse_long_exposure" for it in items)
+
+
+def test_normal_timelapse_with_isolated_buffer_stalls():
+    """Timelapse diurno metronômico de 250 fotos a cada 5s, com 3 travadas de buffer isoladas de 8s."""
+    base_time = datetime(2026, 9, 6, 10, 0, 0)
+    photos = []
+    curr = base_time
+    for i in range(250):
+        # Travadas esporádicas nos índices 50, 120 e 180 (8s em vez de 5s)
+        if i in (50, 120, 180):
+            curr += timedelta(seconds=8.0)
+        elif i > 0:
+            curr += timedelta(seconds=5.0)
+
+        photos.append(MediaMetadata(
+            file_path=Path(f"TL_{i:04d}.JPG"),
+            is_video=False,
+            date_str="2026-09-06",
+            time_str=curr.strftime("%H-%M-%S"),
+            timestamp=curr,
+            camera_model="EOS R7",
+            camera_make="Canon",
+            shutter_str="1/500",
+            original_stem=f"TL_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 250
+    assert all(it.category == "timelapse" for it in items)
+    assert "4_Timelapses" in str(items[0].relative_dest_dir)
+
+
+def test_normal_timelapse_excessive_stalls_rejected():
+    """Sequência irregular com 20% de intervalos flutuantes não deve ser aceita como timelapse."""
+    base_time = datetime(2026, 9, 6, 10, 0, 0)
+    photos = []
+    curr = base_time
+    for i in range(250):
+        # A cada 5 fotos, ocorre uma pausa longa de 15s (20% de atrasos)
+        if i % 5 == 0 and i > 0:
+            curr += timedelta(seconds=15.0)
+        elif i > 0:
+            curr += timedelta(seconds=5.0)
+
+        photos.append(MediaMetadata(
+            file_path=Path(f"IRREG_{i:04d}.JPG"),
+            is_video=False,
+            date_str="2026-09-06",
+            time_str=curr.strftime("%H-%M-%S"),
+            timestamp=curr,
+            camera_model="EOS R7",
+            camera_make="Canon",
+            shutter_str="1/500",
+            original_stem=f"IRREG_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 250
+    # Deve rejeitar como timelapse devido ao excesso de atrasos e variação
     assert all(it.category != "timelapse" for it in items)
+
+
+def test_night_singles_random_intervals_not_timelapse():
+    """Fotos noturnas avulsas (shutter 10s) tiradas em intervalos desiguais não viram timelapse."""
+    base_time = datetime(2026, 9, 6, 22, 0, 0)
+    photos = []
+    curr = base_time
+    intervals = [12.0, 45.0, 18.0, 90.0, 25.0, 150.0, 30.0, 200.0, 20.0, 60.0] * 7  # 70 fotos
+    for i, intv in enumerate(intervals):
+        curr += timedelta(seconds=intv)
+        photos.append(MediaMetadata(
+            file_path=Path(f"NIGHT_{i:04d}.CR2"),
+            is_video=False,
+            date_str="2026-09-06",
+            time_str=curr.strftime("%H-%M-%S"),
+            timestamp=curr,
+            camera_model="EOS 6D",
+            camera_make="Canon",
+            shutter_str="10",
+            original_stem=f"NIGHT_{i:04d}",
+            extension="CR2",
+            is_raw=True,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == len(intervals)
+    assert all(it.category != "timelapse" and it.category != "timelapse_long_exposure" for it in items)
+
+
+def test_long_exposure_disabled_fallback():
+    """Quando o perfil de longa exposição está desabilitado, fotos de longa exposição não formam timelapse_long_exposure."""
+    base_time = datetime(2026, 9, 6, 21, 0, 0)
+    photos = []
+    curr = base_time
+    for i in range(80):
+        curr += timedelta(seconds=65)
+        photos.append(MediaMetadata(
+            file_path=Path(f"DIS_{i:04d}.CR2"),
+            is_video=False,
+            date_str="2026-09-06",
+            time_str=curr.strftime("%H-%M-%S"),
+            timestamp=curr,
+            camera_model="EOS 6D",
+            camera_make="Canon",
+            shutter_str="60",
+            original_stem=f"DIS_{i:04d}",
+            extension="CR2",
+            is_raw=True,
+        ))
+
+    class_config = {
+        "timelapse_long_exposure": {"enabled": False}
+    }
+    items = classify_media_batch(photos, class_config=class_config)
+    assert len(items) == 80
+    assert all(it.category != "timelapse_long_exposure" for it in items)
 
 

@@ -375,7 +375,9 @@ def build_rich_youtube_description(record: Dict[str, Any], project_name: str = "
     seq_dir_name = record.get("sequence_dir", "")
     if seq_dir_name:
         seq_display = Path(seq_dir_name).as_posix()
-        if "4_Timelapses" in seq_display:
+        if "4_Timelapses_LongaExposicao" in seq_display:
+            seq_display = "4_Timelapses_LongaExposicao" + seq_display.split("4_Timelapses_LongaExposicao", 1)[1]
+        elif "4_Timelapses" in seq_display:
             seq_display = "4_Timelapses" + seq_display.split("4_Timelapses", 1)[1]
     else:
         seq_display = "Sequência IRIS"

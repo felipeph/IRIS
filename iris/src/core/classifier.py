@@ -9,10 +9,102 @@ from src.core.namer import generate_target_filename
 @dataclass
 class ClassifiedItem:
     metadata: MediaMetadata
-    category: str  # "astro_lua", "timelapse", "video", "rajada", "avulsa"
+    category: str  # "astro_lua", "timelapse", "timelapse_long_exposure", "video", "rajada", "avulsa"
     relative_dest_dir: Path
     target_filename: str
     extra_dest_dirs: list[Path] = field(default_factory=list)
+
+@dataclass(frozen=True)
+class TimelapseProfile:
+    name: str                      # "normal" | "long_exposure"
+    category: str                  # "timelapse" | "timelapse_long_exposure"
+    root_dir: str                  # "4_Timelapses" | "4_Timelapses_LongaExposicao"
+    min_photos: int
+    min_interval: float            # cadência mínima aceita (s)
+    max_interval: float            # cadência máxima aceita (s)
+    tolerance_ratio: float         # ex: 0.25 = ±25% da cadência
+    tolerance_min_seconds: float   # piso absoluto da tolerância
+    stall_factor_max: float        # delta de travada <= factor * cadência
+    max_stall_fraction: float      # % máx de deltas travados no segmento
+    min_regular_fraction: float    # % mín de deltas dentro da tolerância
+    min_shutter: float | None      # None = sem filtro; senão exige shutter >= valor
+    max_shutter: float | None      # normal: shutter < min_shutter da longa exposição
+
+    def eligible(self, shutter: float) -> bool:
+        if self.min_shutter is not None and shutter < self.min_shutter:
+            return False
+        if self.max_shutter is not None and shutter >= self.max_shutter:
+            return False
+        return True
+
+@dataclass(frozen=True)
+class TimelapseSegment:
+    start: int
+    end: int
+    profile: TimelapseProfile
+
+    def __iter__(self):
+        yield self.start
+        yield self.end
+
+    def __getitem__(self, item):
+        if item == 0:
+            return self.start
+        elif item == 1:
+            return self.end
+        raise IndexError("TimelapseSegment index out of range")
+
+def load_profiles(cfg: dict | None = None) -> tuple[TimelapseProfile, TimelapseProfile, bool]:
+    if cfg is None:
+        cfg = {}
+    n = cfg.get("timelapse_normal", {})
+    le = cfg.get("timelapse_long_exposure", {})
+    legacy_astro = cfg.get("astro_timelapse", {})
+
+    le_min_shutter = float(le.get("min_shutter_seconds", legacy_astro.get("min_shutter_seconds", 5.0)))
+    le_enabled = bool(le.get("enabled", True))
+
+    normal_min_photos = int(n.get("min_photos", cfg.get("timelapse_min_photos", 200)))
+    normal_max_interval = float(n.get("max_interval_seconds", cfg.get("timelapse_max_interval_seconds", 60.0)))
+    normal_tol = float(n.get("tolerance_ratio", cfg.get("timelapse_tolerance_ratio", 0.25)))
+
+    normal = TimelapseProfile(
+        name="normal",
+        category="timelapse",
+        root_dir="4_Timelapses",
+        min_photos=normal_min_photos,
+        min_interval=float(n.get("min_interval_seconds", 0.3)),
+        max_interval=normal_max_interval,
+        tolerance_ratio=normal_tol,
+        tolerance_min_seconds=float(n.get("tolerance_min_seconds", 0.5)),
+        stall_factor_max=float(n.get("stall_factor_max", 4.0)),
+        max_stall_fraction=float(n.get("max_stall_fraction", 0.05)),
+        min_regular_fraction=float(n.get("min_regular_fraction", 0.90)),
+        min_shutter=None,
+        max_shutter=le_min_shutter,
+    )
+
+    le_min_photos = int(le.get("min_photos", 60))
+    le_max_interval = float(le.get("max_interval_seconds", legacy_astro.get("max_interval_seconds", 180.0)))
+    le_tol = float(le.get("tolerance_ratio", 0.15))
+
+    long_exp = TimelapseProfile(
+        name="long_exposure",
+        category="timelapse_long_exposure",
+        root_dir=str(le.get("folder", "4_Timelapses_LongaExposicao")),
+        min_photos=le_min_photos,
+        min_interval=le_min_shutter,
+        max_interval=le_max_interval,
+        tolerance_ratio=le_tol,
+        tolerance_min_seconds=float(le.get("tolerance_min_seconds", 3.0)),
+        stall_factor_max=float(le.get("stall_factor_max", 5.0)),
+        max_stall_fraction=float(le.get("max_stall_fraction", 0.15)),
+        min_regular_fraction=float(le.get("min_regular_fraction", 0.85)),
+        min_shutter=le_min_shutter,
+        max_shutter=None,
+    )
+
+    return normal, long_exp, le_enabled
 
 def is_timelapse_folder_name(folder_name: str) -> bool:
     """Verifica se o nome de uma pasta indica explicitamente ser um timelapse."""
@@ -21,104 +113,163 @@ def is_timelapse_folder_name(folder_name: str) -> bool:
     clean = folder_name.lower().replace("_", " ").replace("-", " ")
     return "timelapse" in clean or "time lapse" in clean
 
-def find_timelapse_segments(photos: list[MediaMetadata], config: dict) -> list[tuple[int, int]]:
-    """
-    Identifica segmentos contíguos de fotos da mesma câmera que formam timelapses.
-    Em astrofotografia de longa exposição (shutter >= 5s), ajusta dinamicamente
-    o intervalo tolerado e permite gaps harmônicos decorrentes de gravação do buffer.
-    Para fotos diurnas / pássaros (shutter < 5s), mantém tolerância estrita sem pontes de pausa.
-    """
-    tl_min_photos = config.get("timelapse_min_photos", 60)
-    base_max_interval = config.get("timelapse_max_interval_seconds", 60.0)
-    tl_tolerance = config.get("timelapse_tolerance_ratio", 1.5)
+def _is_isolated_stall(deltas: list[float], j: int, anchor: float, tol: float, profile: TimelapseProfile) -> bool:
+    d = deltas[j]
+    if d <= anchor + tol or d > anchor * profile.stall_factor_max:
+        return False
+    # Travada isolada de buffer / frame pulado: o delta seguinte retorna à cadência
+    if j + 1 < len(deltas):
+        nxt = deltas[j + 1]
+        return abs(nxt - anchor) <= tol
+    return False
 
-    astro_cfg = config.get("astro_timelapse", {})
-    astro_min_shutter = astro_cfg.get("min_shutter_seconds", 5.0)
-    astro_max_gap = astro_cfg.get("max_gap_seconds", 600.0)
+def _validate_segment(n_photos: int, ok_deltas: list[float], stalls: int, profile: TimelapseProfile) -> bool:
+    if n_photos < profile.min_photos:
+        return False
+    total_deltas = n_photos - 1
+    if total_deltas <= 0:
+        return False
 
-    if len(photos) < tl_min_photos:
+    reg_fraction = len(ok_deltas) / total_deltas
+    if reg_fraction < profile.min_regular_fraction:
+        return False
+
+    stall_fraction = stalls / total_deltas
+    if stall_fraction > profile.max_stall_fraction:
+        return False
+
+    if len(ok_deltas) >= 2:
+        mean_d = statistics.mean(ok_deltas)
+        if mean_d > 0:
+            stdev_d = statistics.stdev(ok_deltas)
+            cv = stdev_d / mean_d
+            max_cv = 0.20 if profile.name == "normal" else 0.25
+            if cv > max_cv:
+                return False
+
+    return True
+
+def _scan_segments(
+    photos: list[MediaMetadata],
+    shutters: list[float],
+    profile: TimelapseProfile,
+    skip: set[int]
+) -> list[TimelapseSegment]:
+    if len(photos) < profile.min_photos:
         return []
 
     deltas = [
-        (photos[i].timestamp - photos[i - 1].timestamp).total_seconds()
-        for i in range(1, len(photos))
+        (photos[k].timestamp - photos[k - 1].timestamp).total_seconds()
+        for k in range(1, len(photos))
     ]
-    shutters = [parse_shutter_seconds(p.shutter_str) or 0.0 for p in photos]
-
-    segments: list[tuple[int, int]] = []
     n_deltas = len(deltas)
+    segments: list[TimelapseSegment] = []
     i = 0
+    W = 8
 
     while i < n_deltas:
-        d_start = deltas[i]
-        shutter_i = shutters[i]
-        is_long_exposure = shutter_i >= astro_min_shutter
-
-        # Em longa exposição, o tempo de obturador é somado ao teto base
-        max_start = max(base_max_interval, shutter_i + base_max_interval) if is_long_exposure else base_max_interval
-
-        if d_start < 0 or d_start > max_start:
+        if i in skip or not profile.eligible(shutters[i]):
             i += 1
             continue
 
-        j = i + 1
-        cadence = d_start
-        recent_deltas = [d_start]
+        if (len(photos) - i) < profile.min_photos:
+            break
+
+        win_size = min(W, n_deltas - i)
+        if win_size < 4:
+            break
+
+        window = deltas[i : i + win_size]
+        eligible_window = True
+        for idx in range(i, i + win_size + 1):
+            if idx in skip or not profile.eligible(shutters[idx]):
+                eligible_window = False
+                break
+        if not eligible_window:
+            i += 1
+            continue
+
+        anchor = statistics.median(window)
+        if not (profile.min_interval <= anchor <= profile.max_interval):
+            i += 1
+            continue
+
+        if profile.name == "long_exposure" and anchor < shutters[i] * 0.9:
+            i += 1
+            continue
+
+        tol = max(profile.tolerance_min_seconds, anchor * profile.tolerance_ratio)
+        reg_count = sum(1 for d in window if abs(d - anchor) <= tol)
+        if reg_count < int(win_size * 0.75):
+            i += 1
+            continue
+
+        j = i
+        ok_deltas = []
+        stalls = 0
+        regular_anchor = anchor
 
         while j < n_deltas:
-            d_next = deltas[j]
-            shutter_j = shutters[j]
-            is_le_j = shutter_j >= astro_min_shutter
-            max_allowed_j = max(base_max_interval, shutter_j + base_max_interval) if is_le_j else base_max_interval
+            next_photo_idx = j + 1
+            if next_photo_idx in skip or not profile.eligible(shutters[next_photo_idx]):
+                break
 
-            allowed = max(2.0, cadence * tl_tolerance)
-
-            # Caso 1: Próximo intervalo está dentro da cadência normal
-            if abs(d_next - cadence) <= allowed:
-                recent_deltas.append(d_next)
-                if len(recent_deltas) > 20:
-                    recent_deltas.pop(0)
-                cadence = statistics.median(recent_deltas)
+            d = deltas[j]
+            if abs(d - regular_anchor) <= tol:
+                ok_deltas.append(d)
+                if len(ok_deltas) >= 5:
+                    cand = statistics.median(ok_deltas[-20:])
+                    if abs(cand - anchor) <= anchor * 0.10:
+                        regular_anchor = cand
                 j += 1
-            # Caso 2: Em longa exposição (astrofotografia), permite frames pulados (2x/3x cadência) ou pausas noturnas
-            elif is_long_exposure and is_le_j and (
-                abs(d_next - 2 * cadence) <= allowed or
-                abs(d_next - 3 * cadence) <= allowed or
-                (d_next <= astro_max_gap)
-            ):
-                if j + 1 < n_deltas:
-                    d_after = deltas[j + 1]
-                    if abs(d_after - cadence) <= allowed or abs(d_after - 2 * cadence) <= allowed:
-                        recent_deltas.append(cadence)
-                        j += 1
-                        continue
-                if d_next <= astro_max_gap:
-                    recent_deltas.append(cadence)
-                    j += 1
-                    continue
-                break
+            elif _is_isolated_stall(deltas, j, regular_anchor, tol, profile):
+                stalls += 1
+                if stalls > max(2, int(profile.max_stall_fraction * (j - i + 1))):
+                    break
+                j += 1
             else:
-                # Tolerância padrão a 1 frame com jitter de gravação (se não ultrapassar o teto)
-                if j + 1 < n_deltas:
-                    d_lookahead = deltas[j + 1]
-                    if abs(d_lookahead - cadence) <= allowed and d_next <= max_allowed_j:
-                        recent_deltas.append(cadence)
-                        recent_deltas.append(d_lookahead)
-                        if len(recent_deltas) > 20:
-                            recent_deltas = recent_deltas[-20:]
-                        cadence = statistics.median(recent_deltas)
-                        j += 2
-                        continue
                 break
 
-        # Bloco de intervalos vai de i a j - 1. Total de fotos: j - i + 1
         n_photos = j - i + 1
-        if n_photos >= tl_min_photos:
-            segments.append((i, j))
+        if _validate_segment(n_photos, ok_deltas, stalls, profile):
+            segments.append(TimelapseSegment(i, j, profile))
             i = j + 1
         else:
             i += 1
 
+    return segments
+
+def find_timelapse_segments(photos: list[MediaMetadata], config: dict | None = None) -> list[TimelapseSegment]:
+    """
+    Identifica segmentos contíguos de fotos da mesma câmera que formam timelapses.
+    Separa a detecção em dois perfis independentes:
+    1. Longa Exposição (shutter >= min_shutter_seconds): astrofotografia, gaps harmônicos de buffer.
+    2. Normal (shutter < min_shutter_seconds): fotos diurnas/gerais com cadência estrita e anti-rajada.
+    """
+    if not photos or len(photos) < 2:
+        return []
+
+    if config is None:
+        config = {}
+
+    normal_prof, le_prof, le_enabled = load_profiles(config)
+    shutters = [parse_shutter_seconds(p.shutter_str) or 0.0 for p in photos]
+
+    segments: list[TimelapseSegment] = []
+    used_photo_indices: set[int] = set()
+
+    # 1. Escanear primeiro por Longa Exposição (mais restritivo / específico)
+    if le_enabled:
+        le_segments = _scan_segments(photos, shutters, le_prof, skip=set())
+        for seg in le_segments:
+            segments.append(seg)
+            used_photo_indices.update(range(seg.start, seg.end + 1))
+
+    # 2. Escanear em seguida por Normal (fotos gerais / diurnas), pulando fotos já usadas
+    normal_segments = _scan_segments(photos, shutters, normal_prof, skip=used_photo_indices)
+    segments.extend(normal_segments)
+
+    segments.sort(key=lambda s: s.start)
     return segments
 
 def _classify_bursts_and_singles(photos: list[MediaMetadata], class_config: dict, name_config: dict, classified: list[ClassifiedItem]):
@@ -171,7 +322,13 @@ def _classify_bursts_and_singles(photos: list[MediaMetadata], class_config: dict
                 target_filename=target_name,
             ))
 
-def _classify_timelapse(photos: list[MediaMetadata], name_config: dict, classified: list[ClassifiedItem], class_config: dict | None = None):
+def _classify_timelapse(
+    photos: list[MediaMetadata],
+    name_config: dict,
+    classified: list[ClassifiedItem],
+    class_config: dict | None = None,
+    profile: TimelapseProfile | None = None
+):
     if not photos:
         return
     first = photos[0]
@@ -181,8 +338,11 @@ def _classify_timelapse(photos: list[MediaMetadata], name_config: dict, classifi
     else:
         y, m, d = "SemData", "00", "00"
 
+    root_dir = profile.root_dir if profile else "4_Timelapses"
+    category = profile.category if profile else "timelapse"
+
     cam_folder = first.camera_make or "Camera"
-    tl_dir = Path("4_Timelapses") / cam_folder / y / m / d / f"timelapse_{first.time_str}"
+    tl_dir = Path(root_dir) / cam_folder / y / m / d / f"timelapse_{first.time_str}"
 
     # Configuração de Amostragem para Álbuns (2_AlbunsDatas)
     enable_samples = True
@@ -221,7 +381,7 @@ def _classify_timelapse(photos: list[MediaMetadata], name_config: dict, classifi
         extra_dirs = [album_sample_dir] if idx in sampled_indices else []
         classified.append(ClassifiedItem(
             metadata=it,
-            category="timelapse",
+            category=category,
             relative_dest_dir=tl_dir,
             target_filename=target_name,
             extra_dest_dirs=extra_dirs,
@@ -311,7 +471,11 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
             for folder_name, f_photos in by_folder.items():
                 if is_timelapse_folder_name(folder_name) and len(f_photos) >= min_folder_photos:
                     f_photos.sort(key=lambda x: x.timestamp)
-                    _classify_timelapse(f_photos, name_config, classified, class_config=class_config)
+                    shutters = [parse_shutter_seconds(p.shutter_str) or 0.0 for p in f_photos]
+                    med_shutter = statistics.median(shutters) if shutters else 0.0
+                    normal_prof, le_prof, le_enabled = load_profiles(class_config)
+                    chosen_prof = le_prof if (le_enabled and med_shutter >= le_prof.min_shutter) else normal_prof
+                    _classify_timelapse(f_photos, name_config, classified, class_config=class_config, profile=chosen_prof)
                 else:
                     remaining_general_photos.extend(f_photos)
         else:
@@ -332,10 +496,18 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
                     _classify_bursts_and_singles(cam_photos, class_config, name_config, classified)
                 else:
                     cur_idx = 0
-                    for start_idx, end_idx in segments:
+                    for seg in segments:
+                        start_idx = seg.start
+                        end_idx = seg.end
                         if start_idx > cur_idx:
                             _classify_bursts_and_singles(cam_photos[cur_idx:start_idx], class_config, name_config, classified)
-                        _classify_timelapse(cam_photos[start_idx:end_idx + 1], name_config, classified, class_config=class_config)
+                        _classify_timelapse(
+                            cam_photos[start_idx:end_idx + 1],
+                            name_config,
+                            classified,
+                            class_config=class_config,
+                            profile=seg.profile
+                        )
                         cur_idx = end_idx + 1
                     if cur_idx < len(cam_photos):
                         _classify_bursts_and_singles(cam_photos[cur_idx:], class_config, name_config, classified)

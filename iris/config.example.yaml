@@ -10,18 +10,38 @@ naming:
 classification:
   moon_zoom_threshold_mm: 1000.0
   recognize_timelapse_folders: true       # Reconhece pastas pré-organizadas com 'timelapse' no nome
-  timelapse_min_photos: 60                # Quantidade mínima de fotos para formar timelapse (heurística)
+  timelapse_min_photos: 200               # Quantidade mínima de fotos para formar timelapse (heurística geral)
   timelapse_min_photos_folder: 30         # Quantidade mínima de fotos em pastas dedicadas a timelapse
   timelapse_max_interval_seconds: 60.0    # Teto base para fotos gerais/diurnas
-  timelapse_tolerance_ratio: 1.5
+  timelapse_tolerance_ratio: 0.25         # Tolerância de cadência (ex: 0.25 = ±25%)
   enable_burst_detection: false
   burst_interval_seconds: 1.5
   enable_timelapse_album_samples: true
   timelapse_sample_interval_minutes: 5.0
+  timelapse_normal:
+    min_photos: 200                       # Mínimo de fotos para timelapse convencional (diurno / intervalos curtos)
+    min_interval_seconds: 0.3             # Intervalo mínimo aceitável (evita rajadas contínuas)
+    max_interval_seconds: 60.0            # Intervalo máximo tolerado entre fotos
+    tolerance_ratio: 0.25                 # Tolerância de cadência relativa (±25%)
+    tolerance_min_seconds: 0.5            # Piso de tolerância absoluta em segundos
+    stall_factor_max: 4.0                 # Teto de atraso isolado por buffer da câmera (ex: até 4x a cadência)
+    max_stall_fraction: 0.05              # Máximo de 5% de fotos com atraso isolado no segmento
+    min_regular_fraction: 0.90            # Pelo menos 90% das fotos estritamente na cadência
+  timelapse_long_exposure:
+    enabled: true                         # Ativa perfil dedicado para astrofotografia / longa exposição
+    folder: "4_Timelapses_LongaExposicao" # Pasta de destino isolada
+    min_shutter_seconds: 5.0              # Disparos com obturador >= 5s ativam este perfil
+    min_photos: 60                        # Mínimo de fotos para timelapse de longa exposição
+    max_interval_seconds: 180.0           # Intervalo máximo permitido entre disparos
+    tolerance_ratio: 0.15                 # Tolerância de cadência relativa (±15%)
+    tolerance_min_seconds: 3.0            # Piso de tolerância absoluta
+    stall_factor_max: 5.0                 # Teto de atraso isolado ou frame pulado (até 5x a cadência)
+    max_stall_fraction: 0.15              # Até 15% de atrasos isolados / gaps tolerados
+    min_regular_fraction: 0.85            # Pelo menos 85% dos disparos na cadência
   astro_timelapse:
-    min_shutter_seconds: 5.0              # Só ativa tolerância de astrofotografia se shutter >= 5s
-    max_interval_seconds: 180.0           # Teto para astrofotografia noturna
-    max_gap_seconds: 600.0                # Pausa tolerada entre disparos noturnos (10 min)
+    min_shutter_seconds: 5.0              # Compatibilidade retroativa
+    max_interval_seconds: 180.0
+    max_gap_seconds: 600.0
 modules:
   astro_stack:
     enabled: true
@@ -69,6 +89,17 @@ modules:
       add_grain: true           # Adiciona micro-grão sutil para evitar recompressão do YouTube
     ntfy_topic: "timelapse-studio-2026"
     windows_toast: true
+  timelapse_long_exposure:
+    enabled: true               # Habilita renderização de timelapses de longa exposição
+    render_profile: quality     # Perfil recomendado para astrofotografia: quality (Lanczos + deband 16-bit com dither)
+    fps: 30                     # Taxa de quadros suave para céu noturno / estrelas
+    crop_mode: "center"         # Enquadramento centralizado 16:9 4K UHD
+    target_width: 3840
+    target_height: 2160
+    crf: 15
+    deband:
+      enabled: true
+      add_grain: true
   video_edit:
     enabled: true
     render_profile: fast            # Perfis: 'fast' (Intel QSV hardware), 'balanced' (unsharp 3x3), 'quality' (Lanczos + deband 16-bit)
@@ -89,6 +120,7 @@ modules:
     privacy_status: "unlisted"
     category_id: "22"
     playlist: "Timelapses"
+    timelapse_long_exposure_playlist: "Timelapses Longa Exposição"
     secrets_dir: "secrets"
     stage_interval_seconds: 180
     ntfy_topic: "timelapse-studio-2026"

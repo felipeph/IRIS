@@ -21,7 +21,8 @@ def generate_timelapse_video_name(
     fpi: int = 1,
     target_height: int = 2160,
     crop_mode: str = "center",
-    is_test: bool = False
+    is_test: bool = False,
+    is_long_exposure: bool = False
 ) -> str:
     """
     Gera o nome dinâmico oficial do vídeo timelapse.
@@ -57,7 +58,10 @@ def generate_timelapse_video_name(
     else:
         speedup_str = "1x"
 
-    suffix = "timelapse_teste.mp4" if is_test else "timelapse.mp4"
+    if is_long_exposure:
+        suffix = "timelapse_longa_exposicao_teste.mp4" if is_test else "timelapse_longa_exposicao.mp4"
+    else:
+        suffix = "timelapse_teste.mp4" if is_test else "timelapse.mp4"
     return f"{range_str}_{cam_str}_{dim_str}_{res_str}_{crop_str}_{fps}fps_{fpi}fpi_{speedup_str}_{duration_str}_{suffix}"
 
 def resolve_produced_output_path(

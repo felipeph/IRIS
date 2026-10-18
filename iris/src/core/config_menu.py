@@ -112,7 +112,9 @@ def _menu_organization_classification(console: Console):
         table.add_row("1", "Padrão Nome (Fotos)", "naming.photo_pattern", str(config.get("naming.photo_pattern")))
         table.add_row("2", "Padrão Nome (Vídeos)", "naming.video_pattern", str(config.get("naming.video_pattern")))
         table.add_row("3", "Zoom Lua (mm) Threshold", "classification.moon_zoom_threshold_mm", str(config.get("classification.moon_zoom_threshold_mm")))
-        table.add_row("4", "Min Fotos Timelapse", "classification.timelapse_min_photos", str(config.get("classification.timelapse_min_photos")))
+        
+        min_photos_val = config.get("classification.timelapse_normal.min_photos", config.get("classification.timelapse_min_photos", 200))
+        table.add_row("4", "Min Fotos Timelapse Normal", "classification.timelapse_normal.min_photos", str(min_photos_val))
         
         sample_enabled = config.get("classification.enable_timelapse_album_samples", True)
         table.add_row("5", "Amostras Timelapse p/ Álbum", "classification.enable_timelapse_album_samples", "[green]Sim[/green]" if sample_enabled else "[red]Não[/red]")
@@ -120,7 +122,12 @@ def _menu_organization_classification(console: Console):
         
         rec_folders = config.get("classification.recognize_timelapse_folders", True)
         table.add_row("7", "Reconhecer Pastas Timelapse", "classification.recognize_timelapse_folders", "[green]Sim[/green]" if rec_folders else "[red]Não[/red]")
-        table.add_row("8", "Intervalo Máx Timelapse (s)", "classification.timelapse_max_interval_seconds", str(config.get("classification.timelapse_max_interval_seconds", 60.0)))
+        
+        max_int_val = config.get("classification.timelapse_normal.max_interval_seconds", config.get("classification.timelapse_max_interval_seconds", 60.0))
+        table.add_row("8", "Intervalo Máx Timelapse Normal (s)", "classification.timelapse_normal.max_interval_seconds", str(max_int_val))
+        
+        tol_val = config.get("classification.timelapse_normal.tolerance_ratio", config.get("classification.timelapse_tolerance_ratio", 0.25))
+        table.add_row("9", "Tolerância Cadência Normal (ratio)", "classification.timelapse_normal.tolerance_ratio", f"{tol_val:.2f} ({int(tol_val*100)}%)")
 
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
@@ -147,9 +154,12 @@ def _menu_organization_classification(console: Console):
                 console.print("[red]Valor deve ser um número![/red]")
             time.sleep(1)
         elif choice == "4":
-            new_val = Prompt.ask("Nova Qtd Min Fotos p/ Timelapse", default=str(config.get("classification.timelapse_min_photos")))
+            curr_min = config.get("classification.timelapse_normal.min_photos", config.get("classification.timelapse_min_photos", 200))
+            new_val = Prompt.ask("Nova Qtd Min Fotos p/ Timelapse Normal", default=str(curr_min))
             try:
-                config.set("classification.timelapse_min_photos", int(new_val))
+                val_int = int(new_val)
+                config.set("classification.timelapse_normal.min_photos", val_int)
+                config.set("classification.timelapse_min_photos", val_int)
                 console.print("[green]Salvo![/green]")
             except ValueError:
                 console.print("[red]Valor deve ser um número inteiro![/red]")
@@ -179,16 +189,30 @@ def _menu_organization_classification(console: Console):
             console.print("[green]Salvo![/green]")
             time.sleep(1)
         elif choice == "8":
-            curr = config.get("classification.timelapse_max_interval_seconds", 60.0)
-            new_val = Prompt.ask("Intervalo máximo entre fotos (segundos)", default=str(curr))
+            curr = config.get("classification.timelapse_normal.max_interval_seconds", config.get("classification.timelapse_max_interval_seconds", 60.0))
+            new_val = Prompt.ask("Intervalo máximo entre fotos para Timelapse Normal (segundos)", default=str(curr))
             try:
                 val_float = float(new_val)
                 if val_float <= 0:
                     raise ValueError
+                config.set("classification.timelapse_normal.max_interval_seconds", val_float)
                 config.set("classification.timelapse_max_interval_seconds", val_float)
                 console.print("[green]Salvo![/green]")
             except ValueError:
                 console.print("[red]Valor deve ser um número positivo maior que zero![/red]")
+            time.sleep(1)
+        elif choice == "9":
+            curr = config.get("classification.timelapse_normal.tolerance_ratio", config.get("classification.timelapse_tolerance_ratio", 0.25))
+            new_val = Prompt.ask("Tolerância de cadência para Timelapse Normal (ex: 0.25 para 25%)", default=str(curr))
+            try:
+                val_float = float(new_val)
+                if val_float <= 0 or val_float >= 2.0:
+                    raise ValueError
+                config.set("classification.timelapse_normal.tolerance_ratio", val_float)
+                config.set("classification.timelapse_tolerance_ratio", val_float)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser entre 0.01 e 1.99![/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")
@@ -630,6 +654,152 @@ def _menu_astro(console: Console):
             time.sleep(1)
 
 
+def _menu_timelapse_long_exposure(console: Console):
+    """Sub-menu: Timelapse de Longa Exposição (Astrofotografia)."""
+    while True:
+        console.clear()
+        console.print(Panel("[bold yellow]Configurações: Timelapse de Longa Exposição (Astrofotografia)[/bold yellow]", expand=False))
+        
+        table = Table(title="Timelapse de Longa Exposição")
+        table.add_column("Opção", style="cyan", justify="center")
+        table.add_column("Configuração", style="bold white")
+        table.add_column("Chave YAML", style="magenta")
+        table.add_column("Valor Atual", style="green")
+        
+        le_enabled = config.get("classification.timelapse_long_exposure.enabled", True)
+        table.add_row("1", "Detecção Longa Exposição Ativa", "classification.timelapse_long_exposure.enabled", "[green]Sim[/green]" if le_enabled else "[red]Não[/red]")
+        table.add_row("2", "Pasta Destino", "classification.timelapse_long_exposure.folder", str(config.get("classification.timelapse_long_exposure.folder", "4_Timelapses_LongaExposicao")))
+        table.add_row("3", "Min Fotos Longa Exposição", "classification.timelapse_long_exposure.min_photos", str(config.get("classification.timelapse_long_exposure.min_photos", 60)))
+        table.add_row("4", "Shutter Mínimo (segundos)", "classification.timelapse_long_exposure.min_shutter_seconds", str(config.get("classification.timelapse_long_exposure.min_shutter_seconds", 5.0)))
+        table.add_row("5", "Intervalo Máx Disparos (s)", "classification.timelapse_long_exposure.max_interval_seconds", str(config.get("classification.timelapse_long_exposure.max_interval_seconds", 180.0)))
+        
+        tol_le = config.get("classification.timelapse_long_exposure.tolerance_ratio", 0.15)
+        table.add_row("6", "Tolerância Cadência (ratio)", "classification.timelapse_long_exposure.tolerance_ratio", f"{tol_le:.2f} ({int(tol_le*100)}%)")
+        
+        table.add_row("7", "FPS Renderização", "modules.timelapse_long_exposure.fps", str(config.get("modules.timelapse_long_exposure.fps", 30)))
+        table.add_row("8", "Fator Qualidade CRF", "modules.timelapse_long_exposure.crf", str(config.get("modules.timelapse_long_exposure.crf", 15)))
+        table.add_row("9", "Modo de Corte (Crop)", "modules.timelapse_long_exposure.crop_mode", str(config.get("modules.timelapse_long_exposure.crop_mode", "center")))
+        
+        le_prof = config.get("modules.timelapse_long_exposure.render_profile", "quality")
+        table.add_row("10", "Perfil Renderização", "modules.timelapse_long_exposure.render_profile", str(le_prof).upper())
+        
+        deband_le = config.get("modules.timelapse_long_exposure.deband.enabled", True)
+        table.add_row("11", "Deband 16-bit Céu Noturno", "modules.timelapse_long_exposure.deband.enabled", "[green]Ativado[/green]" if deband_le else "[red]Desativado[/red]")
+        
+        grain_le = config.get("modules.timelapse_long_exposure.deband.add_grain", True)
+        table.add_row("12", "Ruído Anti-banding YouTube", "modules.timelapse_long_exposure.deband.add_grain", "[green]Ativado[/green]" if grain_le else "[red]Desativado[/red]")
+        
+        pl_le = config.get("modules.youtube.timelapse_long_exposure_playlist", "Timelapses Longa Exposição")
+        table.add_row("13", "Playlist YouTube Dedicada", "modules.youtube.timelapse_long_exposure_playlist", str(pl_le))
+
+        console.print(table)
+        console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
+        
+        choice = Prompt.ask("\nEscolha uma opção para editar", default="0")
+        if choice == "0":
+            break
+        elif choice == "1":
+            curr = config.get("classification.timelapse_long_exposure.enabled", True)
+            new_val = Confirm.ask("Ativar perfil de detecção de timelapse para fotos de longa exposição?", default=curr)
+            config.set("classification.timelapse_long_exposure.enabled", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "2":
+            new_val = Prompt.ask("Nova pasta de destino para timelapses de longa exposição", default=str(config.get("classification.timelapse_long_exposure.folder", "4_Timelapses_LongaExposicao")))
+            config.set("classification.timelapse_long_exposure.folder", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "3":
+            new_val = Prompt.ask("Nova Qtd Mínima de Fotos para Longa Exposição", default=str(config.get("classification.timelapse_long_exposure.min_photos", 60)))
+            try:
+                config.set("classification.timelapse_long_exposure.min_photos", int(new_val))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "4":
+            new_val = Prompt.ask("Tempo mínimo de obturador (segundos) para considerar Longa Exposição", default=str(config.get("classification.timelapse_long_exposure.min_shutter_seconds", 5.0)))
+            try:
+                val_float = float(new_val)
+                config.set("classification.timelapse_long_exposure.min_shutter_seconds", val_float)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número positivo![/red]")
+            time.sleep(1)
+        elif choice == "5":
+            new_val = Prompt.ask("Intervalo máximo entre disparos (segundos)", default=str(config.get("classification.timelapse_long_exposure.max_interval_seconds", 180.0)))
+            try:
+                val_float = float(new_val)
+                config.set("classification.timelapse_long_exposure.max_interval_seconds", val_float)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número positivo![/red]")
+            time.sleep(1)
+        elif choice == "6":
+            new_val = Prompt.ask("Tolerância de cadência para Longa Exposição (ex: 0.15 para 15%)", default=str(config.get("classification.timelapse_long_exposure.tolerance_ratio", 0.15)))
+            try:
+                val_float = float(new_val)
+                config.set("classification.timelapse_long_exposure.tolerance_ratio", val_float)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número![/red]")
+            time.sleep(1)
+        elif choice == "7":
+            new_val = Prompt.ask("FPS de Renderização do Vídeo", default=str(config.get("modules.timelapse_long_exposure.fps", 30)))
+            try:
+                config.set("modules.timelapse_long_exposure.fps", int(new_val))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "8":
+            new_val = Prompt.ask("Fator de Qualidade CRF (0-51, menor = melhor)", default=str(config.get("modules.timelapse_long_exposure.crf", 15)))
+            try:
+                config.set("modules.timelapse_long_exposure.crf", int(new_val))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "9":
+            console.print("Modos de Enquadramento: [bold]center[/bold] (Centro), [bold]bottom[/bold] (Base), [bold]top[/bold] (Topo), [bold]full[/bold] (Quadro Completo)")
+            new_val = Prompt.ask("Modo de Corte", default=str(config.get("modules.timelapse_long_exposure.crop_mode", "center"))).lower()
+            if new_val in ["center", "bottom", "top", "full"]:
+                config.set("modules.timelapse_long_exposure.crop_mode", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida![/red]")
+            time.sleep(1)
+        elif choice == "10":
+            console.print("Perfis disponíveis: [bold]quality[/bold] (Lanczos 4K + deband 16-bit), [bold]fast[/bold] (Intel QSV HW), [bold]balanced[/bold] (Bicúbico)")
+            new_val = Prompt.ask("Perfil de renderização", default=str(config.get("modules.timelapse_long_exposure.render_profile", "quality"))).lower().strip()
+            if new_val in ["quality", "fast", "balanced"]:
+                config.set("modules.timelapse_long_exposure.render_profile", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Opção inválida![/red]")
+            time.sleep(1)
+        elif choice == "11":
+            curr = config.get("modules.timelapse_long_exposure.deband.enabled", True)
+            new_val = Confirm.ask("Ativar filtro Deband 16-bit para transições suaves do céu noturno?", default=curr)
+            config.set("modules.timelapse_long_exposure.deband.enabled", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "12":
+            curr = config.get("modules.timelapse_long_exposure.deband.add_grain", True)
+            new_val = Confirm.ask("Ativar micro-grão dither para evitar compressão agressiva do YouTube?", default=curr)
+            config.set("modules.timelapse_long_exposure.deband.add_grain", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "13":
+            new_val = Prompt.ask("Nome da Playlist no YouTube para Timelapses de Longa Exposição", default=str(config.get("modules.youtube.timelapse_long_exposure_playlist", "Timelapses Longa Exposição")))
+            config.set("modules.youtube.timelapse_long_exposure_playlist", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        else:
+            console.print("[red]Opção inválida.[/red]")
+            time.sleep(1)
+
+
 def show_config_menu(console: Console = None):
     """Menu principal das configurações: hub de categorias e subpáginas."""
     if console is None:
@@ -651,6 +821,7 @@ def show_config_menu(console: Console = None):
         console.print("  [cyan]4.[/cyan] 🎬 Edição de Vídeo 4K [dim](Modo Junção, Velocidade, Trimming, Áudio, Perfis)[/dim]")
         console.print("  [cyan]5.[/cyan] 📢 YouTube & Notificações [dim](Privacidade, Playlists, Canal NTFY)[/dim]")
         console.print("  [cyan]6.[/cyan] 🌕 Astrofotografia Lunar [dim](Empilhamento PSS, Percentuais, Wavelets, Limbo)[/dim]")
+        console.print("  [cyan]7.[/cyan] 🌌 Timelapse Longa Exposição [dim](Mín Fotos, Shutter Mín, Gaps Buffer, Render)[/dim]")
         console.print("  [cyan]0.[/cyan] ↩ Voltar")
         
         choice = Prompt.ask("\nSelecione uma opção", default="0")
@@ -668,6 +839,8 @@ def show_config_menu(console: Console = None):
             _menu_youtube_notifications(console)
         elif choice == "6":
             _menu_astro(console)
+        elif choice == "7":
+            _menu_timelapse_long_exposure(console)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)

@@ -161,11 +161,18 @@ class YouTubeUploadStage(PipelineStage):
         # Montar lista consolidada de jobs de upload
         pending_jobs = []
         for tl in pending_tl:
+            seq_dir = str(tl.get("sequence_dir", ""))
+            out_vid = str(tl.get("output_video_path", ""))
+            is_le = "4_Timelapses_LongaExposicao" in seq_dir or "longa_exposicao" in out_vid
+            tl_playlist = (
+                yt_config.get("timelapse_long_exposure_playlist", "Timelapses Longa Exposição")
+                if is_le else yt_config.get("playlist", "Timelapses")
+            )
             pending_jobs.append({
                 "type": "timelapse",
                 "record": tl,
                 "video_path": Path(tl["output_video_path"]),
-                "playlist": yt_config.get("playlist", "Timelapses")
+                "playlist": tl_playlist
             })
         for ve in pending_ve:
             pending_jobs.append({
