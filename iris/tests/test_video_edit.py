@@ -19,7 +19,8 @@ from src.modules.video_edit.namer import (
 from src.modules.video_edit.session import (
     group_videos_into_sessions,
     parse_item_datetime,
-    parse_duration_seconds
+    parse_duration_seconds,
+    get_item_source_folder
 )
 from src.modules.video_edit.renderer import build_atempo_chain, build_render_cmd, render_edited_video
 from src.modules.video_edit.stage import get_stage as get_video_edit_stage
@@ -144,57 +145,88 @@ def test_session_grouping_individual():
     assert len(sessions[1]) == 1
 
 
-def test_session_grouping_joined_time_and_camera():
-    # 2 clips close to each other (Canon SX60)
+def test_get_item_source_folder_normalization():
+    # Caminho com original_path
+    it1 = ProjectItem(original_path=r"C:\SD_CARD\DCIM\100CANON\MVI_0001.MP4", staging_path="")
+    assert "100canon" in get_item_source_folder(it1).lower()
+
+    # Fallback para staging_path
+    it2 = ProjectItem(original_path="", staging_path=r"C:\IRIS\1_Entrada\Passaros\video.mp4")
+    assert "passaros" in get_item_source_folder(it2).lower()
+
+    # Vazio
+    it3 = ProjectItem(original_path="", staging_path="")
+    assert get_item_source_folder(it3) == ""
+
+
+def test_session_grouping_joined_source_folder_and_camera():
+    # 2 clipes na mesma pasta A (Canon SX60) em horários próximos
     c1 = ProjectItem(
-        original_path="/orig/c1.mp4",
-        staging_path="/orig/c1.mp4",
+        original_path="/orig/folder_a/c1.mp4",
+        staging_path="/orig/folder_a/c1.mp4",
         category="video",
         meta_camera_make="Canon",
         meta_camera_model="SX60",
-        meta_timestamp="2026-08-17T14:30:00",
+        meta_timestamp="2026-08-17T09:00:00",
         meta_duration_str="60s"
     )
     c2 = ProjectItem(
-        original_path="/orig/c2.mp4",
-        staging_path="/orig/c2.mp4",
+        original_path="/orig/folder_a/c2.mp4",
+        staging_path="/orig/folder_a/c2.mp4",
         category="video",
         meta_camera_make="Canon",
         meta_camera_model="SX60",
-        meta_timestamp="2026-08-17T14:35:00",
+        meta_timestamp="2026-08-17T09:05:00",
         meta_duration_str="60s"
     )
-    # 1 clip much later (gap > 10 min)
+    # 1 clipe na mesma pasta A (Canon SX60), mas 6 horas depois (deve ser concatenado junto!)
     c3 = ProjectItem(
-        original_path="/orig/c3.mp4",
-        staging_path="/orig/c3.mp4",
+        original_path="/orig/folder_a/c3.mp4",
+        staging_path="/orig/folder_a/c3.mp4",
         category="video",
         meta_camera_make="Canon",
         meta_camera_model="SX60",
         meta_timestamp="2026-08-17T15:00:00",
         meta_duration_str="60s"
     )
-    # 1 clip close to c3 but different camera
+    # 1 clipe na mesma pasta A, mas câmera diferente (GoPro) -> sessão separada para proteger concat
     c4 = ProjectItem(
-        original_path="/orig/c4.mp4",
-        staging_path="/orig/c4.mp4",
+        original_path="/orig/folder_a/c4.mp4",
+        staging_path="/orig/folder_a/c4.mp4",
         category="video",
         meta_camera_make="GoPro",
         meta_camera_model="Hero 11",
-        meta_timestamp="2026-08-17T15:02:00",
+        meta_timestamp="2026-08-17T09:10:00",
+        meta_duration_str="60s"
+    )
+    # 1 clipe em pasta diferente B (Canon SX60), gravado no mesmo minuto de c1 -> sessão separada
+    c5 = ProjectItem(
+        original_path="/orig/folder_b/c5.mp4",
+        staging_path="/orig/folder_b/c5.mp4",
+        category="video",
+        meta_camera_make="Canon",
+        meta_camera_model="SX60",
+        meta_timestamp="2026-08-17T09:00:30",
         meta_duration_str="60s"
     )
 
-    sessions = group_videos_into_sessions([c1, c2, c3, c4], mode="joined", session_interval_minutes=10.0)
+    sessions = group_videos_into_sessions([c1, c2, c3, c4, c5], mode="joined")
     assert len(sessions) == 3
-    # Session 1: c1 and c2
-    assert len(sessions[0]) == 2
+    
+    # Sessão 1: folder_a Canon SX60 (c1, c2, c3 juntos, mesmo com 6 horas de diferença)
+    assert len(sessions[0]) == 3
+    assert sessions[0][0].original_path == "/orig/folder_a/c1.mp4"
+    assert sessions[0][1].original_path == "/orig/folder_a/c2.mp4"
+    assert sessions[0][2].original_path == "/orig/folder_a/c3.mp4"
     assert sessions[0][0].meta_camera_model == "SX60"
-    # Session 2: c3
+    
+    # Sessão 2: folder_b Canon SX60 (c5 isolado pela pasta de origem)
     assert len(sessions[1]) == 1
-    assert sessions[1][0].meta_camera_model == "SX60"
-    # Session 3: c4
+    assert sessions[1][0].original_path == "/orig/folder_b/c5.mp4"
+    
+    # Sessão 3: folder_a GoPro (c4 isolado pela câmera)
     assert len(sessions[2]) == 1
+    assert sessions[2][0].original_path == "/orig/folder_a/c4.mp4"
     assert sessions[2][0].meta_camera_model == "Hero 11"
 
 

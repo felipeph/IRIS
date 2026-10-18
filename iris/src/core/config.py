@@ -277,8 +277,7 @@ class ConfigManager:
                     "deband_enabled": True,
                     "trim_enabled": True,
                     "trim_seconds": 2.0,
-                    "strip_audio": False,
-                    "session_interval_minutes": 10.0
+                    "strip_audio": False
                 },
                 "youtube": {
                     "enabled": True,

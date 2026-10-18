@@ -20,12 +20,12 @@ Quando um vídeo gravado em resolução nativa 1080p (Full HD) é enviado direta
 O módulo oferece dois modos operacionais configuráveis:
 
 ### Modo 1: Individual (`mode: "individual"`)
-Cada vídeo é processado de forma isolada, gerando um clipe master 4K correspondente de saída em `7_Video_Editado_4K/YYYY/MM/DD/`.
+Cada vídeo é processado de forma isolada (upscale 1:1), gerando um clipe master 4K correspondente de saída em `7_Video_Editado_4K/YYYY/MM/DD/`.
 
-### Modo 2: Junção Contígua de Sessão (`mode: "session"`)
-Agrupa automaticamente todos os clipes gravados na mesma sessão de campo em um único vídeo contínuo:
-- O sistema analisa a diferença de tempo entre o final de um clipe e o início do próximo.
-- Se o intervalo for menor ou igual ao limiar configurado (`session_interval_minutes: 10.0`), os clipes são concatenados em ordem cronológica estrita sem perda de sincronia.
+### Modo 2: Junção por Pasta de Origem (`mode: "joined"`)
+Agrupa e concatena automaticamente em um único vídeo contínuo todos os clipes que vieram da mesma pasta de origem (e mesma câmera):
+- Clipes são ordenados cronologicamente e concatenados sem perda de sincronia, independente do intervalo de tempo decorrido entre eles.
+- Clipes de câmeras distintas são separados para preservar a homogeneidade de codec, resolução e perfil de cor.
 
 ---
 

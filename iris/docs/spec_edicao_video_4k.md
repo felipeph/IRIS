@@ -101,15 +101,12 @@ flowchart TD
 - Cada arquivo de vídeo gravado em `3_Videos/` é tratado de forma independente.
 - Relação: $1 \text{ vídeo original} \rightarrow 1 \text{ vídeo 4K masterizado}$.
 
-#### Modo B: Junção Sequencial (`mode: "joined"`)
-- O objetivo é unir pequenas tomadas sequenciais (ex: pássaro pousado em galho gravado em 3 arquivos sucessivos de 20 segundos) em um único vídeo contínuo.
-- **Critério de Agrupamento por Sessão Contígua:**
-  1. Clipes devem pertencer à **mesma câmera** (`camera_make` + `camera_model`).
-  2. Clipes são ordenados cronologicamente pelo timestamp de início (`start_timestamp`).
-  3. Dois clipes consecutivos $A$ e $B$ pertencem à mesma sessão se:
-     $$\Delta t = \text{timestamp}_{\text{início}}(B) - \text{timestamp}_{\text{fim}}(A) \le (\text{session\_interval\_minutes} \times 60)$$
-     *(Padrão: 10 minutos, configurável).*
-  4. Caso o intervalo ultrapasse 10 minutos ou a câmera mude, encerra-se a sessão atual e inicia-se uma nova.
+#### Modo B: Junção por Pasta de Origem (`mode: "joined"`)
+- O objetivo é unir vídeos gravados na mesma pasta de origem (ex: tomada contínua ou sessão de campo isolada em pasta) em um único vídeo masterizado contínuo.
+- **Critério de Agrupamento:**
+  1. Clipes devem pertencer à **mesma pasta de origem** (`Path(original_path).parent`).
+  2. Clipes devem pertencer à **mesma câmera** (`camera_make` + `camera_model`) para evitar incompatibilidades de codec e sensor no concat.
+  3. Clipes são ordenados cronologicamente pelo timestamp de início (`start_timestamp`), independente do intervalo de tempo decorrido entre eles.
 - **Concatenação sem Degradação:**
   - O corte de início e fim (trimming) é aplicado a cada clipe antes da fusão.
   - Os clipes são concatenados pelo FFmpeg via `concat filter` ou concat demuxer com reamostragem homogênea para o FPS alvo e espaço de cor comum.
@@ -322,8 +319,7 @@ Gravado em {DATA_HORA}, produzido e publicado de forma automatizada pelo IRIS (I
 modules:
   video_edit:
     enabled: true
-    mode: individual                  # 'individual' ou 'joined'
-    session_interval_minutes: 10.0    # Tolerância máxima entre clipes para formar sessão
+    mode: individual                  # 'individual' ou 'joined' (mesma pasta de origem)
     trim_enabled: true                # Ativa o corte de início e fim
     trim_seconds: 2.0                 # Quantidade de segundos a cortar nas pontas
     strip_audio: false                # Se true, remove o áudio (-an); se false, preserva com atempo

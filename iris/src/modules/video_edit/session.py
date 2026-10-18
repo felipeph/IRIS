@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
@@ -48,6 +49,16 @@ def parse_duration_seconds(item: ProjectItem) -> float:
     except Exception:
         return 0.0
 
+def get_item_source_folder(item: ProjectItem) -> str:
+    """Extrai a pasta de origem normalizada do item (onde o arquivo residia originalmente)."""
+    cand = item.original_path or item.staging_path or item.organized_path or ""
+    if cand:
+        try:
+            return os.path.normcase(os.path.normpath(str(Path(cand).parent)))
+        except Exception:
+            return str(Path(cand).parent).lower()
+    return ""
+
 def group_videos_into_sessions(
     items: List[ProjectItem],
     mode: str = "individual",
@@ -55,8 +66,9 @@ def group_videos_into_sessions(
 ) -> List[List[ProjectItem]]:
     """
     Agrupa vídeos em sessões de trabalho para renderização.
-    - Se mode == 'individual': Cada vídeo forma um grupo unitário independente.
-    - Se mode == 'joined': Agrupa vídeos contíguos da mesma câmera com intervalo <= session_interval_minutes.
+    - Se mode == 'individual': Cada vídeo forma um grupo unitário independente (upscale individual 1:1).
+    - Se mode == 'joined': Concatena todos os vídeos que vieram da mesma pasta de origem (e mesma câmera)
+      em um único vídeo, ordenados cronologicamente, independente do horário em que foram gravados.
     """
     if not items:
         return []
@@ -66,41 +78,19 @@ def group_videos_into_sessions(
         sorted_items = sorted(items, key=lambda it: parse_item_datetime(it))
         return [[it] for it in sorted_items]
 
-    # Modo Joined: Agrupar por câmera e identificar sessões contíguas
-    by_camera: Dict[Tuple[str, str], List[ProjectItem]] = defaultdict(list)
+    # Modo Joined: Agrupar por pasta de origem e câmera
+    groups: Dict[Tuple[str, Tuple[str, str]], List[ProjectItem]] = defaultdict(list)
     for it in items:
+        folder_key = get_item_source_folder(it)
         cam_key = (it.meta_camera_make or "Cam", it.meta_camera_model or "Model")
-        by_camera[cam_key].append(it)
+        groups[(folder_key, cam_key)].append(it)
 
     all_sessions: List[List[ProjectItem]] = []
-    max_interval_sec = max(1.0, float(session_interval_minutes) * 60.0)
-
-    for cam_key, cam_items in by_camera.items():
-        cam_items.sort(key=lambda it: parse_item_datetime(it))
-        
-        current_session = [cam_items[0]]
-        
-        for prev, curr in zip(cam_items[:-1], cam_items[1:]):
-            prev_start = parse_item_datetime(prev)
-            prev_dur = parse_duration_seconds(prev)
-            prev_end = prev_start.timestamp() + prev_dur
-            curr_start = parse_item_datetime(curr).timestamp()
-
-            # Delta entre o término do clipe anterior e o início do próximo
-            delta_sec = curr_start - prev_end
-            if delta_sec < 0:
-                # Caso de sobreposição de relógio ou cálculo impreciso de duração: usa diferença entre inícios
-                delta_sec = max(0.0, curr_start - prev_start.timestamp())
-
-            if delta_sec <= max_interval_sec:
-                current_session.append(curr)
-            else:
-                all_sessions.append(current_session)
-                current_session = [curr]
-
-        if current_session:
-            all_sessions.append(current_session)
+    for (folder_key, cam_key), group_items in groups.items():
+        group_items.sort(key=lambda it: parse_item_datetime(it))
+        all_sessions.append(group_items)
 
     # Ordenar as sessões finais pela data/hora do primeiro clipe
     all_sessions.sort(key=lambda s: parse_item_datetime(s[0]))
     return all_sessions
+

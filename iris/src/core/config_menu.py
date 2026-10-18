@@ -309,7 +309,7 @@ def _menu_video_edit(console: Console):
         table.add_row("1", "Perfil Renderização Vídeo", "modules.video_edit.render_profile", prof_desc)
         
         ve_mode = config.get("modules.video_edit.mode", "individual")
-        table.add_row("2", "Modo Edição Vídeo", "modules.video_edit.mode", "Individual (1:1)" if ve_mode == "individual" else "Junção de Sessão")
+        table.add_row("2", "Modo Edição Vídeo", "modules.video_edit.mode", "Individual (1:1)" if ve_mode == "individual" else "Junção por Pasta")
         
         ve_speed = config.get("modules.video_edit.speed", 1.0)
         table.add_row("3", "Velocidade Vídeo (--speed)", "modules.video_edit.speed", f"{ve_speed}x")
@@ -340,9 +340,9 @@ def _menu_video_edit(console: Console):
                 console.print("[red]Opção inválida! Escolha 'fast', 'balanced' ou 'quality'.[/red]")
             time.sleep(1)
         elif choice == "2":
-            console.print("Modos de Edição: [bold]individual[/bold] (1:1 independente), [bold]joined[/bold] (Junção de sessão contígua)")
+            console.print("Modos de Edição: [bold]individual[/bold] (Upscale 1:1 de cada vídeo individualmente), [bold]joined[/bold] (Junta os vídeos que vieram da mesma pasta de origem)")
             curr = config.get("modules.video_edit.mode", "individual")
-            new_val = Prompt.ask("Escolha o modo (individual/joined)", default=curr).lower()
+            new_val = Prompt.ask("Escolha o modo (individual/joined)", default=curr).lower().strip()
             if new_val in ["individual", "joined"]:
                 config.set("modules.video_edit.mode", new_val)
                 console.print("[green]Salvo![/green]")

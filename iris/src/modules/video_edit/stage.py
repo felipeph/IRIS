@@ -72,8 +72,7 @@ class VideoEditStage(PipelineStage):
 
         # 2. Agrupar vídeos em sessões de trabalho
         mode = ve_config.get("mode", "individual")
-        session_interval = float(ve_config.get("session_interval_minutes", 10.0))
-        sessions = group_videos_into_sessions(video_items, mode=mode, session_interval_minutes=session_interval)
+        sessions = group_videos_into_sessions(video_items, mode=mode)
 
         total_sessions = len(sessions)
         speed_factor = ve_config.get("speed", 1.0)
