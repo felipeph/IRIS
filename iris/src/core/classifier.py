@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime
 import statistics
+import re
 
 from src.core.metadata import MediaMetadata, parse_shutter_seconds
 from src.core.namer import generate_target_filename
@@ -106,12 +107,31 @@ def load_profiles(cfg: dict | None = None) -> tuple[TimelapseProfile, TimelapseP
 
     return normal, long_exp, le_enabled
 
+IRIS_TIMELAPSE_AUTO_PATTERN = re.compile(r"^timelapse_\d{2}-\d{2}-\d{2}$", re.IGNORECASE)
+
 def is_timelapse_folder_name(folder_name: str) -> bool:
-    """Verifica se o nome de uma pasta indica explicitamente ser um timelapse."""
+    """Verifica se o nome de uma pasta indica explicitamente ser um timelapse manual do usuário."""
     if not folder_name:
+        return False
+    if IRIS_TIMELAPSE_AUTO_PATTERN.match(folder_name.strip()):
         return False
     clean = folder_name.lower().replace("_", " ").replace("-", " ")
     return "timelapse" in clean or "time lapse" in clean
+
+def _is_fast_cadence_window(window: list[float], profile: TimelapseProfile) -> bool:
+    """
+    Verifica se a janela corresponde a uma cadência rápida / sub-segundo quantizada
+    em segundos inteiros (ex: 0.5s, 0.67s ou 1s com deltas 0s e 1s).
+    """
+    if not window:
+        return False
+    if any(d > 2.0 or d < 0.0 for d in window):
+        return False
+    fast_count = sum(1 for d in window if d in (0.0, 1.0))
+    if fast_count < int(len(window) * 0.75):
+        return False
+    mean_d = sum(window) / len(window)
+    return profile.min_interval <= mean_d <= 1.0
 
 def _is_isolated_stall(deltas: list[float], j: int, anchor: float, tol: float, profile: TimelapseProfile) -> bool:
     d = deltas[j]
@@ -186,6 +206,43 @@ def _scan_segments(
                 eligible_window = False
                 break
         if not eligible_window:
+            i += 1
+            continue
+
+        # Caso A: Cadência Rápida / Sub-segundo quantizada em segundos inteiros (0.0s e 1.0s)
+        if profile.name == "normal" and _is_fast_cadence_window(window, profile):
+            j = i
+            ok_deltas = []
+            stalls = 0
+            while j < n_deltas:
+                next_photo_idx = j + 1
+                if next_photo_idx in skip or not profile.eligible(shutters[next_photo_idx]):
+                    break
+                d = deltas[j]
+                if d in (0.0, 1.0):
+                    ok_deltas.append(d)
+                    j += 1
+                elif d == 2.0 and j + 1 < n_deltas and deltas[j + 1] in (0.0, 1.0):
+                    stalls += 1
+                    if stalls > max(2, int(profile.max_stall_fraction * (j - i + 1))):
+                        break
+                    j += 1
+                else:
+                    break
+            
+            n_photos = j - i + 1
+            if n_photos >= profile.min_photos:
+                total_deltas = n_photos - 1
+                reg_fraction = len(ok_deltas) / total_deltas
+                stall_fraction = stalls / total_deltas
+                mean_d = sum(ok_deltas) / len(ok_deltas) if ok_deltas else 0.0
+                
+                if (reg_fraction >= profile.min_regular_fraction and 
+                    stall_fraction <= profile.max_stall_fraction and 
+                    profile.min_interval <= mean_d <= 1.0):
+                    segments.append(TimelapseSegment(i, j, profile))
+                    i = j + 1
+                    continue
             i += 1
             continue
 
@@ -470,7 +527,7 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
 
             for folder_name, f_photos in by_folder.items():
                 if is_timelapse_folder_name(folder_name) and len(f_photos) >= min_folder_photos:
-                    f_photos.sort(key=lambda x: x.timestamp)
+                    f_photos.sort(key=lambda x: (x.timestamp, x.original_stem))
                     shutters = [parse_shutter_seconds(p.shutter_str) or 0.0 for p in f_photos]
                     med_shutter = statistics.median(shutters) if shutters else 0.0
                     normal_prof, le_prof, le_enabled = load_profiles(class_config)
@@ -489,7 +546,7 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
                 by_camera.setdefault(cam_key, []).append(item)
 
             for _, cam_photos in by_camera.items():
-                cam_photos.sort(key=lambda x: x.timestamp)
+                cam_photos.sort(key=lambda x: (x.timestamp, x.original_stem))
                 segments = find_timelapse_segments(cam_photos, class_config)
 
                 if not segments:

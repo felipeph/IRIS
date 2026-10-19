@@ -400,3 +400,85 @@ def test_long_exposure_disabled_fallback():
     assert all(it.category != "timelapse_long_exposure" for it in items)
 
 
+def test_classify_fast_cadence_subsecond_timelapse():
+    """Valida detecção de timelapse de ação (ex: GoPro 0.5s) com deltas de 0s e 1s devido a segundos inteiros."""
+    base_time = datetime(2026, 10, 18, 14, 0, 0)
+    photos = []
+    for i in range(250):
+        # Disparo a 0.5s quantizado para segundos inteiros (ex: 0, 0, 1, 1, 2, 2...)
+        dt = base_time + timedelta(seconds=int(i * 0.5))
+        photos.append(MediaMetadata(
+            file_path=Path(f"GOPRO_{i:04d}.JPG"),
+            is_video=False,
+            date_str="2026-10-18",
+            time_str=dt.strftime("%H-%M-%S"),
+            timestamp=dt,
+            camera_model="HERO5 Black",
+            camera_make="GoPro",
+            shutter_str="1/2000",
+            original_stem=f"GOPRO_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 250
+    assert all(it.category == "timelapse" for it in items)
+    assert "4_Timelapses" in str(items[0].relative_dest_dir)
+
+
+def test_classify_fast_burst_not_timelapse():
+    """Garante que uma rajada rápida (ex: 25 fotos com deltas 0s e 1s) NÃO vire timelapse devido ao piso de fotos."""
+    base_time = datetime(2026, 10, 18, 14, 0, 0)
+    photos = []
+    for i in range(25):
+        dt = base_time + timedelta(seconds=int(i * 0.5))
+        photos.append(MediaMetadata(
+            file_path=Path(f"BURST_{i:04d}.JPG"),
+            is_video=False,
+            date_str="2026-10-18",
+            time_str=dt.strftime("%H-%M-%S"),
+            timestamp=dt,
+            camera_model="HERO5 Black",
+            camera_make="GoPro",
+            shutter_str="1/2000",
+            original_stem=f"BURST_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 25
+    assert all(it.category != "timelapse" for it in items)
+
+
+def test_iris_auto_folder_not_blind_bypassed():
+    """Pastas com nomenclatura automática do IRIS (ex: timelapse_17-18-35) não devem sofrer bypass cego."""
+    base_time = datetime(2026, 10, 18, 17, 18, 35)
+    photos = []
+    curr = base_time
+    # 40 fotos com intervalos caóticos e espaçados
+    for i in range(40):
+        curr += timedelta(seconds=20 if i % 2 == 0 else 45)
+        photos.append(MediaMetadata(
+            file_path=Path(f"SX60_{i:04d}.JPG"),
+            source_folder_name="timelapse_17-18-35",
+            is_video=False,
+            date_str="2026-10-18",
+            time_str=curr.strftime("%H-%M-%S"),
+            timestamp=curr,
+            camera_model="SX60",
+            camera_make="Canon",
+            shutter_str="1/400",
+            original_stem=f"SX60_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 40
+    # Não deve ser classificado como timelapse
+    assert all(it.category != "timelapse" for it in items)
+
+
+
