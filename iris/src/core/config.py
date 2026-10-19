@@ -200,12 +200,16 @@ class ConfigManager:
                     "target_width": 3840,
                     "target_height": 2160,
                     "fps": 30,
+                    "frames_per_image": 1,
                     "crf": 15,
                     "deband": {
                         "enabled": True,
                         "add_grain": True
                     }
                 }
+                has_changes = True
+            elif "frames_per_image" not in mods["timelapse_long_exposure"]:
+                mods["timelapse_long_exposure"]["frames_per_image"] = 1
                 has_changes = True
 
             if "youtube" in mods:
@@ -336,6 +340,7 @@ class ConfigManager:
                     "target_width": 3840,
                     "target_height": 2160,
                     "fps": 60,
+                    "frames_per_image": 1,
                     "crf": 15
                 },
                 "timelapse_long_exposure": {
@@ -345,6 +350,7 @@ class ConfigManager:
                     "target_width": 3840,
                     "target_height": 2160,
                     "fps": 30,
+                    "frames_per_image": 1,
                     "crf": 15,
                     "deband": {
                         "enabled": True,

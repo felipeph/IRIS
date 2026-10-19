@@ -93,6 +93,7 @@ modules:
     enabled: true               # Habilita renderização de timelapses de longa exposição
     render_profile: quality     # Perfil recomendado para astrofotografia: quality (Lanczos + deband 16-bit com dither)
     fps: 30                     # Taxa de quadros suave para céu noturno / estrelas
+    frames_per_image: 1         # Multiplicador de quadros por foto (FPI)
     crop_mode: "center"         # Enquadramento centralizado 16:9 4K UHD
     target_width: 3840
     target_height: 2160

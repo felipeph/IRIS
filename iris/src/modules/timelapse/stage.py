@@ -179,7 +179,7 @@ class TimelapseStage(PipelineStage):
             else:
                 is_direct_desc = "Corte Direto 1:1 sem redimensionamento" if (orig_w >= target_w and orig_h >= target_h) else "Escala Proporcional"
             console.print(f"[cyan]Destino final 6_Produzidos: {output_video_path}[/cyan]")
-            console.print(f"[cyan]Configuração: Perfil [bold]{render_profile.upper()}[/bold] | Enquadramento: [bold]{crop_mode}[/bold] ({is_direct_desc})[/cyan]")
+            console.print(f"[cyan]Configuração: Perfil [bold]{render_profile.upper()}[/bold] | Enquadramento: [bold]{crop_mode}[/bold] ({is_direct_desc}) | FPS: [bold]{fps}[/bold] | FPI: [bold]{fpi}[/bold][/cyan]")
 
             # 3. Preparar sequência numerada via hardlinks
             prep_ok, temp_seq_dir, sorted_photos = prepare_numbered_sequence(

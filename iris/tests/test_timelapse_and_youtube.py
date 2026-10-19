@@ -860,6 +860,80 @@ def test_build_timelapse_render_cmd_full_mode(tmp_path):
     assert "noise=" in vf_qual
 
 
+def test_timelapse_stage_long_exposure_custom_fpi(tmp_path, monkeypatch):
+    """Valida que TimelapseStage aplica frames_per_image dedicado de timelapse_long_exposure."""
+    import uuid
+    from src.core.config import config
+    from src.core.project import ProjectItem, create_project
+
+    proj = create_project(f"test_le_fpi_{uuid.uuid4().hex[:8]}", str(tmp_path))
+    p1 = tmp_path / "img1.jpg"
+    p1.write_bytes(b"dummy")
+    item = ProjectItem(
+        original_path=str(p1),
+        staging_path=str(p1),
+        organized_path=str(p1),
+        category="timelapse_long_exposure",
+        relative_dest_dir="4_Timelapses_LongaExposicao/2026/08/17/seq1",
+        file_size_bytes=100,
+        meta_timestamp="2026-08-17T20:00:00",
+        meta_camera_model="Canon SX60",
+        meta_width=4000,
+        meta_height=3000
+    )
+    proj.save_item(item)
+
+    def fake_config_get(key, default=None):
+        cfgs = {
+            "modules.timelapse": {"fps": 60, "frames_per_image": 1},
+            "modules.timelapse_long_exposure": {"fps": 30, "frames_per_image": 3, "render_profile": "quality"},
+            "modules.youtube.privacy_status": "unlisted"
+        }
+        return cfgs.get(key, default)
+
+    monkeypatch.setattr(config, "get", fake_config_get)
+
+    captured_render_args = {}
+    def fake_render(*args, **kwargs):
+        captured_render_args["config"] = kwargs.get("config", {})
+        captured_render_args["photo_count"] = kwargs.get("photo_count", 0)
+        return True, "libx264", "", {"is_direct_crop": False, "deband_enabled": True, "deband_grain": True}
+
+    captured_video_names = []
+    from src.modules.timelapse.stage import generate_timelapse_video_name as orig_gen_name
+    def spy_gen_name(*args, **kwargs):
+        name = orig_gen_name(*args, **kwargs)
+        captured_video_names.append(name)
+        return name
+
+    monkeypatch.setattr("src.modules.timelapse.stage.render_timelapse_video", fake_render)
+    monkeypatch.setattr("src.modules.timelapse.stage.generate_timelapse_video_name", spy_gen_name)
+    monkeypatch.setattr("src.modules.timelapse.stage.prepare_numbered_sequence", lambda **kw: (True, tmp_path, [p1]))
+    monkeypatch.setattr("src.modules.timelapse.stage.clean_sequence_dir", lambda *a: None)
+
+    stage = get_timelapse_stage("timelapse", "Render")
+    success = stage.run(proj, interactive=False, force_render=True)
+    assert success is True
+
+    # 1. Verifica se fpi=3 foi repassado na config do render
+    assert captured_render_args["config"].get("frames_per_image") == 3
+    assert captured_render_args["config"].get("fps") == 30
+
+    # 2. Verifica se o nome do vídeo reflete 3fpi e sufixo timelapse_longa_exposicao
+    assert len(captured_video_names) == 1
+    assert "_30fps_3fpi_" in captured_video_names[0]
+    assert captured_video_names[0].endswith("timelapse_longa_exposicao.mp4")
+
+    # 3. Verifica persistência no SQLite do projeto
+    tls = proj.get_timelapses()
+    assert len(tls) == 1
+    rec = tls[0]
+    assert rec["frames_per_image"] == 3
+    assert rec["fps"] == 30
+    assert rec["metadata_json"]["frames_per_image"] == 3
+
+
+
 
 
 

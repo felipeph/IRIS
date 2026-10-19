@@ -677,20 +677,21 @@ def _menu_timelapse_long_exposure(console: Console):
         table.add_row("6", "Tolerância Cadência (ratio)", "classification.timelapse_long_exposure.tolerance_ratio", f"{tol_le:.2f} ({int(tol_le*100)}%)")
         
         table.add_row("7", "FPS Renderização", "modules.timelapse_long_exposure.fps", str(config.get("modules.timelapse_long_exposure.fps", 30)))
-        table.add_row("8", "Fator Qualidade CRF", "modules.timelapse_long_exposure.crf", str(config.get("modules.timelapse_long_exposure.crf", 15)))
-        table.add_row("9", "Modo de Corte (Crop)", "modules.timelapse_long_exposure.crop_mode", str(config.get("modules.timelapse_long_exposure.crop_mode", "center")))
+        table.add_row("8", "Frames por Foto (FPI)", "modules.timelapse_long_exposure.frames_per_image", str(config.get("modules.timelapse_long_exposure.frames_per_image", 1)))
+        table.add_row("9", "Fator Qualidade CRF", "modules.timelapse_long_exposure.crf", str(config.get("modules.timelapse_long_exposure.crf", 15)))
+        table.add_row("10", "Modo de Corte (Crop)", "modules.timelapse_long_exposure.crop_mode", str(config.get("modules.timelapse_long_exposure.crop_mode", "center")))
         
         le_prof = config.get("modules.timelapse_long_exposure.render_profile", "quality")
-        table.add_row("10", "Perfil Renderização", "modules.timelapse_long_exposure.render_profile", str(le_prof).upper())
+        table.add_row("11", "Perfil Renderização", "modules.timelapse_long_exposure.render_profile", str(le_prof).upper())
         
         deband_le = config.get("modules.timelapse_long_exposure.deband.enabled", True)
-        table.add_row("11", "Deband 16-bit Céu Noturno", "modules.timelapse_long_exposure.deband.enabled", "[green]Ativado[/green]" if deband_le else "[red]Desativado[/red]")
+        table.add_row("12", "Deband 16-bit Céu Noturno", "modules.timelapse_long_exposure.deband.enabled", "[green]Ativado[/green]" if deband_le else "[red]Desativado[/red]")
         
         grain_le = config.get("modules.timelapse_long_exposure.deband.add_grain", True)
-        table.add_row("12", "Ruído Anti-banding YouTube", "modules.timelapse_long_exposure.deband.add_grain", "[green]Ativado[/green]" if grain_le else "[red]Desativado[/red]")
+        table.add_row("13", "Ruído Anti-banding YouTube", "modules.timelapse_long_exposure.deband.add_grain", "[green]Ativado[/green]" if grain_le else "[red]Desativado[/red]")
         
         pl_le = config.get("modules.youtube.timelapse_long_exposure_playlist", "Timelapses Longa Exposição")
-        table.add_row("13", "Playlist YouTube Dedicada", "modules.youtube.timelapse_long_exposure_playlist", str(pl_le))
+        table.add_row("14", "Playlist YouTube Dedicada", "modules.youtube.timelapse_long_exposure_playlist", str(pl_le))
 
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
@@ -753,6 +754,18 @@ def _menu_timelapse_long_exposure(console: Console):
                 console.print("[red]Valor deve ser um número inteiro![/red]")
             time.sleep(1)
         elif choice == "8":
+            new_val = Prompt.ask("Frames por Foto (FPI) para Longa Exposição", default=str(config.get("modules.timelapse_long_exposure.frames_per_image", 1)))
+            try:
+                val_int = int(new_val)
+                if val_int < 1:
+                    console.print("[red]Valor deve ser maior ou igual a 1![/red]")
+                else:
+                    config.set("modules.timelapse_long_exposure.frames_per_image", val_int)
+                    console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "9":
             new_val = Prompt.ask("Fator de Qualidade CRF (0-51, menor = melhor)", default=str(config.get("modules.timelapse_long_exposure.crf", 15)))
             try:
                 config.set("modules.timelapse_long_exposure.crf", int(new_val))
@@ -760,7 +773,7 @@ def _menu_timelapse_long_exposure(console: Console):
             except ValueError:
                 console.print("[red]Valor deve ser um número inteiro![/red]")
             time.sleep(1)
-        elif choice == "9":
+        elif choice == "10":
             console.print("Modos de Enquadramento: [bold]center[/bold] (Centro), [bold]bottom[/bold] (Base), [bold]top[/bold] (Topo), [bold]full[/bold] (Quadro Completo)")
             new_val = Prompt.ask("Modo de Corte", default=str(config.get("modules.timelapse_long_exposure.crop_mode", "center"))).lower()
             if new_val in ["center", "bottom", "top", "full"]:
@@ -769,7 +782,7 @@ def _menu_timelapse_long_exposure(console: Console):
             else:
                 console.print("[red]Opção inválida![/red]")
             time.sleep(1)
-        elif choice == "10":
+        elif choice == "11":
             console.print("Perfis disponíveis: [bold]quality[/bold] (Lanczos 4K + deband 16-bit), [bold]fast[/bold] (Intel QSV HW), [bold]balanced[/bold] (Bicúbico)")
             new_val = Prompt.ask("Perfil de renderização", default=str(config.get("modules.timelapse_long_exposure.render_profile", "quality"))).lower().strip()
             if new_val in ["quality", "fast", "balanced"]:
@@ -778,19 +791,19 @@ def _menu_timelapse_long_exposure(console: Console):
             else:
                 console.print("[red]Opção inválida![/red]")
             time.sleep(1)
-        elif choice == "11":
+        elif choice == "12":
             curr = config.get("modules.timelapse_long_exposure.deband.enabled", True)
             new_val = Confirm.ask("Ativar filtro Deband 16-bit para transições suaves do céu noturno?", default=curr)
             config.set("modules.timelapse_long_exposure.deband.enabled", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
-        elif choice == "12":
+        elif choice == "13":
             curr = config.get("modules.timelapse_long_exposure.deband.add_grain", True)
             new_val = Confirm.ask("Ativar micro-grão dither para evitar compressão agressiva do YouTube?", default=curr)
             config.set("modules.timelapse_long_exposure.deband.add_grain", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
-        elif choice == "13":
+        elif choice == "14":
             new_val = Prompt.ask("Nome da Playlist no YouTube para Timelapses de Longa Exposição", default=str(config.get("modules.youtube.timelapse_long_exposure_playlist", "Timelapses Longa Exposição")))
             config.set("modules.youtube.timelapse_long_exposure_playlist", new_val)
             console.print("[green]Salvo![/green]")

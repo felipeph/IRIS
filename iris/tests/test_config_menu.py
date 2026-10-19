@@ -8,6 +8,7 @@ from src.core.config_menu import (
     _menu_storage_ingestion,
     _menu_organization_classification,
     _menu_timelapse,
+    _menu_timelapse_long_exposure,
     _menu_video_edit,
     _menu_youtube_notifications
 )
@@ -23,6 +24,7 @@ def test_config_menu_subpages_exit(mock_console):
         _menu_storage_ingestion(mock_console)
         _menu_organization_classification(mock_console)
         _menu_timelapse(mock_console)
+        _menu_timelapse_long_exposure(mock_console)
         _menu_video_edit(mock_console)
         _menu_youtube_notifications(mock_console)
 
@@ -107,6 +109,19 @@ def test_youtube_notifications_edit(mock_console):
     finally:
         config.set("modules.youtube.playlist", original_playlist)
 
+def test_timelapse_long_exposure_fpi_edit(mock_console):
+    """Testa edição da opção 8 (FPI - Frames por Foto) em Timelapses de Longa Exposição."""
+    original_fpi = config.get("modules.timelapse_long_exposure.frames_per_image", 1)
+    try:
+        # Escolhe opção 8 (FPI) -> "3", depois 0 para sair
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["8", "3", "0"]), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_timelapse_long_exposure(mock_console)
+            assert config.get("modules.timelapse_long_exposure.frames_per_image") == 3
+    finally:
+        config.set("modules.timelapse_long_exposure.frames_per_image", original_fpi)
+
+
 
 def test_config_manager_sanitize_mojibake():
     """Valida se ConfigManager corrige mojibake double-encoded e preserva strings limpas."""
@@ -173,4 +188,27 @@ def test_config_manager_auto_migrates_missing_stages(tmp_path: Path):
         # Garante que os módulos foram criados
         assert cm.get("modules.astro_stack.enabled") is True
         assert cm.get("modules.astro_sharpen.enabled") is True
+
+
+def test_config_manager_auto_migrates_long_exposure_fpi(tmp_path: Path):
+    """Garante que ConfigManager insere frames_per_image em módulos legados de timelapse_long_exposure."""
+    import yaml
+    from src.core.config import ConfigManager
+
+    test_cfg_file = tmp_path / "legacy_le_config.yaml"
+    legacy_data = {
+        "modules": {
+            "timelapse_long_exposure": {
+                "enabled": True,
+                "fps": 30
+            }
+        }
+    }
+    with open(test_cfg_file, "w", encoding="utf-8") as f:
+        yaml.dump(legacy_data, f)
+
+    with patch("src.core.config.CONFIG_FILE", test_cfg_file):
+        cm = ConfigManager()
+        cm.load()
+        assert cm.get("modules.timelapse_long_exposure.frames_per_image") == 1
 
