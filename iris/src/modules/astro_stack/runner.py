@@ -24,6 +24,10 @@ def find_astro_python() -> Optional[Path]:
     5. C:\code\FOTOGRAFIA\pipp-core-test\pss\.venv\Scripts\python.exe
     6. sys.executable (se possuir tifffile e PyQt5)
     """
+    env_py = os.getenv("IRIS_ASTRO_PYTHON")
+    if env_py and Path(env_py).exists():
+        return Path(env_py)
+
     configured_py = config.get("modules.astro_stack.python_path")
     if configured_py and Path(configured_py).exists():
         return Path(configured_py)
@@ -37,8 +41,8 @@ def find_astro_python() -> Optional[Path]:
 
     candidates = [
         MODULE_DIR.parents[2] / ".venv_astro" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"),
+        MODULE_DIR.parents[3] / ".venv_astro" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"),
         Path.home() / ".iris" / "astro_venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"),
-        Path("C:/code/FOTOGRAFIA/pipp-core-test/pss/.venv/Scripts/python.exe"),
     ]
 
     for cand in candidates:

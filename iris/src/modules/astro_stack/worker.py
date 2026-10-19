@@ -72,12 +72,15 @@ def main():
     # Resolve caminhos do vendor e de run_pss.py
     vendor_dir = args.vendor_dir
     if not vendor_dir or not vendor_dir.exists():
-        # Procura relativo ao projeto
-        candidates = [
+        # Procura relativo ao projeto ou via variável de ambiente
+        candidates = []
+        env_vendor = os.getenv("IRIS_PSS_VENDOR_DIR")
+        if env_vendor and Path(env_vendor).exists():
+            candidates.append(Path(env_vendor))
+        candidates.extend([
             MODULE_DIR.parents[2] / "vendor" / "PlanetarySystemStacker",
-            Path("C:/code/IRIS/iris/vendor/PlanetarySystemStacker"),
-            Path("C:/code/FOTOGRAFIA/pipp-core-test/pss"),
-        ]
+            MODULE_DIR.parents[3] / "vendor" / "PlanetarySystemStacker",
+        ])
         for c in candidates:
             if (c / "run_pss.py").exists() or (c / "planetary_system_stacker").exists():
                 vendor_dir = c

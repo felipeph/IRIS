@@ -277,7 +277,11 @@ def extract_metadata_batch(
     if not file_paths:
         return []
 
-    exiftool_bin = shutil.which("exiftool") or ("C:\\Windows\\exiftool.exe" if Path("C:\\Windows\\exiftool.exe").exists() else None)
+    env_exif = os.getenv("IRIS_EXIFTOOL_PATH")
+    if env_exif and Path(env_exif).exists():
+        exiftool_bin = env_exif
+    else:
+        exiftool_bin = shutil.which("exiftool")
     results = []
 
     # Map of path -> raw exif dict

@@ -21,7 +21,11 @@ class SanitizationStage(PipelineStage):
             return True
 
         # Pre-flight check
-        exiftool_bin = shutil.which("exiftool") or ("C:\\Windows\\exiftool.exe" if Path("C:\\Windows\\exiftool.exe").exists() else None)
+        env_exif = os.getenv("IRIS_EXIFTOOL_PATH")
+        if env_exif and Path(env_exif).exists():
+            exiftool_bin = env_exif
+        else:
+            exiftool_bin = shutil.which("exiftool")
         if not exiftool_bin:
             console.print("[bold red]ERRO: exiftool não encontrado no PATH![/bold red]")
             console.print("Por favor, instale o exiftool para continuar.")

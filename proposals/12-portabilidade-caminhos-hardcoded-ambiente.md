@@ -1,5 +1,9 @@
 # Proposta 12: Portabilidade, Resolução Dinâmica de Ambientes e Remoção de Caminhos Hardcoded
 
+> **Status**: ✅ **Implementada (Abordagens A e B: Resolução Relativa Estrita + Env Vars)**  
+> **Data de Conclusão**: 19/10/2026  
+> **Branch**: `feat/implement-pending-proposals`
+
 ## Contexto e Localização do Problema
 
 - **Arquivos Afetados**:
