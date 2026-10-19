@@ -273,6 +273,7 @@ def test_project_edited_video_db_persistence(tmp_path):
     assert res[0]["output_video_path"] == str(tmp_path / "out_4k.mp4")
     assert res[0]["clip_count"] == 1
     assert res[0]["speed"] == 1.0
+    assert res[0]["source_video_paths"] == ["/orig/c1.mp4"]
     
     # Update YouTube status
     proj.update_edited_video_youtube(
@@ -391,6 +392,69 @@ def test_build_edited_video_youtube_metadata(tmp_path):
     assert "RASTREABILIDADE IRIS" in desc
     assert "Lanczos" in desc
     assert "#4k" in desc
+
+
+def test_build_edited_video_youtube_metadata_single_clip(tmp_path):
+    vid_path = tmp_path / "2026-08-17_14h30m_Canon-SX60_1clipe_video_editado.mp4"
+    vid_path.write_bytes(b"dummy")
+    rec = {
+        "output_video_path": str(vid_path),
+        "source_video_paths": ["C:/input/2026-08-17_14-30-00_Canon-SX60.mp4"],
+        "clip_count": 1,
+        "mode": "individual",
+        "metadata_json": {}
+    }
+    meta = build_edited_video_youtube_metadata(vid_path, rec, {})
+    desc = meta["description"]
+    assert "• Arquivo Original: 2026-08-17_14-30-00_Canon-SX60.mp4" in desc
+
+
+def test_build_edited_video_youtube_metadata_joined_source_list(tmp_path):
+    vid_path = tmp_path / "2026-08-17_14h30m-15h10m_GoPro10_3clipes_video_editado.mp4"
+    vid_path.write_bytes(b"dummy video")
+
+    rec = {
+        "output_video_path": str(vid_path),
+        "source_video_paths": [
+            "C:/input/session1/2026-08-17_14-30-00_GoPro10.mp4",
+            "C:/input/session1/2026-08-17_14-35-15_GoPro10.mp4",
+            "C:/input/session1/2026-08-17_14-40-30_GoPro10.mp4",
+        ],
+        "clip_count": 3,
+        "mode": "joined",
+        "duration_seconds": 90.0,
+        "metadata_json": {
+            "camera_model": "GoPro HERO10 Black",
+            "camera_make": "GoPro",
+            "first_dt_formatted": "17/08/2026 às 14:30:00"
+        }
+    }
+    yt_cfg = {"video_playlist": "Natureza 4K UHD"}
+    meta = build_edited_video_youtube_metadata(vid_path, rec, yt_cfg)
+    desc = meta["description"]
+
+    assert "• Modo de Edição: Sessão Concatenada (3 clipes unidos)" in desc
+    assert "• Arquivos Originais Concatenados:" in desc
+    assert "  - 2026-08-17_14-30-00_GoPro10.mp4" in desc
+    assert "  - 2026-08-17_14-35-15_GoPro10.mp4" in desc
+    assert "  - 2026-08-17_14-40-30_GoPro10.mp4" in desc
+    assert "..." not in desc
+
+
+def test_build_edited_video_youtube_metadata_joined_json_string(tmp_path):
+    vid_path = tmp_path / "out.mp4"
+    vid_path.write_bytes(b"dummy")
+    rec = {
+        "output_video_path": str(vid_path),
+        "source_video_paths": '["C:/a/clipA.mp4", "C:/b/clipB.mp4"]',
+        "clip_count": 2,
+        "mode": "joined",
+        "metadata_json": {}
+    }
+    meta = build_edited_video_youtube_metadata(vid_path, rec, {})
+    desc = meta["description"]
+    assert "  - clipA.mp4" in desc
+    assert "  - clipB.mp4" in desc
 
 
 def test_build_edited_video_youtube_title_joined():

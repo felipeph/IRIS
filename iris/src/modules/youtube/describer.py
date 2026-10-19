@@ -2,6 +2,7 @@
 
 import re
 import math
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
@@ -613,13 +614,39 @@ def build_edited_video_youtube_metadata(
     render_fps = render_stats.get("avg_fps", 0.0)
     render_line = f"\n• Tempo de Renderização: {format_duration_human(render_sec)} (média de {render_fps:.1f} FPS de codificação)" if render_sec > 0 else ""
 
-    src_paths = record.get("source_video_paths", [])
-    if len(src_paths) == 1:
-        src_display = src_paths[0]
-    elif len(src_paths) > 1:
-        src_display = f"{len(src_paths)} arquivos ({src_paths[0]} ...)"
+    raw_paths = record.get("source_video_paths") or record.get("source_files") or []
+    if isinstance(raw_paths, str):
+        try:
+            src_paths = json.loads(raw_paths)
+        except Exception:
+            src_paths = [raw_paths] if raw_paths else []
+    elif isinstance(raw_paths, (list, tuple)):
+        src_paths = list(raw_paths)
     else:
-        src_display = "Mapeamento interno IRIS"
+        src_paths = []
+
+    if len(src_paths) == 1:
+        p_name = Path(src_paths[0]).name if src_paths[0] else "Desconhecido"
+        trace_source = f"• Arquivo Original: {p_name}"
+    elif len(src_paths) > 1:
+        # Modo joined / múltiplos clipes: lista com nome completo de cada arquivo de origem
+        items_lines = []
+        max_items = 50  # salvaguarda contra limite estrito de 5.000 chars do YouTube
+        for idx, p in enumerate(src_paths):
+            if idx >= max_items:
+                remaining = len(src_paths) - max_items
+                items_lines.append(f"  - ... e mais {remaining} arquivo(s)")
+                break
+            name = Path(p).name if p else ""
+            if name:
+                items_lines.append(f"  - {name}")
+        joined_items = "\n".join(items_lines)
+        trace_source = (
+            f"• Modo de Edição: Sessão Concatenada ({len(src_paths)} clipes unidos)\n"
+            f"• Arquivos Originais Concatenados:\n{joined_items}"
+        )
+    else:
+        trace_source = "• Origem: Mapeamento interno IRIS"
 
     profile = str(meta.get("render_profile") or record.get("render_profile") or "quality").lower()
     if profile == "fast":
@@ -665,7 +692,7 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
 📁 RASTREABILIDADE IRIS:
 • Projeto: {proj}
 • Arquivo Gerado: {video_path.name}
-• Origem: {src_display}
+{trace_source}
 • Pipeline: IRIS v2.0 - Video Mastering Stage
 
 #natureza #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao

@@ -229,6 +229,12 @@ class ProjectMediaMixin:
                         d["metadata_json"] = json.loads(val)
                     except Exception:
                         pass
+                raw_src = d.get("source_video_paths")
+                if isinstance(raw_src, str) and raw_src:
+                    try:
+                        d["source_video_paths"] = json.loads(raw_src)
+                    except Exception:
+                        d["source_video_paths"] = [raw_src]
                 results.append(d)
         return results
 
