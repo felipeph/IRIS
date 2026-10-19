@@ -8,20 +8,20 @@ Nenhuma alteração de código foi executada ainda. O objetivo deste material é
 
 ## Matriz de Prioridade e Impacto
 
-| ID | Arquivo da Proposta | Categoria | Gravidade / Impacto | Complexidade |
-| :---: | :--- | :---: | :---: | :---: |
-| **01** | [`01-seguranca-limpeza-sd-unlink-fallback.md`](./01-seguranca-limpeza-sd-unlink-fallback.md) | Segurança | 🔴 Crítica (Risco de Perda de Dados) | Baixa |
-| **02** | [`02-seguranca-migracao-destrutiva-drop-table.md`](./02-seguranca-migracao-destrutiva-drop-table.md) | Segurança | 🔴 Crítica (Perda de Histórico) | Baixa |
-| **03** | [`03-concorrencia-race-condition-project-lock.md`](./03-concorrencia-race-condition-project-lock.md) | Segurança | 🟠 Alta (Colisão entre Processos) | Baixa |
-| **04** | [`04-ingestao-falso-positivo-tamanho-move-strategy.md`](./04-ingestao-falso-positivo-tamanho-move-strategy.md) | Segurança / Integridade | 🟠 Alta (Omissão de Mídias) | Média |
-| **05** | [`05-performance-sqlite-commit-churn-batching.md`](./05-performance-sqlite-commit-churn-batching.md) | Performance | 🟠 Alta (Gargalo de I/O em Lote) | Média |
-| **06** | [`06-performance-property-items-overhead-leitura.md`](./06-performance-property-items-overhead-leitura.md) | Performance | 🟡 Média (Lentidão no Menu Interativo) | Baixa |
-| **07** | [`07-performance-ffprobe-exiftool-subprocessos.md`](./07-performance-ffprobe-exiftool-subprocessos.md) | Performance | 🟡 Média (Latência de Subprocessos) | Baixa |
-| **08** | [`08-arquitetura-dual-sqlite-dessincronizacao.md`](./08-arquitetura-dual-sqlite-dessincronizacao.md) | Arquitetura | 🟠 Alta (Inconsistência de Estado) | Alta |
-| **09** | [`09-arquitetura-decomposicao-god-object-project.md`](./09-arquitetura-decomposicao-god-object-project.md) | Arquitetura | 🟡 Média (Manutenibilidade & SOLID) | Alta |
-| **10** | [`10-arquitetura-acoplamento-rich-ui-regras-negocio.md`](./10-arquitetura-acoplamento-rich-ui-regras-negocio.md) | Arquitetura | 🟡 Média (Testabilidade & Headless) | Média |
-| **11** | [`11-classificacao-heuristicas-rigidas-camera.md`](./11-classificacao-heuristicas-rigidas-camera.md) | Regra de Negócio | 🟡 Média (Falso Positivo de Astro) | Baixa |
-| **12** | [`12-portabilidade-caminhos-hardcoded-ambiente.md`](./12-portabilidade-caminhos-hardcoded-ambiente.md) | Portabilidade | 🟡 Média (Acoplamento de Máquina) | Baixa |
+| ID | Arquivo da Proposta | Categoria | Gravidade / Impacto | Complexidade | Status |
+| :---: | :--- | :---: | :---: | :---: | :---: |
+| **01** | [`01-seguranca-limpeza-sd-unlink-fallback.md`](./01-seguranca-limpeza-sd-unlink-fallback.md) | Segurança | 🔴 Crítica (Risco de Perda de Dados) | Baixa | ✅ Concluída |
+| **02** | [`02-seguranca-migracao-destrutiva-drop-table.md`](./02-seguranca-migracao-destrutiva-drop-table.md) | Segurança | 🔴 Crítica (Perda de Histórico) | Baixa | ✅ Concluída |
+| **03** | [`03-concorrencia-race-condition-project-lock.md`](./03-concorrencia-race-condition-project-lock.md) | Segurança | 🟠 Alta (Colisão entre Processos) | Baixa | ✅ Concluída |
+| **04** | [`04-ingestao-falso-positivo-tamanho-move-strategy.md`](./04-ingestao-falso-positivo-tamanho-move-strategy.md) | Segurança / Integridade | 🟠 Alta (Omissão de Mídias) | Média | ✅ Concluída |
+| **05** | [`05-performance-sqlite-commit-churn-batching.md`](./05-performance-sqlite-commit-churn-batching.md) | Performance | 🟠 Alta (Gargalo de I/O em Lote) | Média | ✅ Concluída |
+| **06** | [`06-performance-property-items-overhead-leitura.md`](./06-performance-property-items-overhead-leitura.md) | Performance | 🟡 Média (Lentidão no Menu Interativo) | Baixa | ✅ Concluída |
+| **07** | [`07-performance-ffprobe-exiftool-subprocessos.md`](./07-performance-ffprobe-exiftool-subprocessos.md) | Performance | 🟡 Média (Latência de Subprocessos) | Baixa | ✅ Concluída |
+| **08** | [`08-arquitetura-dual-sqlite-dessincronizacao.md`](./08-arquitetura-dual-sqlite-dessincronizacao.md) | Arquitetura | 🟠 Alta (Inconsistência de Estado) | Alta | ✅ Concluída |
+| **09** | [`09-arquitetura-decomposicao-god-object-project.md`](./09-arquitetura-decomposicao-god-object-project.md) | Arquitetura | 🟡 Média (Manutenibilidade & SOLID) | Alta | ✅ Concluída |
+| **10** | [`10-arquitetura-acoplamento-rich-ui-regras-negocio.md`](./10-arquitetura-acoplamento-rich-ui-regras-negocio.md) | Arquitetura | 🟡 Média (Testabilidade & Headless) | Média | ✅ Concluída |
+| **11** | [`11-classificacao-heuristicas-rigidas-camera.md`](./11-classificacao-heuristicas-rigidas-camera.md) | Regra de Negócio | 🟡 Média (Falso Positivo de Astro) | Baixa | ✅ Concluída |
+| **12** | [`12-portabilidade-caminhos-hardcoded-ambiente.md`](./12-portabilidade-caminhos-hardcoded-ambiente.md) | Portabilidade | 🟡 Média (Acoplamento de Máquina) | Baixa | ✅ Concluída |
 
 ---
 
