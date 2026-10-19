@@ -8,14 +8,15 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import List, Dict, Any, Optional
 from uuid import uuid4
 
 if sys.platform == "win32":
     try:
         if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+            sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore
         if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-            sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)
+            sys.stderr.reconfigure(encoding="utf-8", line_buffering=True)  # type: ignore
     except Exception:
         pass
 
@@ -23,7 +24,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import cv2
 import numpy as np
-import tifffile
+import tifffile  # type: ignore
 
 # Adiciona diretório do módulo ao sys.path para importar preprocessor e namer
 MODULE_DIR = Path(__file__).resolve().parent
@@ -163,7 +164,7 @@ def main():
     print(f"STATUS: Dimensão calculada: {crop_size}x{crop_size} (Margem: {args.margin}px). Ganho linear compartilhado: {gain:.4f}", flush=True)
 
     # 2. Leitura, recorte centrado, aplicação de ganho e gravação direta em single-pass
-    metadata = [None] * len(files)
+    metadata: List[Any] = [None] * len(files)
     t_start_decode = time.monotonic()
     completed_decode = 0
     valid_count = 0
@@ -326,7 +327,7 @@ def main():
     print(f"PROGRESS_JSON:{json.dumps({'phase': 'preview', 'crop_size': crop_size, 'gain': gain, 'progress_pct': 96.0, 'completed_stacks': output_tiff_paths, 'msg': 'Gerando prévia PNG esticada'})}", flush=True)
     if best_stack_final is not None:
         p_peak = float(np.percentile(best_stack_final, 99.9))
-        preview_img = np.uint8(np.clip(best_stack_final.astype(np.float32) * (255.0 / max(1.0, p_peak)), 0, 255))
+        preview_img = np.clip(best_stack_final.astype(np.float32) * (255.0 / max(1.0, p_peak)), 0, 255).astype(np.uint8)
         cv2.imwrite(str(preview_path), preview_img)
 
     # 6. Gravação de relatório JSON de metadados

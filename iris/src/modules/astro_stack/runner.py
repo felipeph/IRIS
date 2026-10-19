@@ -29,11 +29,11 @@ def find_astro_python() -> Optional[Path]:
         return Path(env_py)
 
     configured_py = config.get("modules.astro_stack.python_path")
-    if configured_py and Path(configured_py).exists():
+    if isinstance(configured_py, (str, Path)) and Path(configured_py).exists():
         return Path(configured_py)
 
     configured_venv = config.get("modules.astro_stack.venv_path")
-    if configured_venv and configured_venv != "auto":
+    if isinstance(configured_venv, (str, Path)) and str(configured_venv) != "auto":
         p = Path(configured_venv)
         exe = p / "Scripts" / "python.exe" if sys.platform == "win32" else p / "bin" / "python"
         if exe.exists():
@@ -51,8 +51,8 @@ def find_astro_python() -> Optional[Path]:
 
     # Testa se o Python atual tem as dependências mínimas
     try:
-        import PyQt5  # noqa: F401
-        import tifffile  # noqa: F401
+        import PyQt5  # type: ignore # noqa: F401
+        import tifffile  # type: ignore # noqa: F401
         import cv2  # noqa: F401
         return Path(sys.executable)
     except ImportError:
@@ -91,7 +91,8 @@ class AstroStackRunner:
             )
 
         if keep_percents is None:
-            keep_percents = config.get("modules.astro_stack.keep_percents", [10, 25, 50])
+            raw_kp = config.get("modules.astro_stack.keep_percents", [10, 25, 50])
+            keep_percents = list(raw_kp) if isinstance(raw_kp, (list, tuple)) else [10, 25, 50]
 
         kp_str = ",".join(str(p) for p in keep_percents)
         vendor_dir = MODULE_DIR.parents[2] / "vendor" / "PlanetarySystemStacker"
@@ -140,7 +141,7 @@ class AstroStackRunner:
 
         # Streaming do output unificado em tempo real
         while True:
-            line = proc.stdout.readline()
+            line = proc.stdout.readline() if proc.stdout else ""
             if not line and proc.poll() is not None:
                 break
             if line:
@@ -187,8 +188,13 @@ class AstroStackRunner:
             # Tenta ler do report.json no diretório de saída
             report_files = list(output_dir.glob("*_report.json"))
             if report_files:
-                report_data = json.loads(report_files[-1].read_text(encoding="utf-8"))
-            else:
+                try:
+                    loaded = json.loads(report_files[-1].read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        report_data = loaded
+                except Exception:
+                    pass
+            if report_data is None:
                 report_data = {"status": "success", "session_dir": str(input_dir), "output_dir": str(output_dir)}
 
         log_event(f"Empilhamento concluído com sucesso para {input_dir.name}", "info")
