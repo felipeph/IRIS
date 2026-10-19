@@ -311,25 +311,27 @@ def test_stage_source_path_session_discovery(tmp_path: Path):
     (sess_dir / "frame1.cr2").write_bytes(b"\x00" * 100)
     (sess_dir / "frame2.cr2").write_bytes(b"\x00" * 100)
 
+    dest_root = tmp_path / "dest"
     proj = Project("src_path_astro_proj", str(sess_dir))
     s_stack = get_stack_stage("astro_stack", "Empilhamento Lunar")
 
     # Com runner simulado para não disparar o subprocesso PSS
-    with patch("src.modules.astro_stack.stage.AstroStackRunner") as mock_runner_cls:
-        mock_runner = MagicMock()
-        mock_runner.is_available.return_value = True
-        mock_runner.run_session.return_value = {
-            "output_tiff_paths": {"10": str(tmp_path / "test.tiff")},
-            "crop_size": 200,
-            "shared_gain": 1.5,
-        }
-        mock_runner_cls.return_value = mock_runner
+    with patch("src.core.config.config.get", side_effect=lambda k, d=None: dest_root if "destination_root" in k else d):
+        with patch("src.modules.astro_stack.stage.AstroStackRunner") as mock_runner_cls:
+            mock_runner = MagicMock()
+            mock_runner.is_available.return_value = True
+            mock_runner.run_session.return_value = {
+                "output_tiff_paths": {"10": str(dest_root / "test.tiff")},
+                "crop_size": 200,
+                "shared_gain": 1.5,
+            }
+            mock_runner_cls.return_value = mock_runner
 
-        with patch("src.modules.astro_stack.stage.send_windows_toast"):
-            with patch("src.modules.astro_stack.stage.send_ntfy_notification"):
-                success = s_stack.run(proj, force=True)
-                assert success is True
-                assert mock_runner.run_session.called
+            with patch("src.modules.astro_stack.stage.send_windows_toast"):
+                with patch("src.modules.astro_stack.stage.send_ntfy_notification"):
+                    success = s_stack.run(proj, force=True)
+                    assert success is True
+                    assert mock_runner.run_session.called
 
 
 def test_astro_stack_ignores_dest_root_sessions(tmp_path: Path):
@@ -448,5 +450,46 @@ def test_astro_stack_processes_project_lunar_items(tmp_path: Path):
                     res = s_stack.run(proj, force=True)
                     assert res is True
                     assert mock_runner.run_session.called
+
+
+def test_astro_stack_prunes_empty_output_dir_on_failure(tmp_path: Path):
+    dest_root = tmp_path / "dest"
+    sess_dir = tmp_path / "src" / "5_Astrofotografia" / "Lua" / "2026" / "10" / "18" / "sessao_fail"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+    (sess_dir / "frame1.cr2").write_bytes(b"\x00" * 100)
+    (sess_dir / "frame2.cr2").write_bytes(b"\x00" * 100)
+
+    proj = Project("fail_proj", str(sess_dir))
+    s_stack = get_stack_stage("astro_stack", "Empilhamento Lunar")
+
+    with patch("src.core.config.config.get", side_effect=lambda k, d=None: dest_root if "destination_root" in k else d):
+        with patch("src.modules.astro_stack.stage.AstroStackRunner") as mock_runner_cls:
+            mock_runner = MagicMock()
+            mock_runner.is_available.return_value = True
+            mock_runner.run_session.side_effect = RuntimeError("Falha PSS simulada")
+            mock_runner_cls.return_value = mock_runner
+
+            res = s_stack.run(proj, force=True)
+            assert res is True
+            expected_out_dir = dest_root / "8_Astro_Stack" / "Lua" / "2026" / "10" / "18" / "sessao_fail"
+            assert not expected_out_dir.exists()
+
+
+def test_astro_sharpen_prunes_empty_output_dir_on_failure(tmp_path: Path):
+    dest_root = tmp_path / "dest"
+    stack_file = tmp_path / "src" / "8_Astro_Stack" / "Lua" / "2026" / "10" / "18" / "sessao_fail" / "stack.tiff"
+    stack_file.parent.mkdir(parents=True, exist_ok=True)
+    stack_file.write_bytes(b"\x00" * 100)
+
+    proj = Project("sharpen_fail_proj", str(tmp_path / "src"))
+    s_sharpen = get_sharpen_stage("astro_sharpen", "Aprimoramento")
+
+    with patch("src.core.config.config.get", side_effect=lambda k, d=None: dest_root if "destination_root" in k else d):
+        with patch("src.modules.astro_sharpen.stage.process_and_export_all_presets") as mock_presets:
+            mock_presets.side_effect = RuntimeError("Falha Wavelets simulada")
+            res = s_sharpen.run(proj)
+            assert res is True
+            expected_out_dir = dest_root / "9_Astro_Sharpening" / "Lua" / "2026" / "10" / "18" / "sessao_fail"
+            assert not expected_out_dir.exists()
 
 

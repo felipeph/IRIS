@@ -21,6 +21,19 @@ from src.modules.timelapse.notifier import send_windows_toast, send_ntfy_notific
 console = Console(legacy_windows=False)
 
 
+def _prune_empty_dirs_upward(target_dir: Path, stop_at: Path):
+    """Remove target_dir e diretórios pais se estiverem vazios, sem ultrapassar stop_at."""
+    curr = target_dir
+    while curr != stop_at and curr.exists() and curr.is_dir():
+        try:
+            if any(curr.iterdir()):
+                break
+            curr.rmdir()
+            curr = curr.parent
+        except Exception:
+            break
+
+
 class AstroStackStage(PipelineStage):
     """Etapa de Empilhamento Lunar: Localiza sessões em 5_Astrofotografia/Lua,
     executa o PlanetarySystemStacker em modo headless para gerar TIFFs 16-bit
@@ -266,6 +279,10 @@ class AstroStackStage(PipelineStage):
             except Exception as e:
                 console.print(f"  [bold red]ERRO ao empilhar sessão {session_rel_dir}: {e}[/bold red]")
                 log_event(f"Falha no empilhamento da sessão {session_rel_dir}: {e}", "error")
+            finally:
+                # Se a pasta de saída ficou vazia (ex: falha do worker, cancelamento ou erro), faz o descarte limpo
+                if session_output_dir.exists() and not any(session_output_dir.iterdir()):
+                    _prune_empty_dirs_upward(session_output_dir, dest_root / "8_Astro_Stack")
 
         total_batch_elapsed = time.time() - batch_t0
         console.print(f"\n[bold green]Concluído! {stacked_count} nova(s) sessão(ões) empilhada(s) ({total_tiffs_generated} TIFFs gerados) em {total_batch_elapsed:.1f}s.[/bold green]")
