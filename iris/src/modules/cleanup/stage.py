@@ -2,6 +2,7 @@ import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 from send2trash import send2trash
 
 from rich.console import Console, Group
@@ -14,6 +15,7 @@ from rich.prompt import Confirm
 from src.core.config import config
 from src.core.pipeline import PipelineStage
 from src.core.project import Project
+from src.core.reporter import ProgressReporter, RichConsoleReporter
 from src.modules.ingestion.strategies.base import compute_file_hash
 
 console = Console()
@@ -135,12 +137,15 @@ class CleanupStage(PipelineStage):
     e protegendo mídias removíveis sem Lixeira (Zero Data Loss).
     """
 
-    def run(self, project: Project, auto_clean: bool = False, **kwargs) -> bool:
-        console.print(f"[yellow]Iniciando {self.name}...[/yellow]")
+    def run(self, project: Project, auto_clean: bool = False, reporter: Optional[ProgressReporter] = None, **kwargs) -> bool:
+        if reporter is None:
+            reporter = kwargs.get("reporter") or RichConsoleReporter(console=console)
+
+        reporter.log(f"Iniciando {self.name}...", level="warning")
         
         source_dir = Path(project.source_path)
         if not source_dir.exists() or not source_dir.is_dir():
-            console.print(f"[red]Erro: Pasta de origem inválida ou inexistente: {source_dir}[/red]")
+            reporter.log(f"Erro: Pasta de origem inválida ou inexistente: {source_dir}", level="error")
             return False
 
         # Verifica no DB local do projeto quais arquivos estão com verified=True
@@ -148,7 +153,7 @@ class CleanupStage(PipelineStage):
         verified_items = [item for item in items if item.status == "copied" and item.verified]
         
         if not verified_items:
-            console.print("[yellow]Nenhum arquivo verificado com sucesso no banco de dados para ser apagado.[/yellow]")
+            reporter.log("Nenhum arquivo verificado com sucesso no banco de dados para ser apagado.", level="warning")
             return True
             
         # Filtra apenas os que ainda existem no SD
@@ -161,12 +166,12 @@ class CleanupStage(PipelineStage):
                 total_bytes_to_delete += orig_path.stat().st_size
                 
         if not items_to_delete:
-            console.print("[yellow]Os arquivos verificados já não se encontram mais no SD.[/yellow]")
+            reporter.log("Os arquivos verificados já não se encontram mais no SD.", level="warning")
             return True
             
         total_files = len(items_to_delete)
         total_gb = total_bytes_to_delete / (1024**3)
-        console.print(f"[cyan]Encontrados {total_files} arquivos marcados como verificados ({total_gb:.2f} GB) e prontos para limpeza no SD.[/cyan]")
+        reporter.log(f"Encontrados {total_files} arquivos marcados como verificados ({total_gb:.2f} GB) e prontos para limpeza no SD.", level="info")
         
         is_auto = auto_clean or getattr(project, "auto_cleanup", False)
         allow_permanent_config = bool(config.get("modules.cleanup.allow_permanent_sd_clean", False))
@@ -188,10 +193,10 @@ class CleanupStage(PipelineStage):
                 ))
                 return True
             elif is_removable and allow_permanent_config:
-                console.print(f"[bold yellow]⚡ Limpeza automática autorizada para mídia removível ({source_dir.drive}) via allow_permanent_sd_clean=True.[/bold yellow]")
+                reporter.log(f"⚡ Limpeza automática autorizada para mídia removível ({source_dir.drive}) via allow_permanent_sd_clean=True.", level="warning")
                 allow_permanent = True
             else:
-                console.print("[bold yellow]⚡ Limpeza automática ativada: enviando arquivos verificados para a Lixeira sem confirmação...[/bold yellow]")
+                reporter.log("⚡ Limpeza automática ativada: enviando arquivos verificados para a Lixeira sem confirmação...", level="warning")
                 allow_permanent = allow_permanent_config
         else:
             # Modo Interativo
@@ -204,13 +209,13 @@ class CleanupStage(PipelineStage):
                     border_style="red",
                     expand=False
                 ))
-                if not Confirm.ask("[bold red]Deseja EXCLUIR PERMANENTEMENTE os arquivos originais verificados do cartão?[/bold red]", default=False):
-                    console.print("[yellow]Operação cancelada pelo usuário. Arquivos originais preservados no cartão.[/yellow]")
+                if not reporter.confirm("[bold red]Deseja EXCLUIR PERMANENTEMENTE os arquivos originais verificados do cartão?[/bold red]", default=False):
+                    reporter.log("Operação cancelada pelo usuário. Arquivos originais preservados no cartão.", level="warning")
                     return True
                 allow_permanent = True
             else:
-                if not Confirm.ask("[bold red]Deseja enviar estes arquivos verificados da origem para a Lixeira?[/bold red]"):
-                    console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
+                if not reporter.confirm("[bold red]Deseja enviar estes arquivos verificados da origem para a Lixeira?[/bold red]"):
+                    reporter.log("Operação cancelada pelo usuário.", level="warning")
                     return True
                 allow_permanent = allow_permanent_config
             

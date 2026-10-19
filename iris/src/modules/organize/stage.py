@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+from typing import Optional
 
 import xxhash
 from rich.console import Console
@@ -15,6 +16,7 @@ from src.core.pipeline import PipelineStage
 from src.core.project import Project, ProjectItem
 from src.core.config import config
 from src.core.ui import ProgressTracker, PipelineUI
+from src.core.reporter import ProgressReporter, RichConsoleReporter
 
 console = Console()
 
@@ -60,7 +62,10 @@ def clean_empty_directories(root_dir: Path):
             pass
 
 class OrganizeStage(PipelineStage):
-    def run(self, project: Project, interactive: bool = True) -> bool:
+    def run(self, project: Project, interactive: bool = True, reporter: Optional[ProgressReporter] = None) -> bool:
+        if reporter is None:
+            reporter = RichConsoleReporter(console=console)
+
         items_to_organize = [
             item for item in project.get_items(status="copied", verified=True) 
             if item.category
@@ -68,9 +73,9 @@ class OrganizeStage(PipelineStage):
 
         if not items_to_organize:
             if project.has_items(status="organized"):
-                console.print("[green]Todos os itens deste projeto já foram organizados fisicamente.[/green]")
+                reporter.log("Todos os itens deste projeto já foram organizados fisicamente.", level="success")
             else:
-                console.print("[yellow]Nenhum arquivo planejado/pronto para organização.[/yellow]")
+                reporter.log("Nenhum arquivo planejado/pronto para organização.", level="warning")
             return True
 
         dest_root = Path(config.get("general.destination_root", "/caminho/para/destino"))
@@ -115,10 +120,10 @@ class OrganizeStage(PipelineStage):
 
         # Confirmação caso modo interativo
         if interactive:
-            console.print("\n[bold yellow]Atenção:[/bold yellow] Os arquivos serão movidos da staging ('1_Entrada') para os destinos definitivos.")
-            confirmed = Confirm.ask("Deseja iniciar a movimentação física dos arquivos?", default=True)
+            reporter.log("Atenção: Os arquivos serão movidos da staging ('1_Entrada') para os destinos definitivos.", level="warning")
+            confirmed = reporter.confirm("Deseja iniciar a movimentação física dos arquivos?", default=True)
             if not confirmed:
-                console.print("[yellow]Operação cancelada pelo usuário.[/yellow]")
+                reporter.log("Operação cancelada pelo usuário.", level="warning")
                 return False
 
         tracker = ProgressTracker(total_bytes, mode="bytes")

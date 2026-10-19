@@ -3,16 +3,25 @@ from datetime import datetime
 from pathlib import Path
 import xxhash
 
+from typing import Optional, Any
 from rich.console import Console
 from rich.live import Live
 
 from src.core.project import Project, ProjectItem
 from src.core.ui import ProgressTracker, PipelineUI
+from src.core.reporter import ProgressReporter, RichConsoleReporter, SilentReporter
 from .base import IngestionStrategy
 
 console = Console()
 
-def copy_and_verify(src_path: Path, dest_path: Path, live: Live, tracker: ProgressTracker, render_args) -> tuple[bool, str]:
+def copy_and_verify(
+    src_path: Path,
+    dest_path: Path,
+    live: Optional[Any] = None,
+    tracker: Optional[Any] = None,
+    render_args: Optional[Any] = None,
+    reporter: Optional[ProgressReporter] = None
+) -> tuple[bool, str]:
     """Copia arquivo calculando hash on-the-fly, sincroniza no disco e verifica."""
     chunk_size = 4 * 1024 * 1024  # 4MB chunk
     hasher_src = xxhash.xxh64()
@@ -27,8 +36,12 @@ def copy_and_verify(src_path: Path, dest_path: Path, live: Live, tracker: Progre
                     break
                 hasher_src.update(chunk)
                 f_dest.write(chunk)
-                tracker.update(len(chunk))
-                live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)", *render_args, "Ingestão: Copiando..."))
+                if tracker:
+                    tracker.update(len(chunk))
+                if live and render_args:
+                    live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)", *render_args, "Ingestão: Copiando..."))
+                if reporter:
+                    reporter.update(len(chunk), current_item=src_path.name, status_msg="Ingestão: Copiando...")
                 
             # Forçar a escrita física
             f_dest.flush()
@@ -38,7 +51,10 @@ def copy_and_verify(src_path: Path, dest_path: Path, live: Live, tracker: Progre
         
         # 2. Ler do destino para validar o hash
         hasher_dest = xxhash.xxh64()
-        live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)", *render_args, "Ingestão: Verificando disco..."))
+        if live and tracker and render_args:
+            live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)", *render_args, "Ingestão: Verificando disco..."))
+        if reporter:
+            reporter.update(0, current_item=dest_path.name, status_msg="Ingestão: Verificando disco...")
         
         with open(dest_path, 'rb') as f_dest:
             while True:
@@ -50,12 +66,17 @@ def copy_and_verify(src_path: Path, dest_path: Path, live: Live, tracker: Progre
         dest_hash = hasher_dest.hexdigest()
         
         if src_hash == dest_hash:
+            if reporter:
+                reporter.update(0, current_item=src_path.name, status_msg="Verificado!")
             return True, src_hash
         else:
             return False, ""
             
     except Exception as e:
-        console.print(f"\n[red]Exceção durante copy_and_verify: {e}[/red]")
+        if reporter:
+            reporter.log(f"Exceção durante copy_and_verify: {e}", level="error")
+        else:
+            console.print(f"\n[red]Exceção durante copy_and_verify: {e}[/red]")
         return False, ""
 
 def _get_copy_and_verify():

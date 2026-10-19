@@ -1,5 +1,7 @@
 # Proposta 10: Desacoplamento da Interface Rich das Estratégias de Negócio
 
+> **Status**: [CONCLUÍDA] Implementada abstração `ProgressReporter` (com `RichConsoleReporter` e `SilentReporter`) em `src/core/reporter.py`, desacoplando `copy_strategy.py`, `organize/stage.py` e `cleanup/stage.py` de dependências diretas de tela e prompts interativos rígidos.
+
 ## Contexto e Localização do Problema
 
 - **Arquivos Afetados**:
