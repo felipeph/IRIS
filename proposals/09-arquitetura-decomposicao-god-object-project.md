@@ -1,5 +1,7 @@
 # Proposta 09: Decomposição do God Object `Project` (1.272 Linhas) e Aplicação do Princípio de Responsabilidade Única (SRP)
 
+> **Status:** [CONCLUÍDA] — A classe `Project` foi decomposta em mixins modulares e coesos (`ProjectBase`, `ProjectItemsMixin`, `ProjectMediaMixin`, `ProjectAstroMixin`) no submódulo `src.core.project_mixins`, reduzindo o acoplamento e preservando 100% da compatibilidade de API e suite de testes.
+
 ## Contexto e Localização do Problema
 
 - **Arquivo**: [`src/core/project.py`](file:///c:/code/IRIS/iris/src/core/project.py)
