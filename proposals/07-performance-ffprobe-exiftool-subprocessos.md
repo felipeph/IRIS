@@ -1,5 +1,9 @@
 # Proposta 07: Consolidação de Subprocessos e Otimização do `ffprobe` na Extração de Metadados
 
+> **Status**: ✅ **Implementada (Abordagem A: Invocação Consolidada Única com Saída JSON)**  
+> **Data de Conclusão**: 19/10/2026  
+> **Branch**: `feat/implement-pending-proposals`
+
 ## Contexto e Localização do Problema
 
 - **Arquivo**: [`src/core/metadata.py`](file:///c:/code/IRIS/iris/src/core/metadata.py)

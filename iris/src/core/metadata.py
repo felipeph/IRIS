@@ -213,48 +213,59 @@ def parse_duration_seconds(val) -> float | None:
     except ValueError:
         return None
 
-def get_video_duration_ffprobe(file_path: Path) -> float | None:
-    """Obtém a duração do vídeo diretamente com ffprobe caso o exiftool não a tenha retornado."""
+def get_video_info_ffprobe(file_path: Path) -> dict:
+    """Extrai dimensões (largura/altura), duração e framerate em uma única execução consolidada do ffprobe."""
     ffprobe_bin = shutil.which("ffprobe")
-    if not ffprobe_bin:
-        return None
-    try:
-        cmd = [
-            ffprobe_bin,
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(file_path.resolve()),
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if proc.returncode == 0 and proc.stdout.strip():
-            return float(proc.stdout.strip())
-    except Exception:
-        pass
-    return None
+    if not ffprobe_bin or not file_path.exists():
+        return {}
 
-def get_video_dimensions_ffprobe(file_path: Path) -> tuple[int | None, int | None]:
-    """Obtém largura e altura do vídeo diretamente com ffprobe caso o exiftool não as tenha retornado."""
-    ffprobe_bin = shutil.which("ffprobe")
-    if not ffprobe_bin:
-        return None, None
     try:
         cmd = [
             ffprobe_bin,
             "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "csv=s=x:p=0",
+            "-show_entries", "stream=width,height,r_frame_rate:format=duration",
+            "-of", "json",
             str(file_path.resolve()),
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if proc.returncode == 0 and proc.stdout.strip():
-            parts = proc.stdout.strip().split("x")
-            if len(parts) >= 2:
-                return int(parts[0]), int(parts[1])
+            data = json.loads(proc.stdout)
+            streams = data.get("streams", [])
+            fmt = data.get("format", {})
+            res: dict = {}
+            if streams:
+                s = streams[0]
+                if s.get("width"):
+                    try:
+                        res["width"] = int(s["width"])
+                    except (ValueError, TypeError):
+                        pass
+                if s.get("height"):
+                    try:
+                        res["height"] = int(s["height"])
+                    except (ValueError, TypeError):
+                        pass
+                if s.get("r_frame_rate"):
+                    res["r_frame_rate"] = s["r_frame_rate"]
+            if "duration" in fmt:
+                try:
+                    res["duration"] = float(fmt["duration"])
+                except (ValueError, TypeError):
+                    pass
+            return res
     except Exception:
         pass
-    return None, None
+    return {}
+
+def get_video_duration_ffprobe(file_path: Path) -> float | None:
+    """Obtém a duração do vídeo diretamente com ffprobe caso o exiftool não a tenha retornado."""
+    return get_video_info_ffprobe(file_path).get("duration")
+
+def get_video_dimensions_ffprobe(file_path: Path) -> tuple[int | None, int | None]:
+    """Obtém largura e altura do vídeo diretamente com ffprobe caso o exiftool não as tenha retornado."""
+    info = get_video_info_ffprobe(file_path)
+    return info.get("width"), info.get("height")
 
 def format_duration(seconds: float | None) -> str:
     if seconds is None or seconds <= 0:
@@ -407,13 +418,6 @@ def extract_metadata_batch(
             except (ValueError, TypeError):
                 height = None
 
-        if (width is None or height is None) and is_video and p.exists():
-            ff_w, ff_h = get_video_dimensions_ffprobe(p)
-            if width is None:
-                width = ff_w
-            if height is None:
-                height = ff_h
-
         res_str = ""
         fps_str = ""
         dur_str = ""
@@ -422,8 +426,24 @@ def extract_metadata_batch(
             # Check video duration / fps
             dur_raw = raw_exif.get("Duration")
             dur_sec = parse_duration_seconds(dur_raw)
-            if (dur_sec is None or dur_sec <= 0) and p.exists():
-                dur_sec = get_video_duration_ffprobe(p)
+            fps_raw = raw_exif.get("VideoFrameRate")
+
+            # Se faltar dimensões ou duração, consulta ffprobe uma única vez
+            if ((width is None or height is None) or (dur_sec is None or dur_sec <= 0)) and p.exists():
+                ff_info = get_video_info_ffprobe(p)
+                if width is None and ff_info.get("width"):
+                    width = ff_info["width"]
+                if height is None and ff_info.get("height"):
+                    height = ff_info["height"]
+                if (dur_sec is None or dur_sec <= 0) and ff_info.get("duration"):
+                    dur_sec = ff_info["duration"]
+                if not fps_raw and ff_info.get("r_frame_rate"):
+                    try:
+                        num, den = map(int, ff_info["r_frame_rate"].split("/"))
+                        if den > 0:
+                            fps_raw = num / den
+                    except Exception:
+                        pass
             
             dur_str = format_duration(dur_sec)
             
