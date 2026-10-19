@@ -1,5 +1,7 @@
 # Proposta 08: Sincronização Transacional e Reconciliação do Duplo Banco de Dados SQLite
 
+> **Status**: [CONCLUÍDA] Implementada transação atômica via SQLite `ATTACH DATABASE` (dual-write atômico em única conexão) e serviço de auto-cura/reconciliação bidirecional (`reconcile_project_with_central` e `reconcile_all_projects_with_central`).
+
 ## Contexto e Localização do Problema
 
 - **Arquivo Principal**: [`src/core/project.py`](file:///c:/code/IRIS/iris/src/core/project.py) (linhas 10-143, 456-570, 708-854 e 890-1269)

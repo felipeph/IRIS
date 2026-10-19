@@ -224,3 +224,66 @@ def test_get_items_filtered_and_by_category(mock_projects_dir):
     assert {it.original_path for it in verified_copied} == {"/t1.jpg", "/v1.mp4"}
 
 
+def test_atomic_dual_write_and_reconciliation(mock_projects_dir):
+    """Testa se a gravação dupla é consistente e se a reconciliação recupera registros faltantes (RFC 08)."""
+    from src.core.project import (
+        list_central_timelapses,
+        list_central_edited_videos,
+        reconcile_project_with_central,
+        reconcile_all_projects_with_central,
+    )
+    
+    p = create_project("test_dual_write", "X:\\src")
+    
+    # Salvar timelapse via Project grava no local e no central
+    tl_record = {
+        "sequence_dir": "2026-10-19_TL",
+        "photo_count": 120,
+        "fps": 24,
+        "output_video_path": "/exports/tl1.mp4",
+        "metadata_json": {"test": 123}
+    }
+    p.save_timelapse(tl_record)
+    
+    # Verifica que está no banco local
+    local_tls = p.get_timelapses()
+    assert len(local_tls) == 1
+    assert local_tls[0]["output_video_path"] == "/exports/tl1.mp4"
+    
+    # Verifica que está no banco central
+    central_tls = list_central_timelapses("test_dual_write")
+    assert len(central_tls) == 1
+    assert central_tls[0]["output_video_path"] == "/exports/tl1.mp4"
+    
+    # Atualiza YouTube
+    p.update_timelapse_youtube("/exports/tl1.mp4", "yt_123", "https://youtu.be/yt_123")
+    assert p.get_timelapses()[0]["youtube_video_id"] == "yt_123"
+    assert list_central_timelapses("test_dual_write")[0]["youtube_video_id"] == "yt_123"
+    
+    # Simula um registro criado apenas no banco local (desincronizado manualmente)
+    with sqlite3.connect(p._project_db_file) as conn:
+        conn.execute("""
+            INSERT INTO timelapses (project_name, sequence_dir, photo_count, fps, output_video_path)
+            VALUES (?, ?, ?, ?, ?)
+        """, ("test_dual_write", "sess2", 200, 30, "/exports/tl2_orphan.mp4"))
+        conn.commit()
+        
+    # No central, deve continuar tendo apenas 1
+    assert len(list_central_timelapses("test_dual_write")) == 1
+    
+    # Executa a reconciliação
+    stats = reconcile_project_with_central("test_dual_write")
+    assert stats["timelapses"] >= 1
+    
+    # Agora o central deve ter 2 timelapses
+    updated_central_tls = list_central_timelapses("test_dual_write")
+    assert len(updated_central_tls) == 2
+    paths = {t["output_video_path"] for t in updated_central_tls}
+    assert "/exports/tl2_orphan.mp4" in paths
+    
+    # Testa reconcile_all_projects_with_central
+    all_stats = reconcile_all_projects_with_central()
+    assert "test_dual_write" in all_stats
+
+
+

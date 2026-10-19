@@ -21,6 +21,19 @@ def get_db_connection(db_path: Path, timeout: float = 30.0) -> sqlite3.Connectio
     conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
+def get_attached_project_connection(project_db_path: Path, central_db_path: Optional[Path] = None, timeout: float = 30.0) -> sqlite3.Connection:
+    """Retorna uma conexão SQLite com o banco do projeto como 'main' e o banco central anexado como 'central' (RFC 08)."""
+    init_central_db()
+    c_path = central_db_path if central_db_path is not None else CENTRAL_DB_PATH
+    conn = get_db_connection(project_db_path, timeout=timeout)
+    if project_db_path.resolve() != c_path.resolve():
+        try:
+            conn.execute("ATTACH DATABASE ? AS central;", (str(c_path.resolve()),))
+        except sqlite3.OperationalError as e:
+            if "already in use" not in str(e).lower() and "already being used" not in str(e).lower():
+                raise
+    return conn
+
 CURRENT_SCHEMA_VERSION = 1
 
 SHARED_TABLES_DDL = [
@@ -368,6 +381,20 @@ class Project:
         """Context manager para agrupar operações em uma transação única no SQLite."""
         return _ProjectTransactionContext(self)
 
+    def _execute_dual_write(self, main_sql: str, main_params: tuple, central_sql: str, central_params: tuple):
+        """Executa gravação atômica simultânea no banco do projeto e no banco central via ATTACH DATABASE (RFC 08)."""
+        self._ensure_db_initialized()
+        with get_attached_project_connection(self._project_db_file, CENTRAL_DB_PATH) as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            try:
+                conn.execute(main_sql, main_params)
+                if self._project_db_file.resolve() != CENTRAL_DB_PATH.resolve():
+                    conn.execute(central_sql, central_params)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
     def _init_project_db(self, force: bool = False):
         if getattr(self, "_db_initialized", False) and not force and self._project_db_file.exists():
             return
@@ -639,8 +666,8 @@ class Project:
         self.save_metadata()
 
     def save_timelapse(self, record: dict):
-        """Salva ou atualiza um timelapse no banco do projeto e sincroniza no banco central."""
-        self._init_project_db()
+        """Salva ou atualiza um timelapse no banco do projeto e sincroniza atomicamente no central via ATTACH (RFC 08)."""
+        self._ensure_db_initialized()
         record_copy = dict(record)
         record_copy["project_name"] = self.name
         
@@ -652,51 +679,49 @@ class Project:
         else:
             meta_json_str = "{}"
         
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO timelapses (
-                    project_name, sequence_dir, output_video_path, photo_count,
-                    fps, frames_per_image, resolution, crop_mode, encoder,
-                    duration_seconds, speedup_factor, youtube_video_id, youtube_url,
-                    youtube_privacy, status, metadata_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(output_video_path) DO UPDATE SET
-                    photo_count=excluded.photo_count,
-                    fps=excluded.fps,
-                    frames_per_image=excluded.frames_per_image,
-                    resolution=excluded.resolution,
-                    crop_mode=excluded.crop_mode,
-                    encoder=excluded.encoder,
-                    duration_seconds=excluded.duration_seconds,
-                    speedup_factor=excluded.speedup_factor,
-                    youtube_video_id=COALESCE(excluded.youtube_video_id, timelapses.youtube_video_id),
-                    youtube_url=COALESCE(excluded.youtube_url, timelapses.youtube_url),
-                    youtube_privacy=COALESCE(excluded.youtube_privacy, timelapses.youtube_privacy),
-                    status=excluded.status,
-                    metadata_json=excluded.metadata_json,
-                    updated_at=CURRENT_TIMESTAMP
-            """, (
-                self.name,
-                record_copy.get("sequence_dir", ""),
-                record_copy.get("output_video_path", ""),
-                record_copy.get("photo_count", 0),
-                record_copy.get("fps", 60),
-                record_copy.get("frames_per_image", 1),
-                record_copy.get("resolution", "3840x2160"),
-                record_copy.get("crop_mode", "bottom"),
-                record_copy.get("encoder", ""),
-                record_copy.get("duration_seconds", 0.0),
-                record_copy.get("speedup_factor", 1),
-                record_copy.get("youtube_video_id", ""),
-                record_copy.get("youtube_url", ""),
-                record_copy.get("youtube_privacy", "unlisted"),
-                record_copy.get("status", "rendered"),
-                meta_json_str
-            ))
-            conn.commit()
-            
-        save_central_timelapse(record_copy)
+        params = (
+            self.name,
+            record_copy.get("sequence_dir", ""),
+            record_copy.get("output_video_path", ""),
+            record_copy.get("photo_count", 0),
+            record_copy.get("fps", 60),
+            record_copy.get("frames_per_image", 1),
+            record_copy.get("resolution", "3840x2160"),
+            record_copy.get("crop_mode", "bottom"),
+            record_copy.get("encoder", ""),
+            record_copy.get("duration_seconds", 0.0),
+            record_copy.get("speedup_factor", 1),
+            record_copy.get("youtube_video_id", ""),
+            record_copy.get("youtube_url", ""),
+            record_copy.get("youtube_privacy", "unlisted"),
+            record_copy.get("status", "rendered"),
+            meta_json_str
+        )
+        sql_main = """
+            INSERT INTO main.timelapses (
+                project_name, sequence_dir, output_video_path, photo_count,
+                fps, frames_per_image, resolution, crop_mode, encoder,
+                duration_seconds, speedup_factor, youtube_video_id, youtube_url,
+                youtube_privacy, status, metadata_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(output_video_path) DO UPDATE SET
+                photo_count=excluded.photo_count,
+                fps=excluded.fps,
+                frames_per_image=excluded.frames_per_image,
+                resolution=excluded.resolution,
+                crop_mode=excluded.crop_mode,
+                encoder=excluded.encoder,
+                duration_seconds=excluded.duration_seconds,
+                speedup_factor=excluded.speedup_factor,
+                youtube_video_id=COALESCE(excluded.youtube_video_id, timelapses.youtube_video_id),
+                youtube_url=COALESCE(excluded.youtube_url, timelapses.youtube_url),
+                youtube_privacy=COALESCE(excluded.youtube_privacy, timelapses.youtube_privacy),
+                status=excluded.status,
+                metadata_json=excluded.metadata_json,
+                updated_at=CURRENT_TIMESTAMP
+        """
+        sql_central = sql_main.replace("main.timelapses", "central.timelapses")
+        self._execute_dual_write(sql_main, params, sql_central, params)
 
     def get_timelapses(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """Recupera todos os timelapses do projeto (opcionalmente filtrando por status)."""
@@ -726,36 +751,34 @@ class Project:
         return results
 
     def update_timelapse_youtube(self, video_path: str, video_id: str, url: str):
-        """Atualiza o link/ID do YouTube do timelapse no banco do projeto e no banco central."""
+        """Atualiza o link/ID do YouTube do timelapse no banco do projeto e no banco central atomicamente (RFC 08)."""
         if not self._project_db_file.exists():
             return
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE timelapses
-                SET youtube_video_id=?, youtube_url=?, status='uploaded', updated_at=CURRENT_TIMESTAMP
-                WHERE output_video_path=?
-            """, (video_id, url, video_path))
-            conn.commit()
-        update_central_timelapse_youtube(video_path, video_id, url)
+        sql_main = """
+            UPDATE main.timelapses
+            SET youtube_video_id=?, youtube_url=?, status='uploaded', updated_at=CURRENT_TIMESTAMP
+            WHERE output_video_path=?
+        """
+        sql_central = sql_main.replace("main.timelapses", "central.timelapses")
+        params = (video_id, url, video_path)
+        self._execute_dual_write(sql_main, params, sql_central, params)
 
     def mark_timelapse_local_deleted(self, video_path: str):
-        """Marca no banco do projeto e banco central que o arquivo local do timelapse foi excluído."""
+        """Marca no banco do projeto e banco central que o arquivo local do timelapse foi excluído atomicamente (RFC 08)."""
         if not self._project_db_file.exists():
             return
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE timelapses
-                SET local_file_deleted=1, updated_at=CURRENT_TIMESTAMP
-                WHERE output_video_path=?
-            """, (video_path,))
-            conn.commit()
-        update_central_timelapse_local_deleted(video_path)
+        sql_main = """
+            UPDATE main.timelapses
+            SET local_file_deleted=1, updated_at=CURRENT_TIMESTAMP
+            WHERE output_video_path=?
+        """
+        sql_central = sql_main.replace("main.timelapses", "central.timelapses")
+        params = (video_path,)
+        self._execute_dual_write(sql_main, params, sql_central, params)
 
     def save_edited_video(self, record: Dict[str, Any]):
-        """Salva ou atualiza um vídeo editado no banco do projeto e no banco central."""
-        self._init_project_db()
+        """Salva ou atualiza um vídeo editado no banco do projeto e no banco central atomicamente (RFC 08)."""
+        self._ensure_db_initialized()
         record_copy = dict(record)
         record_copy["project_name"] = self.name
         
@@ -770,59 +793,57 @@ class Project:
         trim_end = record_copy.get("trim_end_sec", record_copy.get("trim_seconds", 0.0))
         audio_strip = record_copy.get("audio_stripped", not record_copy.get("has_audio", True))
 
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO edited_videos (
-                    project_name, source_video_paths, output_video_path, mode, clip_count,
-                    speed_factor, orig_fps, target_fps, orig_resolution, target_resolution,
-                    trim_start_sec, trim_end_sec, audio_stripped, duration_seconds, encoder,
-                    youtube_video_id, youtube_url, youtube_privacy, status, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(output_video_path) DO UPDATE SET
-                    mode=excluded.mode,
-                    clip_count=excluded.clip_count,
-                    speed_factor=excluded.speed_factor,
-                    orig_fps=excluded.orig_fps,
-                    target_fps=excluded.target_fps,
-                    orig_resolution=excluded.orig_resolution,
-                    target_resolution=excluded.target_resolution,
-                    trim_start_sec=excluded.trim_start_sec,
-                    trim_end_sec=excluded.trim_end_sec,
-                    audio_stripped=excluded.audio_stripped,
-                    duration_seconds=excluded.duration_seconds,
-                    encoder=excluded.encoder,
-                    youtube_video_id=COALESCE(excluded.youtube_video_id, edited_videos.youtube_video_id),
-                    youtube_url=COALESCE(excluded.youtube_url, edited_videos.youtube_url),
-                    youtube_privacy=COALESCE(excluded.youtube_privacy, edited_videos.youtube_privacy),
-                    status=excluded.status,
-                    metadata_json=excluded.metadata_json,
-                    updated_at=CURRENT_TIMESTAMP
-            """, (
-                self.name,
-                src_paths_str,
-                record_copy.get("output_video_path", ""),
-                record_copy.get("mode", "individual"),
-                record_copy.get("clip_count", 1),
-                speed_val,
-                record_copy.get("orig_fps", 30.0),
-                record_copy.get("target_fps", 60.0),
-                record_copy.get("orig_resolution", "1920x1080"),
-                res_val,
-                trim_start,
-                trim_end,
-                1 if audio_strip else 0,
-                record_copy.get("duration_seconds", 0.0),
-                record_copy.get("encoder", ""),
-                record_copy.get("youtube_video_id", ""),
-                record_copy.get("youtube_url", ""),
-                record_copy.get("youtube_privacy", "unlisted"),
-                record_copy.get("status", "rendered"),
-                meta_json_str
-            ))
-            conn.commit()
-            
-        save_central_edited_video(record_copy)
+        params = (
+            self.name,
+            src_paths_str,
+            record_copy.get("output_video_path", ""),
+            record_copy.get("mode", "individual"),
+            record_copy.get("clip_count", 1),
+            speed_val,
+            record_copy.get("orig_fps", 30.0),
+            record_copy.get("target_fps", 60.0),
+            record_copy.get("orig_resolution", "1920x1080"),
+            res_val,
+            trim_start,
+            trim_end,
+            1 if audio_strip else 0,
+            record_copy.get("duration_seconds", 0.0),
+            record_copy.get("encoder", ""),
+            record_copy.get("youtube_video_id", ""),
+            record_copy.get("youtube_url", ""),
+            record_copy.get("youtube_privacy", "unlisted"),
+            record_copy.get("status", "rendered"),
+            meta_json_str
+        )
+        sql_main = """
+            INSERT INTO main.edited_videos (
+                project_name, source_video_paths, output_video_path, mode, clip_count,
+                speed_factor, orig_fps, target_fps, orig_resolution, target_resolution,
+                trim_start_sec, trim_end_sec, audio_stripped, duration_seconds, encoder,
+                youtube_video_id, youtube_url, youtube_privacy, status, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(output_video_path) DO UPDATE SET
+                mode=excluded.mode,
+                clip_count=excluded.clip_count,
+                speed_factor=excluded.speed_factor,
+                orig_fps=excluded.orig_fps,
+                target_fps=excluded.target_fps,
+                orig_resolution=excluded.orig_resolution,
+                target_resolution=excluded.target_resolution,
+                trim_start_sec=excluded.trim_start_sec,
+                trim_end_sec=excluded.trim_end_sec,
+                audio_stripped=excluded.audio_stripped,
+                duration_seconds=excluded.duration_seconds,
+                encoder=excluded.encoder,
+                youtube_video_id=COALESCE(excluded.youtube_video_id, edited_videos.youtube_video_id),
+                youtube_url=COALESCE(excluded.youtube_url, edited_videos.youtube_url),
+                youtube_privacy=COALESCE(excluded.youtube_privacy, edited_videos.youtube_privacy),
+                status=excluded.status,
+                metadata_json=excluded.metadata_json,
+                updated_at=CURRENT_TIMESTAMP
+        """
+        sql_central = sql_main.replace("main.edited_videos", "central.edited_videos")
+        self._execute_dual_write(sql_main, params, sql_central, params)
 
     def get_edited_videos(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """Recupera todos os vídeos editados do projeto (opcionalmente filtrando por status)."""
@@ -863,36 +884,34 @@ class Project:
         return results
 
     def update_edited_video_youtube(self, video_path: str, video_id: str, url: str):
-        """Atualiza o link/ID do YouTube do vídeo editado no banco do projeto e no banco central."""
+        """Atualiza o link/ID do YouTube do vídeo editado no banco do projeto e no central atomicamente (RFC 08)."""
         if not self._project_db_file.exists():
             return
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE edited_videos
-                SET youtube_video_id=?, youtube_url=?, status='uploaded', updated_at=CURRENT_TIMESTAMP
-                WHERE output_video_path=?
-            """, (video_id, url, video_path))
-            conn.commit()
-        update_central_edited_video_youtube(video_path, video_id, url)
+        sql_main = """
+            UPDATE main.edited_videos
+            SET youtube_video_id=?, youtube_url=?, status='uploaded', updated_at=CURRENT_TIMESTAMP
+            WHERE output_video_path=?
+        """
+        sql_central = sql_main.replace("main.edited_videos", "central.edited_videos")
+        params = (video_id, url, video_path)
+        self._execute_dual_write(sql_main, params, sql_central, params)
 
     def mark_edited_video_local_deleted(self, video_path: str):
-        """Marca no banco do projeto e banco central que o arquivo local do vídeo editado foi excluído."""
+        """Marca no banco do projeto e banco central que o arquivo local do vídeo editado foi excluído atomicamente (RFC 08)."""
         if not self._project_db_file.exists():
             return
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE edited_videos
-                SET local_file_deleted=1, updated_at=CURRENT_TIMESTAMP
-                WHERE output_video_path=?
-            """, (video_path,))
-            conn.commit()
-        update_central_edited_video_local_deleted(video_path)
+        sql_main = """
+            UPDATE main.edited_videos
+            SET local_file_deleted=1, updated_at=CURRENT_TIMESTAMP
+            WHERE output_video_path=?
+        """
+        sql_central = sql_main.replace("main.edited_videos", "central.edited_videos")
+        params = (video_path,)
+        self._execute_dual_write(sql_main, params, sql_central, params)
 
     def add_astro_stack(self, record: Dict[str, Any]):
-        """Registra uma sessão de empilhamento lunar no banco do projeto e no banco central."""
-        self._init_project_db()
+        """Registra uma sessão de empilhamento lunar no banco do projeto e no central atomicamente (RFC 08)."""
+        self._ensure_db_initialized()
         record_copy = dict(record)
         record_copy["project_name"] = self.name
         
@@ -911,40 +930,38 @@ class Project:
         meta_val = record_copy.get("metadata_json", {})
         meta_json_str = json.dumps(meta_val) if isinstance(meta_val, dict) else str(meta_val)
 
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO astro_stacks (
-                    project_name, session_dir, raw_count, keep_percents, output_dir,
-                    output_tiff_paths_json, crop_size, shared_gain, status, metadata_json, elapsed_seconds
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(project_name, session_dir) DO UPDATE SET
-                    raw_count=excluded.raw_count,
-                    keep_percents=excluded.keep_percents,
-                    output_dir=excluded.output_dir,
-                    output_tiff_paths_json=excluded.output_tiff_paths_json,
-                    crop_size=excluded.crop_size,
-                    shared_gain=excluded.shared_gain,
-                    status=excluded.status,
-                    metadata_json=excluded.metadata_json,
-                    elapsed_seconds=excluded.elapsed_seconds,
-                    updated_at=CURRENT_TIMESTAMP
-            """, (
-                self.name,
-                record_copy.get("session_dir", ""),
-                record_copy.get("raw_count", 0),
-                keep_percents_str,
-                record_copy.get("output_dir", ""),
-                out_paths_str,
-                record_copy.get("crop_size", 0),
-                record_copy.get("shared_gain", 1.0),
-                record_copy.get("status", "stacked"),
-                meta_json_str,
-                record_copy.get("elapsed_seconds", 0.0)
-            ))
-            conn.commit()
-            
-        save_central_astro_stack(record_copy)
+        params = (
+            self.name,
+            record_copy.get("session_dir", ""),
+            record_copy.get("raw_count", 0),
+            keep_percents_str,
+            record_copy.get("output_dir", ""),
+            out_paths_str,
+            record_copy.get("crop_size", 0),
+            record_copy.get("shared_gain", 1.0),
+            record_copy.get("status", "stacked"),
+            meta_json_str,
+            record_copy.get("elapsed_seconds", 0.0)
+        )
+        sql_main = """
+            INSERT INTO main.astro_stacks (
+                project_name, session_dir, raw_count, keep_percents, output_dir,
+                output_tiff_paths_json, crop_size, shared_gain, status, metadata_json, elapsed_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_name, session_dir) DO UPDATE SET
+                raw_count=excluded.raw_count,
+                keep_percents=excluded.keep_percents,
+                output_dir=excluded.output_dir,
+                output_tiff_paths_json=excluded.output_tiff_paths_json,
+                crop_size=excluded.crop_size,
+                shared_gain=excluded.shared_gain,
+                status=excluded.status,
+                metadata_json=excluded.metadata_json,
+                elapsed_seconds=excluded.elapsed_seconds,
+                updated_at=CURRENT_TIMESTAMP
+        """
+        sql_central = sql_main.replace("main.astro_stacks", "central.astro_stacks")
+        self._execute_dual_write(sql_main, params, sql_central, params)
 
     def get_astro_stacks(self, session_dir: Optional[str] = None) -> List[Dict[str, Any]]:
         """Recupera sessões de empilhamento registradas no projeto."""
@@ -977,41 +994,39 @@ class Project:
         return any(s.get("status") in ("stacked", "done", "success", "completed") for s in stacks)
 
     def add_astro_sharpen(self, record: Dict[str, Any]):
-        """Registra uma imagem aprimorada por wavelets no banco do projeto e no central."""
-        self._init_project_db()
+        """Registra uma imagem aprimorada por wavelets no banco do projeto e no central atomicamente (RFC 08)."""
+        self._ensure_db_initialized()
         record_copy = dict(record)
         record_copy["project_name"] = self.name
         
         meta_val = record_copy.get("metadata_json", {})
         meta_json_str = json.dumps(meta_val) if isinstance(meta_val, dict) else str(meta_val)
 
-        with get_db_connection(self._project_db_file) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO astro_sharpens (
-                    project_name, source_stack_path, preset, output_tiff_path, output_png_path,
-                    status, metadata_json, elapsed_seconds
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(output_tiff_path) DO UPDATE SET
-                    preset=excluded.preset,
-                    output_png_path=excluded.output_png_path,
-                    status=excluded.status,
-                    metadata_json=excluded.metadata_json,
-                    elapsed_seconds=excluded.elapsed_seconds,
-                    updated_at=CURRENT_TIMESTAMP
-            """, (
-                self.name,
-                record_copy.get("source_stack_path", ""),
-                record_copy.get("preset", ""),
-                record_copy.get("output_tiff_path", ""),
-                record_copy.get("output_png_path", ""),
-                record_copy.get("status", "sharpened"),
-                meta_json_str,
-                record_copy.get("elapsed_seconds", 0.0)
-            ))
-            conn.commit()
-            
-        save_central_astro_sharpen(record_copy)
+        params = (
+            self.name,
+            record_copy.get("source_stack_path", ""),
+            record_copy.get("preset", ""),
+            record_copy.get("output_tiff_path", ""),
+            record_copy.get("output_png_path", ""),
+            record_copy.get("status", "sharpened"),
+            meta_json_str,
+            record_copy.get("elapsed_seconds", 0.0)
+        )
+        sql_main = """
+            INSERT INTO main.astro_sharpens (
+                project_name, source_stack_path, preset, output_tiff_path, output_png_path,
+                status, metadata_json, elapsed_seconds
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(output_tiff_path) DO UPDATE SET
+                preset=excluded.preset,
+                output_png_path=excluded.output_png_path,
+                status=excluded.status,
+                metadata_json=excluded.metadata_json,
+                elapsed_seconds=excluded.elapsed_seconds,
+                updated_at=CURRENT_TIMESTAMP
+        """
+        sql_central = sql_main.replace("main.astro_sharpens", "central.astro_sharpens")
+        self._execute_dual_write(sql_main, params, sql_central, params)
 
     def get_astro_sharpens(self, source_stack_path: Optional[str] = None) -> List[Dict[str, Any]]:
         """Recupera imagens com sharpening registradas no projeto."""
@@ -1451,6 +1466,117 @@ def list_central_astro_sharpens(project_name: Optional[str] = None) -> List[Dict
                     pass
             results.append(d)
     return results
+
+
+def reconcile_project_with_central(
+    project_name: str,
+    project_db_file: Optional[Path] = None,
+    central_db_file: Optional[Path] = None,
+) -> Dict[str, int]:
+    """
+    Reconcilia registros entre o banco local do projeto e o banco central (RFC 08).
+    Garante sincronização bidirecional/auto-cura em caso de falhas prévias.
+    Retorna contagem de registros sincronizados por tabela.
+    """
+    if project_db_file is None:
+        project_db_file = PROJECTS_DIR / f"{project_name}.db"
+    if central_db_file is None:
+        central_db_file = CENTRAL_DB_PATH
+
+    if not project_db_file.exists():
+        return {}
+
+    init_central_db()
+    stats = {"timelapses": 0, "edited_videos": 0, "astro_stacks": 0, "astro_sharpens": 0}
+
+    # Se forem o mesmo arquivo físico, nada a reconciliar
+    if project_db_file.resolve() == central_db_file.resolve():
+        return stats
+
+    with get_attached_project_connection(project_db_file, central_db_file) as conn:
+        cursor = conn.cursor()
+        
+        # 1. Timelapses: Copia do local para o central os ausentes ou atualizados
+        cursor.execute("""
+            INSERT OR REPLACE INTO central.timelapses (
+                project_name, sequence_dir, output_video_path, photo_count,
+                fps, frames_per_image, resolution, crop_mode, encoder,
+                duration_seconds, speedup_factor, youtube_video_id, youtube_url,
+                youtube_privacy, status, metadata_json, local_file_deleted, created_at, updated_at
+            )
+            SELECT 
+                project_name, sequence_dir, output_video_path, photo_count,
+                fps, frames_per_image, resolution, crop_mode, encoder,
+                duration_seconds, speedup_factor, youtube_video_id, youtube_url,
+                youtube_privacy, status, metadata_json, local_file_deleted, created_at, updated_at
+            FROM main.timelapses
+        """)
+        stats["timelapses"] = cursor.rowcount
+
+        # 2. Edited videos
+        cursor.execute("""
+            INSERT OR REPLACE INTO central.edited_videos (
+                project_name, source_video_paths, output_video_path, mode,
+                clip_count, speed_factor, orig_fps, target_fps, orig_resolution,
+                target_resolution, trim_start_sec, trim_end_sec, audio_stripped,
+                duration_seconds, encoder, youtube_video_id, youtube_url,
+                youtube_privacy, status, metadata_json, local_file_deleted, created_at, updated_at
+            )
+            SELECT
+                project_name, source_video_paths, output_video_path, mode,
+                clip_count, speed_factor, orig_fps, target_fps, orig_resolution,
+                target_resolution, trim_start_sec, trim_end_sec, audio_stripped,
+                duration_seconds, encoder, youtube_video_id, youtube_url,
+                youtube_privacy, status, metadata_json, local_file_deleted, created_at, updated_at
+            FROM main.edited_videos
+        """)
+        stats["edited_videos"] = cursor.rowcount
+
+        # 3. Astro stacks
+        cursor.execute("""
+            INSERT OR REPLACE INTO central.astro_stacks (
+                project_name, session_dir, raw_count, keep_percents, output_dir,
+                output_tiff_paths_json, crop_size, shared_gain, status, metadata_json, elapsed_seconds, created_at, updated_at
+            )
+            SELECT
+                project_name, session_dir, raw_count, keep_percents, output_dir,
+                output_tiff_paths_json, crop_size, shared_gain, status, metadata_json, elapsed_seconds, created_at, updated_at
+            FROM main.astro_stacks
+        """)
+        stats["astro_stacks"] = cursor.rowcount
+
+        # 4. Astro sharpens
+        cursor.execute("""
+            INSERT OR REPLACE INTO central.astro_sharpens (
+                project_name, source_stack_path, preset, output_tiff_path, output_png_path,
+                status, metadata_json, elapsed_seconds, created_at, updated_at
+            )
+            SELECT
+                project_name, source_stack_path, preset, output_tiff_path, output_png_path,
+                status, metadata_json, elapsed_seconds, created_at, updated_at
+            FROM main.astro_sharpens
+        """)
+        stats["astro_sharpens"] = cursor.rowcount
+
+        conn.commit()
+
+    return stats
+
+
+def reconcile_all_projects_with_central(central_db_file: Optional[Path] = None) -> Dict[str, Dict[str, int]]:
+    """Reconcilia todos os projetos locais existentes com o banco central."""
+    if not PROJECTS_DIR.exists():
+        return {}
+    results = {}
+    for db_path in PROJECTS_DIR.glob("*.db"):
+        if db_path.name == "iris_central.db":
+            continue
+        project_name = db_path.stem
+        results[project_name] = reconcile_project_with_central(
+            project_name, project_db_file=db_path, central_db_file=central_db_file
+        )
+    return results
+
 
 
 
