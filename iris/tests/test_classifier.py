@@ -44,6 +44,28 @@ def test_classify_moon_photo():
     assert items[0].category == "astro_lua"
     assert "5_Astrofotografia" in str(items[0].relative_dest_dir)
 
+def test_classify_sx60_wide_angle_raw_not_astro():
+    # Foto RAW da SX60 tirada em grande angular (21mm) ou zoom moderado não deve ir para astro_lua
+    meta = MediaMetadata(
+        file_path=Path("IMG_0001.CR2"),
+        is_video=False,
+        date_str="2026-09-06",
+        time_str="14-00-00",
+        timestamp=datetime(2026, 9, 6, 14, 0, 0),
+        camera_model="PowerShot SX60 HS",
+        camera_make="Canon",
+        focal_length_equiv=50.0,
+        focal_str="50mm",
+        original_stem="IMG_0001",
+        extension="CR2",
+        is_raw=True,
+    )
+    items = classify_media_batch([meta], class_config={"moon_zoom_threshold_mm": 1000.0})
+    assert len(items) == 1
+    assert items[0].category != "astro_lua"
+    assert "5_Astrofotografia" not in str(items[0].relative_dest_dir)
+
+
 def test_classify_avulsa_photo():
     meta = MediaMetadata(
         file_path=Path("IMG_1234.JPG"),

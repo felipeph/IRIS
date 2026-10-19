@@ -1,5 +1,9 @@
 # Proposta 11: Correção de Heurísticas Rígidas de Modelo de Câmera na Classificação de Astrofotografia
 
+> **Status**: ✅ **Implementada (Abordagem A: Heurística Óptica Estrita por Distância Focal)**  
+> **Data de Conclusão**: 19/10/2026  
+> **Branch**: `feat/implement-pending-proposals`
+
 ## Contexto e Localização do Problema
 
 - **Arquivo**: [`src/core/classifier.py`](file:///c:/code/IRIS/iris/src/core/classifier.py)

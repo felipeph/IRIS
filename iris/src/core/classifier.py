@@ -461,11 +461,11 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
     video_items: list[MediaMetadata] = []
     general_photo_items: list[MediaMetadata] = []
 
-    moon_zoom = class_config.get("moon_zoom_threshold_mm", 1000.0)
+    moon_zoom = float(class_config.get("moon_zoom_threshold_mm", 1000.0))
     for item in sorted_items:
-        # 1. Astrofotografia (Lua RAW teleobjetiva)
+        # 1. Astrofotografia (Lua RAW teleobjetiva extrema)
         is_moon_focal = item.focal_length_equiv is not None and item.focal_length_equiv >= moon_zoom
-        if item.is_raw and (is_moon_focal or "sx60" in item.camera_model.lower() or "sx50" in item.camera_model.lower()):
+        if item.is_raw and is_moon_focal:
             astro_items.append(item)
         # 2. Vídeos
         elif item.is_video:
