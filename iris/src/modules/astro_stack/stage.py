@@ -116,7 +116,7 @@ class AstroStackStage(PipelineStage):
 
         console.print(f"Encontradas [bold green]{len(sessions)}[/bold green] sessão(ões) lunar(es) para análise.")
 
-        keep_percents = astro_config.get("keep_percents", [10, 25, 50])
+        keep_percents = astro_config.get("keep_percents", [50])
         align_box_width = astro_config.get("align_box_width", 64)
         align_search_width = astro_config.get("align_search_width", 20)
         stab_mode = astro_config.get("stab_mode", "Surface")

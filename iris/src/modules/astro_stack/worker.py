@@ -24,7 +24,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import cv2
 import numpy as np
-import tifffile  # type: ignore
+try:
+    import tifffile  # type: ignore
+except ImportError:
+    tifffile = None  # type: ignore
 
 # Adiciona diretório do módulo ao sys.path para importar preprocessor e namer
 MODULE_DIR = Path(__file__).resolve().parent
@@ -44,11 +47,26 @@ from namer import build_stack_filename, build_preview_filename, build_report_fil
 
 
 
+def _init_worker_process():
+    """Configura cada processo worker para usar apenas 1 thread em bibliotecas nativas C/C++ (OpenMP/OpenCV/BLAS),
+    evitando a sobrecarga térmica e saturação caótica dos núcleos da CPU."""
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+    try:
+        import cv2
+        cv2.setNumThreads(1)
+    except Exception:
+        pass
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Worker de empilhamento lunar PSS do IRIS.")
     parser.add_argument("--input-dir", type=Path, required=True, help="Diretório contendo os RAWs/fotos da sessão")
     parser.add_argument("--output-dir", type=Path, required=True, help="Diretório de destino (8_Astro_Stack/...)")
-    parser.add_argument("--keep-percents", type=str, default="10,25,50", help="Lista de percentuais (ex: 10,25,50)")
+    parser.add_argument("--keep-percents", type=str, default="50", help="Lista de percentuais (ex: 50)")
     parser.add_argument("--crop-size", type=int, default=None, help="Tamanho do recorte quadrado (auto por padrão)")
     parser.add_argument("--margin", type=int, default=128, help="Margem total além do diâmetro lunar em pixels")
     parser.add_argument("--align-box-width", "--align_box_width", type=int, default=64, help="Largura da caixa dos pontos de alinhamento")
@@ -164,13 +182,16 @@ def main():
     print(f"STATUS: Dimensão calculada: {crop_size}x{crop_size} (Margem: {args.margin}px). Ganho linear compartilhado: {gain:.4f}", flush=True)
 
     # 2. Leitura, recorte centrado, aplicação de ganho e gravação direta em single-pass
+    # Aplica limitação de concorrência também no processo mestre
+    _init_worker_process()
+
     metadata: List[Any] = [None] * len(files)
     t_start_decode = time.monotonic()
     completed_decode = 0
     valid_count = 0
     skipped_count = 0
 
-    executor = ProcessPoolExecutor(max_workers=max_workers)
+    executor = ProcessPoolExecutor(max_workers=max_workers, initializer=_init_worker_process)
     try:
         futures = {
             executor.submit(
@@ -300,12 +321,15 @@ def main():
         out_filename = build_stack_filename(date_str, time_clean, camera_model, kp)
         final_tiff_path = output_dir / out_filename
 
-        tifffile.imwrite(
-            final_tiff_path,
-            final_mono,
-            photometric="minisblack",
-            description=f"IRIS PSS lunar stack; keep={kp}%; mono uint16; centred",
-        )
+        if tifffile is not None:
+            tifffile.imwrite(
+                final_tiff_path,
+                final_mono,
+                photometric="minisblack",
+                description=f"IRIS PSS lunar stack; keep={kp}%; mono uint16; centred",
+            )
+        else:
+            cv2.imwrite(str(final_tiff_path), final_mono)
         output_tiff_paths[str(kp)] = str(final_tiff_path)
         kp_done_pct = 45.0 + ((kp_idx + 1) / len(keep_percents) * 50.0)
         print(f"PROGRESS_JSON:{json.dumps({'phase': 'kp_done', 'kp': kp, 'filename': final_tiff_path.name, 'crop_size': crop_size, 'gain': gain, 'progress_pct': kp_done_pct, 'completed_stacks': output_tiff_paths, 'msg': f'Stack {kp}% gerado com sucesso'})}", flush=True)

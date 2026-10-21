@@ -523,7 +523,7 @@ def _menu_astro(console: Console):
         stack_enabled = config.get("modules.astro_stack.enabled", True)
         table.add_row("1", "Ativar Empilhamento PSS", "modules.astro_stack.enabled", "Ativado" if stack_enabled else "Desativado")
 
-        kps = config.get("modules.astro_stack.keep_percents", [10, 25, 50])
+        kps = config.get("modules.astro_stack.keep_percents", [50])
         table.add_row("2", "Percentuais de Stack (Keep %)", "modules.astro_stack.keep_percents", str(kps))
 
         box_w = config.get("modules.astro_stack.align_box_width", 64)
@@ -566,9 +566,9 @@ def _menu_astro(console: Console):
             console.print("[green]Salvo![/green]")
             time.sleep(1)
         elif choice == "2":
-            curr = config.get("modules.astro_stack.keep_percents", [10, 25, 50])
+            curr = config.get("modules.astro_stack.keep_percents", [50])
             curr_str = ",".join(str(x) for x in curr) if isinstance(curr, list) else str(curr)
-            new_val = Prompt.ask("Digite os percentuais separados por vírgula (ex: 10,25,50 ou 100)", default=curr_str)
+            new_val = Prompt.ask("Digite os percentuais separados por vírgula (ex: 50 ou 25,50)", default=curr_str)
             try:
                 parsed = [int(p.strip()) for p in new_val.split(",") if p.strip()]
                 if parsed:

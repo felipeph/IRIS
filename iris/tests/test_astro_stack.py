@@ -551,3 +551,56 @@ def test_astro_sharpen_prunes_empty_output_dir_on_failure(tmp_path: Path):
             assert not expected_out_dir.exists()
 
 
+def test_astro_stack_default_keep_percent_is_50(tmp_path: Path):
+    """Garante que o valor padrão de keep_percents seja 50% em runner, stage e worker."""
+    import os
+    import sys
+    from src.modules.astro_stack.worker import parse_args, _init_worker_process
+    from src.modules.astro_stack.runner import AstroStackRunner
+
+    # 1. Verifica fallback do runner quando config não possui valor
+    runner = AstroStackRunner(python_path=Path(sys.executable))
+    with patch("src.modules.astro_stack.runner.config.get", return_value=None):
+        with patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.stdout.readline.return_value = ""
+            mock_proc.poll.return_value = 0
+            mock_proc.wait.return_value = 0
+            mock_popen.return_value = mock_proc
+
+            runner.run_session(
+                input_dir=tmp_path / "in",
+                output_dir=tmp_path / "out",
+                keep_percents=None,
+            )
+            # Verifica argumentos passados ao worker
+            cmd = mock_popen.call_args[0][0]
+            assert "--keep-percents" in cmd
+            idx = cmd.index("--keep-percents")
+            assert cmd[idx + 1] == "50"
+
+            # Verifica variáveis de ambiente de 1 thread injetadas no env do subprocesso
+            env = mock_popen.call_args[1]["env"]
+            assert env.get("OMP_NUM_THREADS") == "1"
+            assert env.get("OPENBLAS_NUM_THREADS") == "1"
+            assert env.get("MKL_NUM_THREADS") == "1"
+
+    # 2. Verifica default do ArgumentParser do worker
+    with patch("sys.argv", ["worker.py", "--input-dir", str(tmp_path), "--output-dir", str(tmp_path)]):
+        args = parse_args()
+        assert args.keep_percents == "50"
+
+
+def test_worker_process_concurrency_initialization():
+    """Valida que _init_worker_process configura corretamente as threads nativas em 1."""
+    import os
+    from src.modules.astro_stack.worker import _init_worker_process
+
+    _init_worker_process()
+    assert os.environ.get("OMP_NUM_THREADS") == "1"
+    assert os.environ.get("OPENBLAS_NUM_THREADS") == "1"
+    assert os.environ.get("MKL_NUM_THREADS") == "1"
+    assert os.environ.get("NUMEXPR_NUM_THREADS") == "1"
+
+
+

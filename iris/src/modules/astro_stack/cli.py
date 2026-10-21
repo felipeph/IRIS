@@ -41,7 +41,7 @@ def run_cli():
     )
     parser.add_argument("input_dir", type=Path, help="Pasta contendo as fotos/RAWs da Lua")
     parser.add_argument("--output-dir", type=Path, default=None, help="Pasta de destino para os stacks TIFF")
-    parser.add_argument("--percents", type=str, default="10,25,50", help="Percentuais de frames por AP (ex: 10,25,50)")
+    parser.add_argument("--percents", type=str, default="50", help="Percentuais de frames por AP (ex: 50)")
     parser.add_argument("--crop-size", type=int, default=None, help="Tamanho do recorte centrado (auto por padrão)")
     parser.add_argument("--margin", type=int, default=128, help="Margem além do diâmetro lunar em pixels")
     parser.add_argument("--align-box-width", type=int, default=64, help="Largura da caixa de alinhamento")

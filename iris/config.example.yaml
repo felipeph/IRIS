@@ -45,7 +45,7 @@ classification:
 modules:
   astro_stack:
     enabled: true
-    keep_percents: [10, 25, 50]       # Percentuais de frames por ponto de alinhamento
+    keep_percents: [50]               # Percentuais de frames por ponto de alinhamento
     margin_pixels: 128                # Margem além do diâmetro lunar em pixels
     align_box_width: 64               # Caixa de ponto de alinhamento (pixels)
     align_search_width: 20            # Raio de busca do alinhamento (pixels)

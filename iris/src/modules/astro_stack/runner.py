@@ -113,8 +113,8 @@ class AstroStackRunner:
             )
 
         if keep_percents is None:
-            raw_kp = config.get("modules.astro_stack.keep_percents", [10, 25, 50])
-            keep_percents = list(raw_kp) if isinstance(raw_kp, (list, tuple)) else [10, 25, 50]
+            raw_kp = config.get("modules.astro_stack.keep_percents", [50])
+            keep_percents = list(raw_kp) if isinstance(raw_kp, (list, tuple)) else [50]
 
         kp_str = ",".join(str(p) for p in keep_percents)
         vendor_dir = MODULE_DIR.parents[2] / "vendor" / "PlanetarySystemStacker"
@@ -147,6 +147,10 @@ class AstroStackRunner:
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUNBUFFERED"] = "1"
+        env["OMP_NUM_THREADS"] = "1"
+        env["OPENBLAS_NUM_THREADS"] = "1"
+        env["MKL_NUM_THREADS"] = "1"
+        env["NUMEXPR_NUM_THREADS"] = "1"
 
         proc = subprocess.Popen(
             cmd,
