@@ -84,6 +84,14 @@ class ProjectBase:
         self._tx_local = threading.local()
 
     @property
+    def project_dir(self) -> Path:
+        """Diretório de trabalho e artefatos dedicados a este projeto."""
+        import src.core.project as p_mod
+        d = p_mod.PROJECTS_DIR / self.name
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    @property
     def _project_db_file(self) -> Path:
         import src.core.project as p_mod
         return p_mod.PROJECTS_DIR / f"{self.name}.db"

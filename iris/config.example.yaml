@@ -60,9 +60,14 @@ modules:
     enable_clahe: true                # Realce adaptativo de contraste local 16-bit
     use_limb_guard: true              # Proteção anti-halo/ringing no limbo lunar
     windows_toast: true
-    ntfy_topic: "iris-alerts"
-  bird_detect:
+  bird_id:
     enabled: true
+    yolo_model: "yolov8s.pt"
+    yolo_confidence: 0.25
+    min_species_confidence: 0.60          # Abaixo deste limiar marca needs_review=True
+    zoom_threshold_mm: 300.0             # Distância focal equivalente mínima para filtrar teleobjetivas
+    video_sample_interval_seconds: 2.0   # Passo temporal para amostragem em vídeos
+    save_crops: true                     # Salva recortes de alta resolução na pasta do projeto
   cleanup:
     auto_clean: true
     allow_permanent_sd_clean: false   # Permite exclusão permanente no SD se Lixeira não for suportada (default: false - Zero Data Loss)
@@ -151,6 +156,10 @@ pipeline:
     id: organize
     module: src.modules.organize.stage
     name: Organização Física (SSD)
+  - enabled: true
+    id: bird_id
+    module: src.modules.bird_id.stage
+    name: Identificação de Aves (YOLO + BioCLIP)
   - enabled: true
     id: astro_stack
     module: src.modules.astro_stack.stage

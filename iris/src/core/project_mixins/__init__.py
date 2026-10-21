@@ -6,6 +6,7 @@ from .base import ProjectBase, _ProjectTransactionContext
 from .items import ProjectItemsMixin
 from .media import ProjectMediaMixin
 from .astro import ProjectAstroMixin
+from .birds import ProjectBirdsMixin
 
 __all__ = [
     "ProjectBase",
@@ -13,4 +14,6 @@ __all__ = [
     "ProjectItemsMixin",
     "ProjectMediaMixin",
     "ProjectAstroMixin",
+    "ProjectBirdsMixin",
 ]
+

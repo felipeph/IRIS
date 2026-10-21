@@ -1,0 +1,11 @@
+# Dependências para o Módulo de Identificação de Espécies de Aves (IRIS Bird ID)
+# Ultralytics YOLOv8 para detecção e recorte central de aves
+ultralytics>=8.3.0
+
+# OpenCLIP / BioCLIP para classificação taxonômica fine-grained
+open-clip-torch>=2.24.0
+
+# Manipulação de imagens e EXIF
+pillow>=10.0.0
+piexif>=1.1.3
+pandas>=2.0.0

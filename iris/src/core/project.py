@@ -114,8 +114,30 @@ SHARED_TABLES_DDL = [
         elapsed_seconds REAL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS bird_identifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name TEXT,
+        item_path TEXT,
+        is_video INTEGER DEFAULT 0,
+        species_common TEXT,
+        species_scientific TEXT,
+        confidence REAL,
+        top2_common TEXT,
+        top2_scientific TEXT,
+        top2_confidence REAL,
+        top3_common TEXT,
+        top3_scientific TEXT,
+        top3_confidence REAL,
+        needs_review INTEGER DEFAULT 0,
+        crop_saved_path TEXT,
+        metadata_json TEXT DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(project_name, item_path)
     )"""
 ]
+
 
 def init_central_db(force: bool = False):
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -284,11 +306,13 @@ from src.core.project_mixins import (
     ProjectItemsMixin,
     ProjectMediaMixin,
     ProjectAstroMixin,
+    ProjectBirdsMixin,
 )
 
-class Project(ProjectBase, ProjectItemsMixin, ProjectMediaMixin, ProjectAstroMixin):
+class Project(ProjectBase, ProjectItemsMixin, ProjectMediaMixin, ProjectAstroMixin, ProjectBirdsMixin):
     """Gerencia o estado de um projeto de ingestão e processamento (RFC 09 decomposto em mixins modulares)."""
     pass
+
 
 
 def get_project(name: str) -> Optional[Project]:
@@ -796,9 +820,27 @@ def reconcile_project_with_central(
         """)
         stats["astro_sharpens"] = cursor.rowcount
 
+        # 5. Bird identifications
+        cursor.execute("""
+            INSERT OR REPLACE INTO central.bird_identifications (
+                project_name, item_path, is_video, species_common, species_scientific,
+                confidence, top2_common, top2_scientific, top2_confidence,
+                top3_common, top3_scientific, top3_confidence, needs_review,
+                crop_saved_path, metadata_json, created_at, updated_at
+            )
+            SELECT
+                project_name, item_path, is_video, species_common, species_scientific,
+                confidence, top2_common, top2_scientific, top2_confidence,
+                top3_common, top3_scientific, top3_confidence, needs_review,
+                crop_saved_path, metadata_json, created_at, updated_at
+            FROM main.bird_identifications
+        """)
+        stats["bird_identifications"] = cursor.rowcount
+
         conn.commit()
 
     return stats
+
 
 
 def reconcile_all_projects_with_central(central_db_file: Optional[Path] = None) -> Dict[str, Dict[str, int]]:

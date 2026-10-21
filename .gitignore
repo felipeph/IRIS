@@ -63,3 +63,13 @@ iris/experiments/
 
 # MkDocs
 site/
+
+# Modelos de IA e pesos pesados
+*.pt
+*.pth
+*.onnx
+
+# Dados temporários de benchmark e fontes
+sources/
+benchmark_*.csv
+iris/benchmark_*.csv
