@@ -13,41 +13,63 @@ MODULE_DIR = Path(__file__).resolve().parent
 WORKER_SCRIPT = MODULE_DIR / "worker.py"
 
 
+def _resolve_python_exe(candidate: Optional[Any]) -> Optional[Path]:
+    """Resolve o executável Python a partir de um caminho (arquivo direto ou pasta de venv)."""
+    if candidate is None:
+        return None
+    val_str = str(candidate).strip()
+    if not val_str or val_str.lower() == "auto":
+        return None
+    p = Path(val_str)
+    if p.is_file():
+        return p
+    if p.is_dir():
+        exe = p / "Scripts" / "python.exe" if sys.platform == "win32" else p / "bin" / "python"
+        if exe.exists():
+            return exe
+    return None
+
+
 def find_astro_python() -> Optional[Path]:
     r"""Descobre o executável Python do ambiente virtual com as dependências do astro.
     
     Ordem de busca:
-    1. modules.astro_stack.python_path no config.yaml
-    2. modules.astro_stack.venv_path no config.yaml
-    3. iris/.venv_astro/Scripts/python.exe
-    4. ~/.iris/astro_venv/Scripts/python.exe
-    5. C:\code\FOTOGRAFIA\pipp-core-test\pss\.venv\Scripts\python.exe
-    6. sys.executable (se possuir tifffile e PyQt5)
+    1. IRIS_ASTRO_PYTHON (variável de ambiente)
+    2. modules.astro_stack.python_path no config.yaml
+    3. modules.astro_stack.venv_path no config.yaml (arquivo ou pasta)
+    4. iris/.venv_astro/Scripts/python.exe
+    5. .venv_astro/Scripts/python.exe (raiz)
+    6. iris/.venv/Scripts/python.exe
+    7. .venv/Scripts/python.exe (raiz)
+    8. ~/.iris/astro_venv/Scripts/python.exe
+    9. C:\code\FOTOGRAFIA\pipp-core-test\pss\.venv\Scripts\python.exe
+    10. sys.executable (se possuir tifffile e PyQt5)
     """
-    env_py = os.getenv("IRIS_ASTRO_PYTHON")
-    if env_py and Path(env_py).exists():
-        return Path(env_py)
+    env_py = _resolve_python_exe(os.getenv("IRIS_ASTRO_PYTHON"))
+    if env_py:
+        return env_py
 
-    configured_py = config.get("modules.astro_stack.python_path")
-    if isinstance(configured_py, (str, Path)) and Path(configured_py).exists():
-        return Path(configured_py)
+    configured_py = _resolve_python_exe(config.get("modules.astro_stack.python_path"))
+    if configured_py:
+        return configured_py
 
-    configured_venv = config.get("modules.astro_stack.venv_path")
-    if isinstance(configured_venv, (str, Path)) and str(configured_venv) != "auto":
-        p = Path(configured_venv)
-        exe = p / "Scripts" / "python.exe" if sys.platform == "win32" else p / "bin" / "python"
-        if exe.exists():
-            return exe
+    configured_venv = _resolve_python_exe(config.get("modules.astro_stack.venv_path"))
+    if configured_venv:
+        return configured_venv
 
     candidates = [
-        MODULE_DIR.parents[2] / ".venv_astro" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"),
-        MODULE_DIR.parents[3] / ".venv_astro" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"),
-        Path.home() / ".iris" / "astro_venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python"),
+        MODULE_DIR.parents[2] / ".venv_astro",
+        MODULE_DIR.parents[3] / ".venv_astro",
+        MODULE_DIR.parents[2] / ".venv",
+        MODULE_DIR.parents[3] / ".venv",
+        Path.home() / ".iris" / "astro_venv",
+        Path("C:/code/FOTOGRAFIA/pipp-core-test/pss/.venv"),
     ]
 
     for cand in candidates:
-        if cand.exists():
-            return cand
+        exe = _resolve_python_exe(cand)
+        if exe:
+            return exe
 
     # Testa se o Python atual tem as dependências mínimas
     try:

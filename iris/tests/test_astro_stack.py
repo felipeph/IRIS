@@ -192,11 +192,69 @@ def test_process_and_save_frame_edge_skipped(tmp_path: Path):
 # Testes de Descoberta de Ambiente Astro
 # ==============================================================================
 
-def test_find_astro_python():
+def test_find_astro_python_real_environment():
+    """Garante que find_astro_python localiza um interpretador funcional no ambiente local."""
     py_path = find_astro_python()
-    if py_path:
-        assert isinstance(py_path, Path)
-        assert py_path.name.lower().startswith("python")
+    assert py_path is not None, "find_astro_python() deve encontrar o ambiente .venv_astro ou candidato válido"
+    assert isinstance(py_path, Path)
+    assert py_path.name.lower().startswith("python")
+    assert py_path.exists()
+    runner = AstroStackRunner(py_path)
+    assert runner.is_available() is True
+
+
+def test_resolve_python_exe(tmp_path: Path):
+    """Testa a resolução de executáveis a partir de arquivos diretos ou diretórios de venv."""
+    import sys
+    from src.modules.astro_stack.runner import _resolve_python_exe
+
+    # 1. Entrada nula ou auto
+    assert _resolve_python_exe(None) is None
+    assert _resolve_python_exe("auto") is None
+    assert _resolve_python_exe("   ") is None
+
+    # 2. Arquivo direto
+    dummy_exe = tmp_path / "custom_python.exe"
+    dummy_exe.touch()
+    assert _resolve_python_exe(dummy_exe) == dummy_exe
+    assert _resolve_python_exe(str(dummy_exe)) == dummy_exe
+
+    # 3. Diretório de venv
+    scripts_dir = tmp_path / "fake_venv" / ("Scripts" if sys.platform == "win32" else "bin")
+    scripts_dir.mkdir(parents=True)
+    venv_exe = scripts_dir / ("python.exe" if sys.platform == "win32" else "python")
+    venv_exe.touch()
+
+    assert _resolve_python_exe(tmp_path / "fake_venv") == venv_exe
+
+
+def test_find_astro_python_configured_priorities(tmp_path: Path):
+    """Testa que caminhos configurados via python_path, venv_path ou IRIS_ASTRO_PYTHON têm precedência."""
+    import sys
+    from src.modules.astro_stack.runner import find_astro_python
+
+    dummy_py = tmp_path / "priority_python.exe"
+    dummy_py.touch()
+
+    # Prioridade 1: IRIS_ASTRO_PYTHON
+    with patch.dict("os.environ", {"IRIS_ASTRO_PYTHON": str(dummy_py)}):
+        assert find_astro_python() == dummy_py
+
+    # Prioridade 2: modules.astro_stack.python_path
+    with patch.dict("os.environ", {"IRIS_ASTRO_PYTHON": ""}):
+        with patch("src.modules.astro_stack.runner.config.get", side_effect=lambda k, default=None: str(dummy_py) if k == "modules.astro_stack.python_path" else default):
+            assert find_astro_python() == dummy_py
+
+    # Prioridade 3: modules.astro_stack.venv_path apontando para arquivo ou pasta
+    fake_venv = tmp_path / "custom_venv"
+    scripts = fake_venv / ("Scripts" if sys.platform == "win32" else "bin")
+    scripts.mkdir(parents=True)
+    venv_py = scripts / ("python.exe" if sys.platform == "win32" else "python")
+    venv_py.touch()
+
+    with patch.dict("os.environ", {"IRIS_ASTRO_PYTHON": ""}):
+        with patch("src.modules.astro_stack.runner.config.get", side_effect=lambda k, default=None: str(fake_venv) if k == "modules.astro_stack.venv_path" else default):
+            assert find_astro_python() == venv_py
 
 
 # ==============================================================================
