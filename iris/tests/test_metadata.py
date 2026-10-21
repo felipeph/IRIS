@@ -76,3 +76,80 @@ def test_extract_metadata_batch_consolidated_ffprobe(tmp_path):
         assert meta.resolution_str == "1080p"
         # Deve ter invocado o ffprobe apenas 1 vez para o arquivo
         assert mock_ff.call_count == 1
+
+def test_format_focal_standard_35mm():
+    from src.core.metadata import format_focal
+    val, s = format_focal("50mm", "32mm")
+    assert val == 50.0
+    assert s == "50mm"
+
+def test_format_focal_35efl_composite():
+    from src.core.metadata import format_focal
+    # Caso típico Canon SX60 HS onde FocalLengthIn35mmFormat é None, mas ExifTool fornece FocalLength35efl
+    val, s = format_focal(None, "247.0 mm", focal_35efl=1385.84, scale_factor=5.61)
+    assert val == 1385.84
+    assert s == "1386mm"
+
+def test_format_focal_scale_factor_fallback():
+    from src.core.metadata import format_focal
+    # Caso onde só há focal real e scale factor
+    val, s = format_focal(None, "247.0 mm", focal_35efl=None, scale_factor=5.6107)
+    assert round(val, 1) == 1385.8
+    assert s == "1386mm"
+
+def test_format_focal_real_only_fallback():
+    from src.core.metadata import format_focal
+    # Caso sem crop factor nem 35mm
+    val, s = format_focal(None, "247.0 mm", focal_35efl=None, scale_factor=None)
+    assert val == 247.0
+    assert s == "247mm"
+
+def test_format_focal_none():
+    from src.core.metadata import format_focal
+    val, s = format_focal(None, None)
+    assert val == 0.0
+    assert s == "0mm"
+
+def test_extract_metadata_batch_canon_sx60_raw(tmp_path):
+    dummy_cr2 = tmp_path / "IMG_4197.CR2"
+    dummy_cr2.write_bytes(b"dummy_cr2")
+
+    fake_exif = [
+        {
+            "SourceFile": str(dummy_cr2.resolve()),
+            "DateTimeOriginal": "2026:10:18 20:41:09",
+            "Make": "Canon",
+            "Model": "Canon PowerShot SX60 HS",
+            "FocalLength": "247.0 mm",
+            "FocalLength35efl": 1385.84,
+            "ScaleFactor35efl": 5.61,
+            "FNumber": 6.5,
+            "ExposureTime": "1/200",
+            "ISO": 200,
+            "ImageWidth": 2048,
+            "ImageHeight": 1536
+        }
+    ]
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = json.dumps(fake_exif)
+
+    with patch("src.core.metadata.shutil.which", return_value="exiftool"), \
+         patch("subprocess.run", return_value=mock_proc) as mock_run:
+        results = extract_metadata_batch([dummy_cr2])
+        assert len(results) == 1
+        meta = results[0]
+        assert meta.is_raw is True
+        assert meta.camera_make == "Canon"
+        assert meta.camera_model == "PowerShot-SX60-HS"
+        assert meta.focal_length_equiv == 1385.84
+        assert meta.focal_str == "1386mm"
+        assert meta.shutter_str == "1-200s"
+        assert meta.aperture_str == "f6-5"
+        assert meta.iso_str == "ISO200"
+
+        # Garante que as flags 35efl# e ScaleFactor35efl# foram passadas no comando
+        cmd = mock_run.call_args[0][0]
+        assert "-FocalLength35efl#" in cmd
+        assert "-ScaleFactor35efl#" in cmd

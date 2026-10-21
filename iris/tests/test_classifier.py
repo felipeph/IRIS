@@ -65,6 +65,41 @@ def test_classify_sx60_wide_angle_raw_not_astro():
     assert items[0].category != "astro_lua"
     assert "5_Astrofotografia" not in str(items[0].relative_dest_dir)
 
+def test_classify_canon_sx60_moon_raw_burst_as_astro_not_timelapse():
+    # 300 fotos RAW da Lua disparadas em sequência rápida com SX60 no zoom máximo (1386mm equiv)
+    base_time = datetime(2026, 10, 18, 20, 41, 9)
+    photos = []
+    for i in range(300):
+        dt = base_time + timedelta(seconds=i * 2)
+        photos.append(MediaMetadata(
+            file_path=Path(f"IMG_{4197 + i}.CR2"),
+            is_video=False,
+            date_str="2026-10-18",
+            time_str=dt.strftime("%H-%M-%S"),
+            timestamp=dt,
+            camera_model="PowerShot-SX60-HS",
+            camera_make="Canon",
+            focal_length_equiv=1385.84,  # Calculado via FocalLength35efl do ExifTool
+            focal_str="1386mm",
+            original_stem=f"IMG_{4197 + i}",
+            extension="CR2",
+            is_raw=True,
+        ))
+
+    class_config = {
+        "moon_zoom_threshold_mm": 1000.0,
+        "timelapse_min_photos": 200,
+        "timelapse_max_interval_seconds": 60.0,
+    }
+
+    items = classify_media_batch(photos, class_config=class_config)
+    assert len(items) == 300
+    # Todas devem ser classificadas como astro_lua, NENHUMA como timelapse
+    assert all(it.category == "astro_lua" for it in items)
+    assert not any(it.category == "timelapse" for it in items)
+    assert all("5_Astrofotografia" in str(it.relative_dest_dir) for it in items)
+    assert all("sessao_20-41-09" in str(it.relative_dest_dir) for it in items)
+
 
 def test_classify_avulsa_photo():
     meta = MediaMetadata(

@@ -171,8 +171,30 @@ def format_aperture(fnumber) -> str:
     except (ValueError, TypeError):
         return f"f{fnumber}".replace(".", "-")
 
-def format_focal(focal_35mm, focal_real) -> tuple[float, str]:
-    target = focal_35mm if focal_35mm else focal_real
+def format_focal(focal_35mm, focal_real, focal_35efl=None, scale_factor=None) -> tuple[float, str]:
+    """
+    Retorna a distância focal equivalente em 35mm (float) e sua representação textual (e.g. '1386mm').
+    
+    Ordem de prioridade para equivalência 35mm:
+    1. FocalLengthIn35mmFormat (tag EXIF padrão 0xA405)
+    2. FocalLength35efl (tag composta calculada pelo ExifTool com crop factor de sensor)
+    3. focal_real * scale_factor (cálculo explícito caso tags venham separadas)
+    4. focal_real (fallback quando não há informação de crop/equivalência)
+    """
+    target = None
+    if focal_35mm is not None:
+        target = focal_35mm
+    elif focal_35efl is not None:
+        target = focal_35efl
+    elif scale_factor is not None and focal_real is not None:
+        try:
+            clean_focal = float(re.sub(r"[^\d.]", "", str(focal_real)))
+            target = clean_focal * float(scale_factor)
+        except (ValueError, TypeError):
+            target = focal_real
+    else:
+        target = focal_real
+
     if target is None:
         return 0.0, "0mm"
     try:
@@ -318,6 +340,8 @@ def extract_metadata_batch(
                     "-Model",
                     "-Make",
                     "-FocalLengthIn35mmFormat",
+                    "-FocalLength35efl#",
+                    "-ScaleFactor35efl#",
                     "-FocalLength",
                     "-FNumber",
                     "-ExposureTime",
@@ -389,7 +413,9 @@ def extract_metadata_batch(
         # Focal
         focal_val, focal_str = format_focal(
             raw_exif.get("FocalLengthIn35mmFormat"),
-            raw_exif.get("FocalLength")
+            raw_exif.get("FocalLength"),
+            raw_exif.get("FocalLength35efl"),
+            raw_exif.get("ScaleFactor35efl")
         )
 
         # Aperture
