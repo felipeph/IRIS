@@ -148,9 +148,10 @@ def apply_bird_organization(
 
     common_pt = record.get("species_common", "")
     sci = record.get("species_scientific", "")
-    common_en = record.get("species_common_en", "")
-    family = record.get("family", "")
-    order = record.get("order", "")
+    meta_dict = record.get("metadata_json", {}) if isinstance(record.get("metadata_json"), dict) else {}
+    common_en = record.get("species_common_en", "") or meta_dict.get("species_common_en", "") or meta_dict.get("common_en", "")
+    family = record.get("family", "") or meta_dict.get("family", "")
+    order = record.get("order", "") or meta_dict.get("order", "")
 
     # 1. Determina nome de arquivo
     if rename_files and (common_pt or sci):
@@ -194,5 +195,9 @@ def apply_bird_organization(
 
     with project.transaction():
         project.save_item(item)
+        if hasattr(project, "update_bird_identification_path"):
+            project.update_bird_identification_path(str(current_path.resolve()), str(target_path.resolve()))
+            if str(current_path) != str(current_path.resolve()):
+                project.update_bird_identification_path(str(current_path), str(target_path.resolve()))
 
     return target_path

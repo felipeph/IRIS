@@ -1,18 +1,26 @@
 """
 Módulo de Identificação Taxonômica de Aves do IRIS (IRIS Bird ID).
-Combina YOLOv8 para detecção de presença e recorte inteligente com BioCLIP para classificação fine-grained.
+Arquitetura modular em 3 etapas atômicas:
+1. BirdDetectStage: Detecção de presença via YOLOv8 e extração de recortes.
+2. BirdClassifyStage: Identificação taxonômica via iNaturalist API / BioCLIP e persistência no SQLite/CSV.
+3. BirdOrganizeStage: Organização física em subpastas por espécie, renomeação e tags EXIF.
 """
 
 from .detector import BirdDetector
 from .classifier import BirdClassifier
 from .inaturalist_client import INaturalistClient
+from .detect_stage import BirdDetectStage
+from .classify_stage import BirdClassifyStage
+from .organize_stage import BirdOrganizeStage
 from .stage import BirdIdStage, get_stage
 
 __all__ = [
     "BirdDetector",
     "BirdClassifier",
     "INaturalistClient",
+    "BirdDetectStage",
+    "BirdClassifyStage",
+    "BirdOrganizeStage",
     "BirdIdStage",
     "get_stage",
 ]
-

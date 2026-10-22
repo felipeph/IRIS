@@ -847,7 +847,7 @@ def _menu_bird_id(console: Console):
         table.add_row("7", "Alvo de Frames Amostrados em Vídeo", "modules.bird_id.video_target_frames", str(tf_val))
         
         max_crops = config.get("modules.bird_id.video_max_crops", 5)
-        table.add_row("8", "Crops de Vídeo Enviados para Votação", "modules.bird_id.video_max_crops", str(max_crops))
+        table.add_row("8", "Recortes Extraídos por Vídeo", "modules.bird_id.video_max_crops", str(max_crops))
         
         crops_val = config.get("modules.bird_id.video_min_confident_crops", 2)
         table.add_row("9", "Mínimo de Recortes para Validar Vídeo", "modules.bird_id.video_min_confident_crops", str(crops_val))
@@ -864,8 +864,8 @@ def _menu_bird_id(console: Console):
         zoom_val = config.get("modules.bird_id.zoom_threshold_mm", 300.0)
         table.add_row("13", "Limiar de Zoom Teleobjetiva (mm)", "modules.bird_id.zoom_threshold_mm", f"{float(zoom_val):.0f}mm")
         
-        crops_disk = config.get("modules.bird_id.save_crops", True)
-        table.add_row("14", "Salvar Recortes em Disco (recortes_aves/)", "modules.bird_id.save_crops", "[green]Sim[/green]" if crops_disk else "[red]Não[/red]")
+        crops_folder = config.get("modules.bird_id.iris_crops_folder", "10_Aves/Recortes")
+        table.add_row("14", "Pasta de Recortes no IRIS", "modules.bird_id.iris_crops_folder", f"[cyan]{crops_folder}[/cyan]")
         
         yolo_mod = config.get("modules.bird_id.yolo_model", "yolov8s.pt")
         table.add_row("15", "Modelo Detector YOLOv8", "modules.bird_id.yolo_model", str(yolo_mod))
@@ -943,7 +943,7 @@ def _menu_bird_id(console: Console):
             time.sleep(1)
         elif choice == "8":
             curr = config.get("modules.bird_id.video_max_crops", 5)
-            new_val = Prompt.ask("Quantidade de melhores recortes de vídeo enviados à API para votação (1 a 15)", default=str(curr))
+            new_val = Prompt.ask("Quantidade de melhores recortes extraídos de cada vídeo (1 a 15)", default=str(curr))
             try:
                 mc_crops = int(new_val)
                 if 1 <= mc_crops <= 15:
@@ -1020,10 +1020,11 @@ def _menu_bird_id(console: Console):
                 console.print("[red]Valor deve ser numérico![/red]")
             time.sleep(1)
         elif choice == "14":
-            curr = config.get("modules.bird_id.save_crops", True)
-            new_val = Confirm.ask("Salvar recortes ampliados na pasta 'recortes_aves/'?", default=curr)
-            config.set("modules.bird_id.save_crops", new_val)
-            console.print("[green]Salvo![/green]")
+            curr = config.get("modules.bird_id.iris_crops_folder", "10_Aves/Recortes")
+            new_val = Prompt.ask("Subpasta na raiz de destino do IRIS para recortes (ex: 10_Aves/Recortes)", default=str(curr)).strip()
+            if new_val:
+                config.set("modules.bird_id.iris_crops_folder", new_val)
+                console.print("[green]Salvo![/green]")
             time.sleep(1)
         elif choice == "15":
             console.print("Modelos disponíveis: [bold]yolov8n.pt[/bold] (Nano/Rápido), [bold]yolov8s.pt[/bold] (Small/Padrão), [bold]yolov8m.pt[/bold] (Medium)")

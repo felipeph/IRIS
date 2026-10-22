@@ -73,7 +73,8 @@ modules:
     video_max_crops: 5                   # Quantidade de recortes mais nítidos enviados para votação ponderada
     video_min_confident_crops: 2         # Mínimo de recortes nítidos da mesma espécie para validar o vídeo
     zoom_threshold_mm: 300.0             # Distância focal equivalente mínima para filtrar teleobjetivas
-    save_crops: true                     # Salva recortes de alta resolução na pasta do projeto
+    iris_crops_folder: "10_Aves/Recortes" # Pasta na raiz do destino para recortes (ex: C:\IRIS\10_Aves\Recortes\{projeto}\)
+    save_crops: true                     # Salva recortes de alta resolução na pasta do IRIS
     inaturalist:
       api_url: "https://api.inaturalist.org/v2/computervision/score_image"
       credentials_file: "secrets/inaturalist.json"
@@ -171,9 +172,17 @@ pipeline:
     module: src.modules.organize.stage
     name: Organização Física (SSD)
   - enabled: true
+    id: bird_detect
+    module: src.modules.bird_id.detect_stage
+    name: Detecção e Recorte de Aves (YOLOv8)
+  - enabled: true
     id: bird_id
-    module: src.modules.bird_id.stage
-    name: Identificação de Aves (YOLO + iNaturalist)
+    module: src.modules.bird_id.classify_stage
+    name: Identificação Taxonômica de Aves (iNaturalist)
+  - enabled: true
+    id: bird_organize
+    module: src.modules.bird_id.organize_stage
+    name: Organização Física de Aves (Subpastas + EXIF)
   - enabled: true
     id: astro_stack
     module: src.modules.astro_stack.stage

@@ -1,18 +1,21 @@
 """
 Processador de Vídeo para Identificação de Espécies (IRIS Bird ID).
-Amostra frames, filtra por nitidez (variância do Laplaciano), extrai os melhores recortes
-e realiza a votação ponderada da espécie predominante.
+Desacoplado em duas etapas atômicas:
+1. extract_best_video_crops: Amostra frames, detecta aves via YOLOv8, ranqueia por nitidez
+   (variância do Laplaciano) e salva os melhores recortes em disco.
+2. classify_video_crops: Lê os recortes salvos, consulta o classificador taxonômico e
+   realiza votação ponderada da espécie predominante.
 """
 
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from .detector import BirdDetector
+from .detector import BirdDetector, safe_imread, safe_imwrite
 from .classifier import BirdClassifier
 
 
@@ -22,31 +25,31 @@ def calculate_sharpness(img_gray: np.ndarray) -> float:
 
 
 class VideoBirdProcessor:
-    """Processa clipes de vídeo para inferência de espécies de aves."""
+    """Processa clipes de vídeo para detecção e inferência taxonômica de espécies de aves."""
 
-    def __init__(self, detector: BirdDetector, classifier: BirdClassifier):
+    def __init__(self, detector: Optional[BirdDetector] = None, classifier: Optional[BirdClassifier] = None):
         self.detector = detector
         self.classifier = classifier
 
-    def process_video(
+    def extract_best_video_crops(
         self,
         video_path: Path,
+        output_dir: Optional[Path] = None,
+        stem: str = "",
         sample_interval_sec: Optional[float] = None,
         target_frames: int = 15,
         min_interval_sec: float = 0.5,
         max_interval_sec: float = 5.0,
-        min_confident_crops: int = 2,
-        max_crops_to_classify: int = 5,
-        lat: Optional[float] = None,
-        lng: Optional[float] = None,
-        accuracy: Optional[float] = None,
-        observed_on: Optional[Any] = None,
-        debug_crops_dir: Optional[Path] = None
+        max_crops_to_extract: int = 5
     ) -> Optional[Dict[str, Any]]:
         """
-        Amostra o clipe de vídeo adaptativamente com base em sua duração,
-        ranqueia os recortes mais nítidos pelo operador Laplaciano e vota a espécie predominante.
+        Etapa 1 (Atômica): Amostra o clipe de vídeo adaptativamente com base em sua duração,
+        detecta aves via YOLOv8, calcula nitidez (Laplaciano) e extrai/salva em disco
+        os N melhores recortes.
         """
+        if self.detector is None:
+            raise ValueError("BirdDetector é obrigatório para extrair recortes de vídeo.")
+
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             return None
@@ -55,7 +58,7 @@ class VideoBirdProcessor:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration_sec = total_frames / fps
 
-        # Amostragem adaptativa baseada na duração do clipe se sample_interval_sec não for fixo
+        # Amostragem adaptativa proporcional à duração do clipe
         if sample_interval_sec is not None:
             actual_interval = sample_interval_sec
         else:
@@ -67,6 +70,7 @@ class VideoBirdProcessor:
 
         candidates = []
         frame_idx = 0
+        sampled_count = 0
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -74,8 +78,14 @@ class VideoBirdProcessor:
                 break
 
             if frame_idx % frame_step == 0:
+                sampled_count += 1
                 h, w = frame.shape[:2]
-                results = self.detector.model.predict(frame, classes=[14], conf=self.detector.confidence, verbose=False)
+                results = self.detector.model.predict(
+                    frame,
+                    classes=[14],
+                    conf=self.detector.confidence,
+                    verbose=False
+                )
 
                 for r in results:
                     for box in r.boxes:
@@ -122,19 +132,86 @@ class VideoBirdProcessor:
         if not candidates:
             return None
 
-        # Ranqueia pelos melhores scores de nitidez e seleciona até max_crops_to_classify
+        # Ranqueia pelos melhores scores de nitidez e seleciona até max_crops_to_extract
         candidates.sort(key=lambda x: x["score"], reverse=True)
-        selected_crops = candidates[:max_crops_to_classify]
+        selected_candidates = candidates[:max_crops_to_extract]
+
+        saved_crops = []
+        file_stem = stem or video_path.stem
+
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        for c in selected_candidates:
+            crop_path_str = ""
+            if output_dir:
+                crop_file = output_dir / f"crop_{file_stem}_f{c['frame_idx']}.jpg"
+                safe_imwrite(str(crop_file), c["bgr_img"], quality=95)
+                crop_path_str = str(crop_file.resolve())
+
+            saved_crops.append({
+                "frame_idx": c["frame_idx"],
+                "timestamp_s": round(c["timestamp_s"], 2),
+                "yolo_conf": round(float(c["yolo_conf"]), 4),
+                "sharpness": round(float(c["sharpness"]), 2),
+                "score": round(float(c["score"]), 2),
+                "crop_path": crop_path_str,
+                "pil_img": c["pil_img"],
+                "bgr_img": c["bgr_img"]
+            })
+
+        best_crop = saved_crops[0] if saved_crops else None
+
+        return {
+            "duration_sec": duration_sec,
+            "total_sampled_frames": sampled_count,
+            "detected_bird_frames": len(candidates),
+            "saved_crops": saved_crops,
+            "best_crop_path": best_crop["crop_path"] if best_crop else "",
+            "best_crop_bgr": best_crop["bgr_img"] if best_crop else None
+        }
+
+    def classify_video_crops(
+        self,
+        saved_crops: List[Dict[str, Any]],
+        classifier: Optional[BirdClassifier] = None,
+        duration_sec: float = 0.0,
+        lat: Optional[float] = None,
+        lng: Optional[float] = None,
+        accuracy: Optional[float] = None,
+        observed_on: Optional[Any] = None,
+        min_confident_crops: int = 2
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Etapa 2 (Atômica): Recebe os recortes extraídos de um vídeo, consulta o classificador
+        taxonômico para cada recorte e consolida a espécie predominante por votação ponderada.
+        """
+        clf = classifier or self.classifier
+        if clf is None:
+            raise ValueError("BirdClassifier é obrigatório para classificar recortes de vídeo.")
+
+        if not saved_crops:
+            return None
 
         votes = defaultdict(float)
         vote_counts = Counter()
         species_meta = {}
+        best_crop_bgr = None
 
-        best_crop_bgr = selected_crops[0]["bgr_img"]
+        for item in saved_crops:
+            pil_img = item.get("pil_img")
+            if pil_img is None and item.get("crop_path"):
+                bgr = safe_imread(item["crop_path"])
+                if bgr is not None:
+                    if best_crop_bgr is None:
+                        best_crop_bgr = bgr
+                    pil_img = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
 
-        for i, item in enumerate(selected_crops):
-            preds = self.classifier.classify_crop(
-                item["pil_img"],
+            if pil_img is None:
+                continue
+
+            preds = clf.classify_crop(
+                pil_img,
                 top_k=3,
                 use_tta=True,
                 lat=lat,
@@ -183,7 +260,7 @@ class VideoBirdProcessor:
         return {
             "is_video": True,
             "duration_sec": duration_sec,
-            "evaluated_crops": len(selected_crops),
+            "evaluated_crops": len(saved_crops),
             "species_common": predominant_comm,
             "species_common_en": meta_top1.get("common_en", ""),
             "species_scientific": predominant_sci,
@@ -198,8 +275,8 @@ class VideoBirdProcessor:
             "top2_confidence": top2_conf,
             "top3_common": top3_comm,
             "top3_scientific": top3_sci,
-            "top3_confidence": top3_conf,
-            "best_crop_bgr": best_crop_bgr,
+            "best_crop_bgr": best_crop_bgr if best_crop_bgr is not None else (saved_crops[0].get("bgr_img") if saved_crops else None),
+            "best_crop_path": saved_crops[0].get("crop_path", "") if saved_crops else "",
             "vote_distribution": {
                 f"{comm} ({sci})": {
                     "votes": vote_counts[(sci, comm)],
@@ -208,3 +285,51 @@ class VideoBirdProcessor:
                 for (sci, comm), weight in sorted_votes
             }
         }
+
+    def process_video(
+        self,
+        video_path: Path,
+        sample_interval_sec: Optional[float] = None,
+        target_frames: int = 15,
+        min_interval_sec: float = 0.5,
+        max_interval_sec: float = 5.0,
+        min_confident_crops: int = 2,
+        max_crops_to_classify: int = 5,
+        lat: Optional[float] = None,
+        lng: Optional[float] = None,
+        accuracy: Optional[float] = None,
+        observed_on: Optional[Any] = None,
+        debug_crops_dir: Optional[Path] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Método composto para compatibilidade retroativa: extrai e classifica em sequência única.
+        """
+        extraction = self.extract_best_video_crops(
+            video_path=video_path,
+            output_dir=debug_crops_dir,
+            stem=video_path.stem,
+            sample_interval_sec=sample_interval_sec,
+            target_frames=target_frames,
+            min_interval_sec=min_interval_sec,
+            max_interval_sec=max_interval_sec,
+            max_crops_to_extract=max_crops_to_classify
+        )
+        if not extraction or not extraction.get("saved_crops"):
+            return None
+
+        classification = self.classify_video_crops(
+            saved_crops=extraction["saved_crops"],
+            classifier=self.classifier,
+            duration_sec=extraction["duration_sec"],
+            lat=lat,
+            lng=lng,
+            accuracy=accuracy,
+            observed_on=observed_on,
+            min_confident_crops=min_confident_crops
+        )
+        if not classification:
+            return None
+
+        classification["best_crop_bgr"] = extraction.get("best_crop_bgr")
+        classification["best_crop_path"] = extraction.get("best_crop_path", "")
+        return classification

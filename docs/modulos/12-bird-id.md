@@ -1,133 +1,119 @@
 # Módulo 12: Identificação Taxonômica de Aves (`bird_id`)
 
-O estágio de Identificação Taxonômica de Aves (`BirdIdStage` / `src.modules.bird_id`) é responsável pela triagem, detecção de presença e classificação taxonômica fine-grained de fauna ornitológica em fotografias superzoom (teleobjetivas $\ge 300\text{mm}$, como a Canon PowerShot SX60 HS de até $1365\text{mm}$) e clipes de vídeo capturados em campo.
+O módulo de Identificação Taxonômica de Aves (`src.modules.bird_id`) é estruturado em **três etapas atômicas e sequenciais** no pipeline do IRIS, permitindo máxima transparência, auditoria intermediária e desacoplamento total entre detecção espacial, inferência taxonômica e manipulação de arquivos físicos.
 
 ---
 
-## 1. Arquitetura Desacoplada em Duas Etapas (Two-Stage Pipeline)
-
-Diferente de classificadores monolíticos convencionais que falham quando o animal ocupa uma fração reduzida do enquadramento, o IRIS adota uma arquitetura em 2 etapas com condicionamento geográfico:
+## 1. Arquitetura Modular em Três Estágios Atômicos
 
 ```mermaid
 flowchart TD
-    subgraph Ingestao["1. Ingestão & Elegibilidade"]
-        RawMedia["Mídias do Projeto Organizadas"]
-        Filter["Filtro de Elegibilidade:\nTeleobjetiva >= 300mm OU Vídeo OU RAW"]
-        RawMedia --> Filter
+    subgraph E1["Estágio 1: Detecção Espacial (bird_detect / BirdDetectStage)"]
+        Media["Mídias Elegíveis (Teleobjetivas >= 300mm ou Vídeos)"]
+        YOLO["YOLOv8s (Detecção da Classe Bird)"]
+        CropPhotos["Recorte Contextual com Margem (15%)"]
+        CropVideos["Amostragem Adaptativa & Nitidez (Laplaciano)"]
+        SaveRoot["Salva Recortes Exclusivamente na Raiz do IRIS:\n{destination_root}/10_Aves/Recortes/{project_name}/"]
+        DB1["Persiste crop_path e crops_info no SQLite do Projeto"]
+        
+        Media --> YOLO
+        YOLO --> CropPhotos & CropVideos
+        CropPhotos & CropVideos --> SaveRoot
+        SaveRoot --> DB1
     end
 
-    subgraph Deteccao["2. Detecção & Recorte Espacial (YOLOv8s)"]
-        Filter -->|Foto JPEG ou RAW| Reader["safe_read_image_or_raw()\n(Thumbnail embutido ~30ms)"]
-        Reader --> YOLO_Photo["YOLOv8s (Classe 14 - Bird)"]
-        YOLO_Photo --> CropPhoto["Recorte Contextual com Margem (15%)"]
-
-        Filter -->|Vídeo| VideoCap["VideoBirdProcessor\nAmostragem Adaptativa por Duração"]
-        VideoCap --> YOLO_Video["YOLOv8s em cada frame amostrado"]
-        YOLO_Video --> SharpnessFilter["Filtro de Nitidez\n(Variância do Laplaciano)"]
-        SharpnessFilter --> TopCrops["Seleção dos Top N Melhores Recortes"]
+    subgraph E2["Estágio 2: Classificação Taxonômica (bird_id / BirdClassifyStage)"]
+        ReadCrops["Lê Recortes em Disco (da Raiz do IRIS)"]
+        Classifier["iNaturalist API v2 (Geomodel) / BioCLIP"]
+        VideoVote["Votação Ponderada Acumulada em Vídeos"]
+        DB2["Atualiza bird_identifications no SQLite"]
+        CSV["Gera relatorio_aves.csv & Tabela Rich de Conferência"]
+        
+        DB1 --> ReadCrops
+        ReadCrops --> Classifier
+        Classifier --> VideoVote
+        VideoVote --> DB2
+        DB2 --> CSV
     end
 
-    subgraph Classificacao["3. Classificação Fine-Grained (BioCLIP)"]
-        Catalog["Catálogo Regional MG/BR\n(br_mg_aves.csv com nomes PT e EN)"]
-        TextTokens["Tokens Textuais das Espécies\n('a photo of {sci}, also known as {en} or {pt}...')"]
-        Catalog --> TextTokens
-        TextTokens --> Embeddings["Text Embeddings Pré-computados (512-dim)"]
-
-        CropPhoto --> TTA_Photo["Test-Time Augmentation (Original + Flip H)"]
-        TopCrops --> TTA_Video["Test-Time Augmentation (Original + Flip H)"]
-
-        TTA_Photo --> BioCLIP_Photo["BioCLIP Image Encoder"]
-        TTA_Video --> BioCLIP_Video["BioCLIP Image Encoder"]
-
-        BioCLIP_Photo & Embeddings --> Cosine_Photo["Similaridade Cosseno + Softmax"]
-        BioCLIP_Video & Embeddings --> Cosine_Video["Similaridade Cosseno + Softmax"]
-
-        Cosine_Video --> WeightedVote["Votação Ponderada Acumulada\n(Top-1s por Frame x Confiança)"]
-    end
-
-    subgraph AcaoAltaCerteza["4. Tripla Ação de Alta Certeza (Confiança >= 75%)"]
-        Cosine_Photo & WeightedVote --> Gate{"Confiança >= 75%?"}
-        Gate -->|Sim| Rename["1. Renomeação Tripla:\n_[Nome_PT]_[Nome_Cientifico]_[Nome_EN]"]
-        Rename --> Subfolder["2. Subpasta por Espécie:\n2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/"]
-        Subfolder --> EXIF["3. Injeção de Tags EXIF/IPTC via ExifTool"]
-        EXIF --> DualWrite["4. Sincronização Atômica SQLite\n(items.organized_path, bird_identifications)"]
-
-        Gate -->|Não / Dúvida| Review["Preserva Original Intacto\nMarca needs_review=True no CSV"]
+    subgraph E3["Estágio 3: Organização Física (bird_organize / BirdOrganizeStage)"]
+        CheckGate{"Confiança >= min_species_confidence?"}
+        Rename["1. Renomeação Tripla:\n_[Nome_PT]_[Nome_Cientifico]_[Nome_EN]"]
+        Subfolder["2. Movimentação para Subpasta:\n2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/"]
+        EXIF["3. Injeção de Tags EXIF/IPTC via ExifTool"]
+        DB3["4. Sincronização Atômica SQLite\n(organized_path e status final)"]
+        
+        CSV --> CheckGate
+        CheckGate -->|Sim| Rename
+        Rename --> Subfolder
+        Subfolder --> EXIF
+        EXIF --> DB3
+        CheckGate -->|Não / Dúvida| Skip["Preserva Arquivo Físico Intacto\n(needs_review=True)"]
     end
 ```
 
 ---
 
-## 2. Tripla Ação Simultânea de Alta Certeza
+## 2. Detalhamento dos Três Estágios
 
-Quando uma ave é identificada com confiança superior ao limiar configurado (`min_species_confidence`, padrão: $75\%$), o módulo executa automaticamente:
+### 2.1. Estágio 1: `bird_detect` (`BirdDetectStage`)
+- **Objetivo**: Detectar pássaros, extrair caixas delimitadoras e persistir recortes de alta qualidade.
+- **Local dos Recortes**: Salvos **exclusivamente na raiz do IRIS** em `{destination_root}/{iris_crops_folder}/{project_name}/` (padrão: `10_Aves/Recortes/{project_name}/`). Nenhuma cópia duplicada é mantida na pasta interna de metadados do projeto.
+- **Persistência no SQLite**:
+  - Para cada mídia com detecção, cria um registro na tabela `bird_identifications` contendo o caminho absoluto do recorte (`crop_path`) e métricas do bounding box.
+  - Para vídeos, armazena no campo `metadata_json` o dicionário `video_crops` com a lista de todos os recortes extraídos (índice do frame, timestamp, nitidez Laplaciana e caminho do recorte em disco).
 
-### 2.1. Renomeação Tripla sem Perda de Metadados
-O nome original higienizado (contendo data, hora, câmera, zoom, abertura, velocidade e ISO) recebe o sufixo taxonômico padronizado:
-- **Fotos**:
-  `2026-09-06_15-10-00_Canon-SX60_16MP_4000x3000_1365mm_f6.5_1-500s_ISO100_[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]_IMG_1234.JPG`
-- **Vídeos**:
-  `2026-09-06_15-12-00_Canon-SX60_4K_3840x2160_60fps_00-45_[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]_MVI_1235.MP4`
+### 2.2. Estágio 2: `bird_id` (`BirdClassifyStage`)
+- **Objetivo**: Identificar a espécie taxonômica sem mover nem renomear nenhum arquivo físico.
+- **Entrada**: Lê os recortes salvos na raiz do IRIS referenciados no banco SQLite ou no disco.
+- **Motores Taxonômicos**:
+  - **iNaturalist Computer Vision API v2**: Utiliza coordenadas GPS extraídas dos metadados da imagem/vídeo para condicionamento geográfico (*geomodel*), obtendo precisão em escala regional.
+  - **BioCLIP (Zero-Shot)**: Fallback local robusto via embeddings textuais de catálogo regional (`br_mg_aves.csv`).
+- **Vídeos**: Realiza votação ponderada acumulada entre os múltiplos frames extraídos pelo estágio 1.
+- **Auditoria**: Atualiza os registros no SQLite com dados taxonômicos completos (`species_sci`, `species_pt`, `species_en`, `family`, `order`, `confidence`, `needs_review`) e gera o relatório `relatorio_aves.csv` no diretório do projeto.
 
-### 2.2. Separação em Subpastas por Nome Popular
-O arquivo é movido para uma subpasta correspondente ao nome popular da ave em português **dentro** da categoria organizada:
-- Fotos Avulsas / Rajadas: `2_AlbunsDatas/YYYY/MM/DD/{Nome_Popular_PT}/`
-- Vídeos: `3_Videos/YYYY/MM/DD/{Nome_Popular_PT}/`
-
-Dessa forma, a organização cronológica e a separação de mídias permanecem 100% preservadas, sem colisão de caminhos.
-
-### 2.3. Injeção de Metadados EXIF/IPTC/XMP
-Sem re-codificar pixels, o `exiftool` injeta:
-- `Keywords` / `Subject`: `Aves`, `{Nome Popular PT}`, `{Nome Popular EN}`, `{Nome Científico}`, `{Família}`, `{Ordem}`
-- `HierarchicalSubject`: `Fauna|Aves|{Família}|{Nome Científico}|{Nome Popular PT}`
-- `Caption-Abstract` / `Description`: `{Nome Popular PT} ({Nome Científico}) - {Nome Popular EN}`
-
-### 2.4. Sincronização Atômica no SQLite
-O `item.organized_path`, `item.relative_dest_dir` e `item.target_filename` são atualizados no banco de dados do projeto na mesma transação. Estágios subsequentes do pipeline (como edição e upscale de vídeos 4K, publicação no YouTube ou verificação de limpeza) encontram os arquivos imediatamente.
+### 2.3. Estágio 3: `bird_organize` (`BirdOrganizeStage`)
+- **Objetivo**: Aplicar modificações estruturais no disco apenas para detecções que superem o limiar de confiança (`min_species_confidence`, padrão: 75%).
+- **Ações Físicas**:
+  1. **Renomeação Tripla**: Preserva todos os metadados técnicos de disparo e anexa os nomes populares e científicos higienizados:
+     `..._[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]_IMG_1234.JPG`
+  2. **Subpasta por Espécie**: Move a mídia para a subpasta com o nome em português dentro da sua categoria cronológica (`2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/` ou `3_Videos/.../{Nome_PT}/`).
+  3. **Tags EXIF/IPTC**: Injeta tags taxonômicas (HierarchicalSubject, Keywords, Caption) sem recodificação de pixels via `exiftool`.
+  4. **Sincronização SQLite**: Atualiza `items.organized_path` e o caminho correspondente em `bird_identifications` atomicamente.
 
 ---
 
-## 3. Amostragem Adaptativa de Vídeo
+## 3. Amostragem e Extração de Vídeos
 
-Vídeos de aves apresentam trepidação e momentos de voo rápido (*motion blur*). Para maximizar a precisão com eficiência:
-- **Amostragem Proporcional à Duração**: Em vez de passos rígidos de tempo, calcula o intervalo baseado em `video_target_frames` (padrão: 15 frames distribuídos igualmente ao longo do clipe):
-  $$\Delta t = \max\left(0.5\text{s}, \min\left(5.0\text{s}, \frac{\text{Duração}}{\text{Alvo de Frames}}\right)\right)$$
-- **Métrica de Nitidez (Variância do Laplaciano)**:
+- **Amostragem Adaptativa**: Extrai frames distribuídos de acordo com a duração do clipe.
+- **Seleção por Nitidez**: Avalia o foco via Variância do Laplaciano ponderada pelo score do YOLO:
   $$S = \text{Var}(\nabla^2 I) \times \text{conf}_{\text{YOLO}} \times \sqrt{\text{Área}}$$
-- **Validação por Consistência (`video_min_confident_crops`)**: Exige um número mínimo de recortes nítidos da mesma espécie (padrão: 3) confirmando a espécie predominante para homologar o vídeo.
+- **Limite Configurável (`video_max_crops`)**: Determina a quantidade máxima de melhores recortes salvos e enviados para classificação taxonômica (padrão: 5 recortes por vídeo).
 
 ---
 
-## 4. Suporte Ultrarrápido a Fotos RAW (`.CR2`, `.ARW`, etc.)
-
-Usuários de superzooms e DSLRs/Mirrorless costumam fotografar fauna em formato RAW. 
-Em vez do demosaicing completo (que levaria ~1.500ms por foto), o leitor `safe_read_image_or_raw()` utiliza `rawpy.extract_thumb()`, extraindo o preview JPEG embutido na imagem RAW diretamente na memória em **~30ms**, conferindo à classificação de RAWs a mesma velocidade de processamento de fotos JPEG.
-
----
-
-## 5. Parâmetros de Configuração (`config.yaml`)
+## 4. Parâmetros de Configuração (`config.yaml`)
 
 | Parâmetro | Tipo | Padrão | Descrição |
 | :--- | :---: | :---: | :--- |
-| `modules.bird_id.enabled` | bool | `true` | Ativa ou desativa a etapa de identificação de aves. |
-| `modules.bird_id.min_species_confidence` | float | `0.75` | Limiar mínimo de confiança para renomeação e subpasta ($75\%$). |
-| `modules.bird_id.rename_files` | bool | `true` | Renomeia o arquivo físico com `[PT]_[Cientifico]_[EN]`. |
-| `modules.bird_id.organize_in_subfolders` | bool | `true` | Move o arquivo para `{Nome_Popular_PT}/` dentro da categoria. |
-| `modules.bird_id.write_exif_tags` | bool | `true` | Injeta palavras-chave IPTC/EXIF/XMP via ExifTool. |
-| `modules.bird_id.video_target_frames` | int | `15` | Alvo de frames amostrados proporcionalmente à duração. |
-| `modules.bird_id.video_min_confident_crops` | int | `3` | Mínimo de recortes com a mesma espécie para consolidar vídeo. |
-| `modules.bird_id.zoom_threshold_mm` | float | `300.0` | Distância focal equivalente mínima para filtrar teleobjetivas. |
-| `modules.bird_id.save_crops` | bool | `true` | Salva recortes de depuração em `recortes_aves/`. |
-| `modules.bird_id.yolo_model` | str | `yolov8s.pt` | Modelo YOLOv8 utilizado (`yolov8n.pt`, `yolov8s.pt`, etc.). |
-| `modules.bird_id.yolo_confidence` | float | `0.25` | Limiar mínimo de confiança para caixas delimitadoras YOLO. |
+| `modules.bird_id.enabled` | bool | `true` | Habilita os estágios de identificação de aves. |
+| `modules.bird_id.iris_crops_folder` | str | `10_Aves/Recortes` | Pasta de destino dos recortes na raiz do IRIS. |
+| `modules.bird_id.video_max_crops` | int | `5` | Máximo de recortes mais nítidos extraídos por vídeo. |
+| `modules.bird_id.video_target_frames` | int | `15` | Frames amostrados proporcionalmente à duração do clipe. |
+| `modules.bird_id.min_species_confidence` | float | `0.75` | Limiar mínimo de confiança para organização e renomeação ($75\%$). |
+| `modules.bird_id.rename_files` | bool | `true` | Habilita renomeação física no estágio de organização. |
+| `modules.bird_id.organize_in_subfolders` | bool | `true` | Habilita separação em subpastas `{Nome_PT}/`. |
+| `modules.bird_id.write_exif_tags` | bool | `true` | Injeta metadados IPTC/EXIF via ExifTool. |
+| `modules.bird_id.zoom_threshold_mm` | float | `300.0` | Distância focal equivalente mínima para teleobjetivas. |
+| `modules.bird_id.yolo_model` | str | `yolov8s.pt` | Modelo YOLOv8 utilizado (`yolov8s.pt`, etc.). |
+| `modules.bird_id.yolo_confidence` | float | `0.25` | Limiar mínimo de confiança do detector YOLO. |
 
 Todos os parâmetros podem ser ajustados interativamente através da opção `8. 🦜 Identificação de Aves` no menu global de configurações (`python iris/main.py -> C`).
 
 ---
 
-## 6. Relatórios de Conferência & Auditoria
+## 5. Auditoria e Relatórios
 
-Ao concluir o processamento, o módulo gera:
-- **`relatorio_aves.csv`**: Arquivo CSV no diretório do projeto contendo caminho, espécie PT/EN/Científica, confiança, top 2, top 3, caminho do recorte e flag `needs_review`.
-- **Tabela Rich no Console**: Apresentação colorida resumida com destaque em vermelho para casos com `needs_review=True` e amarelo para confiança $< 75\%$.
-- **Banco SQLite**: Registros persistidos na tabela `bird_identifications` nos esquemas local e central (RFC 08/09).
+- **`relatorio_aves.csv`**: Gerado na pasta do projeto ao final da classificação, contendo caminho original, nomes taxonômicos, métricas de confiança, caminho do recorte e status de revisão.
+- **Tabela Rich Interativa**: Resumo no terminal colorido destacando espécies com alta certeza em verde e casos pendentes de revisão em amarelo/vermelho.
+- **Rastreabilidade no SQLite**: Todas as mídias mantêm vínculo direto com a localização exata do recorte armazenado em disco na raiz do IRIS.

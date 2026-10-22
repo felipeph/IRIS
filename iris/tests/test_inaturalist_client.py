@@ -148,7 +148,61 @@ def test_score_image_with_geo_prior_and_parsing(mock_post):
     assert data_sent["lng"] == "-43.945600"
     assert data_sent["positional_accuracy"] == "15000"
     assert data_sent["taxon_id"] == "3"
+    assert data_sent["fields"] == "(combined_score:!t,vision_score:!t,taxon:all)"
     assert "Authorization" in call_kwargs["headers"]
+
+
+@patch("requests.get")
+@patch("requests.post")
+def test_score_image_percentage_normalization_and_ancestry_fallback(mock_post, mock_get):
+    client = INaturalistClient(jwt_token="valid_jwt", request_delay_seconds=0.01)
+
+    # Simula resposta da API v2 real com scores em escala 0..100 e taxon sem ancestors embutidos
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.json.return_value = {
+        "results": [
+            {
+                "combined_score": 88.5,
+                "vision_score": 82.0,
+                "taxon": {
+                    "id": 16045,
+                    "name": "Pitangus sulphuratus",
+                    "preferred_common_name": "Bem-te-vi",
+                    "english_common_name": "Great Kiskadee"
+                }
+            }
+        ]
+    }
+    mock_post.return_value = mock_post_resp
+
+    # Simula resposta do endpoint /v2/taxa/16045
+    mock_get_resp = MagicMock()
+    mock_get_resp.status_code = 200
+    mock_get_resp.json.return_value = {
+        "results": [
+            {
+                "ancestors": [
+                    {"name": "Passeriformes", "rank": "order"},
+                    {"name": "Tyrannidae", "rank": "family"}
+                ]
+            }
+        ]
+    }
+    mock_get.return_value = mock_get_resp
+
+    test_img = Image.new("RGB", (100, 100), color="blue")
+    preds = client.score_image(test_img, top_k=1)
+
+    assert len(preds) == 1
+    top1 = preds[0]
+    # Scores devem ser normalizados de 88.5 para 0.885
+    assert top1["confidence"] == pytest.approx(0.885, 0.001)
+    assert top1["combined_score"] == pytest.approx(0.885, 0.001)
+    assert top1["vision_score"] == pytest.approx(0.820, 0.001)
+    # Família e ordem devem ser enriquecidas pelo fallback
+    assert top1["family"] == "Tyrannidae"
+    assert top1["order"] == "Passeriformes"
 
 
 @patch("requests.post")
@@ -184,3 +238,83 @@ def test_score_image_401_refresh_retry(mock_post):
         assert len(preds) == 1
         assert preds[0]["common_name"] == "Sabiá-laranjeira"
         assert mock_post.call_count == 2
+
+
+@patch("requests.Session")
+def test_client_web_session_login_flow(mock_session_cls, tmp_path):
+    import json
+    creds_file = tmp_path / "inaturalist.json"
+    creds_file.write_text(json.dumps({
+        "username": "my_user",
+        "password": "my_password"
+    }), encoding="utf-8")
+
+    mock_sess = MagicMock()
+    mock_session_cls.return_value = mock_sess
+
+    # 1. GET /login
+    resp_login = MagicMock()
+    resp_login.status_code = 200
+    resp_login.text = '<form><input name="authenticity_token" value="csrf_token_abc_123" /></form>'
+
+    # 2. POST /session
+    resp_post = MagicMock()
+    resp_post.status_code = 302
+    resp_post.headers = {"Location": "https://www.inaturalist.org/"}
+
+    # 3. GET /users/api_token
+    resp_jwt = MagicMock()
+    resp_jwt.status_code = 200
+    resp_jwt.json.return_value = {"api_token": "jwt_session_token_xyz"}
+
+    mock_sess.get.side_effect = [resp_login, resp_jwt]
+    mock_sess.post.return_value = resp_post
+
+    client = INaturalistClient(credentials_path=creds_file, request_delay_seconds=0.01)
+    jwt = client.get_valid_jwt()
+
+    assert jwt == "jwt_session_token_xyz"
+    assert mock_sess.get.call_count == 2
+    assert mock_sess.post.call_count == 1
+
+    post_payload = mock_sess.post.call_args[1]["data"]
+    assert post_payload["user[email]"] == "my_user"
+    assert post_payload["user[password]"] == "my_password"
+    assert post_payload["authenticity_token"] == "csrf_token_abc_123"
+
+    # Confirma se o token foi persistido de volta no arquivo
+    saved_data = json.loads(creds_file.read_text(encoding="utf-8"))
+    assert saved_data.get("jwt_token") == "jwt_session_token_xyz"
+
+
+@patch("requests.Session")
+def test_client_web_session_login_bad_credentials(mock_session_cls, tmp_path):
+    import json
+    creds_file = tmp_path / "inaturalist.json"
+    creds_file.write_text(json.dumps({
+        "username": "bad_user",
+        "password": "wrong_password"
+    }), encoding="utf-8")
+
+    mock_sess = MagicMock()
+    mock_session_cls.return_value = mock_sess
+
+    # 1. GET /login
+    resp_login = MagicMock()
+    resp_login.status_code = 200
+    resp_login.text = '<meta name="csrf-token" content="csrf_meta_999">'
+
+    # 2. POST /session com erro
+    resp_post = MagicMock()
+    resp_post.status_code = 200
+    resp_post.text = '<html><body>Invalid Email, Username or password.</body></html>'
+
+    mock_sess.get.return_value = resp_login
+    mock_sess.post.return_value = resp_post
+
+    client = INaturalistClient(credentials_path=creds_file, request_delay_seconds=0.01)
+    with pytest.raises(INaturalistAuthError) as exc_info:
+        client.get_valid_jwt()
+
+    assert "Usuário/E-mail ou Senha incorretos" in str(exc_info.value)
+

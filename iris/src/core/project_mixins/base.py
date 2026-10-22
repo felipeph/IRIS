@@ -130,6 +130,16 @@ class ProjectBase:
         """Executa gravação atômica simultânea no banco do projeto e no banco central via ATTACH DATABASE (RFC 08)."""
         self._ensure_db_initialized()
         import src.core.project as p_mod
+        active_conn = self._get_active_conn()
+        if active_conn is not None:
+            active_conn.execute(main_sql, main_params)
+            if self._project_db_file.resolve() != p_mod.CENTRAL_DB_PATH.resolve():
+                try:
+                    active_conn.execute(central_sql, central_params)
+                except sqlite3.OperationalError:
+                    pass
+            return
+
         with p_mod.get_attached_project_connection(self._project_db_file, p_mod.CENTRAL_DB_PATH) as conn:
             conn.execute("BEGIN IMMEDIATE;")
             try:

@@ -126,19 +126,25 @@ def test_timelapse_long_exposure_fpi_edit(mock_console):
 
 
 def test_bird_id_menu_edit(mock_console):
-    """Testa edição do limiar de alta certeza e prior geográfico no menu de aves."""
+    """Testa edição do limiar de alta certeza, prior geográfico, recortes de vídeo e pasta IRIS no menu de aves."""
     original_conf = config.get("modules.bird_id.min_species_confidence", 0.70)
     original_lat = config.get("modules.bird_id.inaturalist.default_lat", -19.92)
+    original_max_crops = config.get("modules.bird_id.video_max_crops", 5)
+    original_iris_crops = config.get("modules.bird_id.iris_crops_folder", "10_Aves/Recortes")
     try:
-        # Opção 3 -> novo limiar 0.85, Opção 10 -> lat -20.50, depois 0 para sair
-        with patch("src.core.config_menu.Prompt.ask", side_effect=["3", "0.85", "10", "-20.50", "0"]), \
+        # Opção 3 -> 0.85, Opção 8 -> 8, Opção 10 -> -20.50, Opção 14 -> "Custom_Aves/Crops", 0 para sair
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["3", "0.85", "8", "8", "10", "-20.50", "14", "Custom_Aves/Crops", "0"]), \
              patch("src.core.config_menu.time.sleep"):
             _menu_bird_id(mock_console)
             assert config.get("modules.bird_id.min_species_confidence") == 0.85
+            assert config.get("modules.bird_id.video_max_crops") == 8
             assert config.get("modules.bird_id.inaturalist.default_lat") == -20.50
+            assert config.get("modules.bird_id.iris_crops_folder") == "Custom_Aves/Crops"
     finally:
         config.set("modules.bird_id.min_species_confidence", original_conf)
+        config.set("modules.bird_id.video_max_crops", original_max_crops)
         config.set("modules.bird_id.inaturalist.default_lat", original_lat)
+        config.set("modules.bird_id.iris_crops_folder", original_iris_crops)
 
 
 
