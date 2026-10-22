@@ -224,6 +224,7 @@ class ProjectItem:
     extra_dest_dirs_json: str = "[]"
     organized_path: str = ""
     extra_organized_paths_json: str = "[]"
+    burst_id: str = ""
     
     @classmethod
     def from_dict(cls, data: dict) -> "ProjectItem":
@@ -271,6 +272,7 @@ def _build_items_filter_query(
     category: Optional[str] = None,
     verified: Optional[bool] = None,
     limit: Optional[int] = None,
+    burst_id: Optional[str] = None,
 ) -> tuple[str, list]:
     """Constrói dinamicamente cláusula WHERE parametrizada para filtros na tabela items."""
     conditions = []
@@ -284,6 +286,9 @@ def _build_items_filter_query(
     if verified is not None:
         conditions.append("verified = ?")
         params.append(1 if verified else 0)
+    if burst_id is not None:
+        conditions.append("burst_id = ?")
+        params.append(burst_id)
 
     sql = base_sql
     if conditions:

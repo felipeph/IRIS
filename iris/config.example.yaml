@@ -14,7 +14,7 @@ classification:
   timelapse_min_photos_folder: 30         # Quantidade mínima de fotos em pastas dedicadas a timelapse
   timelapse_max_interval_seconds: 60.0    # Teto base para fotos gerais/diurnas
   timelapse_tolerance_ratio: 0.25         # Tolerância de cadência (ex: 0.25 = ±25%)
-  enable_burst_detection: false
+  enable_burst_detection: true
   burst_interval_seconds: 1.5
   enable_timelapse_album_samples: true
   timelapse_sample_interval_minutes: 5.0

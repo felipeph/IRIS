@@ -538,4 +538,170 @@ def test_iris_auto_folder_not_blind_bypassed():
     assert all(it.category != "timelapse" for it in items)
 
 
+def test_classify_burst_detection_enabled():
+    """Garante que fotos consecutivas com delta <= 1.5s sejam classificadas como rajada com mesmo burst_id."""
+    base_time = datetime(2026, 10, 22, 9, 45, 0)
+    photos = []
+    curr = base_time
+    for i in range(5):
+        curr += timedelta(seconds=0.5)
+        photos.append(MediaMetadata(
+            file_path=Path(f"BURST_{i:04d}.JPG"),
+            source_folder_name="DCIM/100CANON",
+            is_video=False,
+            date_str="2026-10-22",
+            time_str=curr.strftime("%H-%M-%S"),
+            timestamp=curr,
+            camera_model="EOS R7",
+            camera_make="Canon",
+            shutter_str="1/2000",
+            original_stem=f"BURST_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos, class_config={"enable_burst_detection": True, "burst_interval_seconds": 1.5})
+    assert len(items) == 5
+    assert all(it.category == "rajada" for it in items)
+    expected_first_time = photos[0].time_str
+    assert all(f"rajada_{expected_first_time}" in str(it.relative_dest_dir) for it in items)
+    expected_burst_id = f"rajada_2026-10-22_{expected_first_time}"
+    assert all(it.burst_id == expected_burst_id for it in items)
+
+
+def test_classify_burst_detection_disabled():
+    """Garante que quando desabilitado, fotos de rajada permaneçam como avulsas e com burst_id vazio."""
+    base_time = datetime(2026, 10, 22, 9, 45, 0)
+    photos = []
+    curr = base_time
+    for i in range(5):
+        curr += timedelta(seconds=0.5)
+        photos.append(MediaMetadata(
+            file_path=Path(f"BURST_{i:04d}.JPG"),
+            source_folder_name="DCIM/100CANON",
+            is_video=False,
+            date_str="2026-10-22",
+            time_str=curr.strftime("%H-%M-%S"),
+            timestamp=curr,
+            camera_model="EOS R7",
+            camera_make="Canon",
+            shutter_str="1/2000",
+            original_stem=f"BURST_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos, class_config={"enable_burst_detection": False})
+    assert len(items) == 5
+    assert all(it.category == "avulsa" for it in items)
+    assert all("rajada" not in str(it.relative_dest_dir) for it in items)
+    assert all(it.burst_id == "" for it in items)
+
+
+def test_classify_burst_subsecond_same_second():
+    """Garante que fotos de rajada rápida no mesmo segundo (delta == 0s) recebam o mesmo burst_id."""
+    base_time = datetime(2026, 10, 22, 10, 15, 30)
+    photos = []
+    for i in range(4):
+        photos.append(MediaMetadata(
+            file_path=Path(f"FAST_{i:04d}.JPG"),
+            source_folder_name="DCIM/100CANON",
+            is_video=False,
+            date_str="2026-10-22",
+            time_str="10-15-30",
+            timestamp=base_time,  # Mesmo segundo exato
+            camera_model="EOS R7",
+            camera_make="Canon",
+            shutter_str="1/4000",
+            original_stem=f"FAST_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos, class_config={"enable_burst_detection": True})
+    assert len(items) == 4
+    assert all(it.category == "rajada" for it in items)
+    assert all(it.burst_id == "rajada_2026-10-22_10-15-30" for it in items)
+
+
+def test_classify_burst_mixed_singles_and_bursts():
+    """Garante que fotos avulsas isoladas e rajadas intercaladas sejam corretamente segregadas."""
+    t0 = datetime(2026, 10, 22, 8, 0, 0)
+    photos = []
+
+    # 1. Foto avulsa isolada
+    photos.append(MediaMetadata(
+        file_path=Path("SINGLE_01.JPG"),
+        source_folder_name="DCIM/100CANON",
+        is_video=False,
+        date_str="2026-10-22",
+        time_str="08-00-00",
+        timestamp=t0,
+        camera_model="EOS R7",
+        camera_make="Canon",
+        shutter_str="1/2000",
+        original_stem="SINGLE_01",
+        extension="JPG",
+        is_raw=False,
+    ))
+
+    # Pausa de 1 minuto
+    # 2. Rajada de 3 fotos a cada 0.3s
+    t1 = t0 + timedelta(minutes=1)
+    for i in range(3):
+        t = t1 + timedelta(seconds=0.3 * i)
+        photos.append(MediaMetadata(
+            file_path=Path(f"BURST_{i:02d}.JPG"),
+            source_folder_name="DCIM/100CANON",
+            is_video=False,
+            date_str="2026-10-22",
+            time_str=t.strftime("%H-%M-%S"),
+            timestamp=t,
+            camera_model="EOS R7",
+            camera_make="Canon",
+            shutter_str="1/2000",
+            original_stem=f"BURST_{i:02d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    # Pausa de 2 minutos
+    # 3. Outra foto avulsa isolada
+    t2 = t1 + timedelta(minutes=2)
+    photos.append(MediaMetadata(
+        file_path=Path("SINGLE_02.JPG"),
+        source_folder_name="DCIM/100CANON",
+        is_video=False,
+        date_str="2026-10-22",
+        time_str="08-03-00",
+        timestamp=t2,
+        camera_model="EOS R7",
+        camera_make="Canon",
+        shutter_str="1/2000",
+        original_stem="SINGLE_02",
+        extension="JPG",
+        is_raw=False,
+    ))
+
+    items = classify_media_batch(photos, class_config={"enable_burst_detection": True, "burst_interval_seconds": 1.5})
+    assert len(items) == 5
+
+    # Primeira foto: avulsa
+    assert items[0].category == "avulsa"
+    assert items[0].burst_id == ""
+    assert "rajada" not in str(items[0].relative_dest_dir)
+
+    # Fotos 1, 2, 3: rajada com mesmo burst_id
+    burst_items = items[1:4]
+    assert all(it.category == "rajada" for it in burst_items)
+    burst_id_val = burst_items[0].burst_id
+    assert burst_id_val.startswith("rajada_2026-10-22_")
+    assert all(it.burst_id == burst_id_val for it in burst_items)
+
+    # Última foto: avulsa
+    assert items[4].category == "avulsa"
+    assert items[4].burst_id == ""
+    assert "rajada" not in str(items[4].relative_dest_dir)
+
+
 

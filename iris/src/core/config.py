@@ -281,7 +281,7 @@ class ConfigManager:
                 "timelapse_tolerance_ratio": 0.25,
                 "enable_timelapse_album_samples": True,
                 "timelapse_sample_interval_minutes": 10.0,
-                "enable_burst_detection": False,
+                "enable_burst_detection": True,
                 "burst_interval_seconds": 1.5,
                 "timelapse_normal": {
                     "min_photos": 200,

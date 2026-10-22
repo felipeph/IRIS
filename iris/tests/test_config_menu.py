@@ -76,6 +76,27 @@ def test_organization_classification_edit(mock_console):
     finally:
         config.set("classification.moon_zoom_threshold_mm", original)
 
+def test_organization_classification_burst_options_edit(mock_console):
+    """Testa edição das opções 10 (toggle burst) e 11 (intervalo de rajada) em Organização & Classificação."""
+    orig_burst = config.get("classification.enable_burst_detection", True)
+    orig_int = config.get("classification.burst_interval_seconds", 1.5)
+    try:
+        # Testa opção 10 com Confirm.ask -> False
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["10", "0"]), \
+             patch("src.core.config_menu.Confirm.ask", return_value=False), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_organization_classification(mock_console)
+            assert config.get("classification.enable_burst_detection") is False
+
+        # Testa opção 11 com Prompt.ask -> 2.5
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["11", "2.5", "0"]), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_organization_classification(mock_console)
+            assert config.get("classification.burst_interval_seconds") == 2.5
+    finally:
+        config.set("classification.enable_burst_detection", orig_burst)
+        config.set("classification.burst_interval_seconds", orig_int)
+
 def test_timelapse_edit(mock_console):
     """Testa edição de valor em Timelapse 4K."""
     original_fps = config.get("modules.timelapse.fps", 60)

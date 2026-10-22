@@ -156,6 +156,7 @@ class PlanningStage(PipelineStage):
                     p_item.target_filename = c_item.target_filename
                     p_item.relative_dest_dir = str(c_item.relative_dest_dir)
                     p_item.extra_dest_dirs_json = json.dumps([str(p) for p in c_item.extra_dest_dirs])
+                    p_item.burst_id = getattr(c_item, "burst_id", "") or ""
                     project.save_item(p_item)
         
         console.print("[bold green]Planejamento concluído![/bold green]")

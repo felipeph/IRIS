@@ -286,4 +286,31 @@ def test_atomic_dual_write_and_reconciliation(mock_projects_dir):
     assert "test_dual_write" in all_stats
 
 
+def test_project_burst_id_persistence_and_groups(mock_projects_dir):
+    """Garante que burst_id seja persistido no SQLite e consultável via get_items e get_burst_groups."""
+    p = create_project("test_burst_persistence", "X:\\src")
+
+    item1 = ProjectItem("/orig/1.jpg", "/dest/1.jpg", category="rajada", burst_id="rajada_2026-10-22_09-45-00")
+    item2 = ProjectItem("/orig/2.jpg", "/dest/2.jpg", category="rajada", burst_id="rajada_2026-10-22_09-45-00")
+    item3 = ProjectItem("/orig/3.jpg", "/dest/3.jpg", category="avulsa", burst_id="")
+
+    p.save_items_batch([item1, item2, item3])
+
+    # 1. Filtro direto por burst_id
+    burst_items = p.get_items(burst_id="rajada_2026-10-22_09-45-00")
+    assert len(burst_items) == 2
+    assert {it.original_path for it in burst_items} == {"/orig/1.jpg", "/orig/2.jpg"}
+
+    # 2. Contagem e has_items com burst_id
+    assert p.get_items_count(burst_id="rajada_2026-10-22_09-45-00") == 2
+    assert p.has_items(burst_id="rajada_2026-10-22_09-45-00") is True
+    assert p.has_items(burst_id="inexistente") is False
+
+    # 3. get_burst_groups
+    groups = p.get_burst_groups()
+    assert "rajada_2026-10-22_09-45-00" in groups
+    assert len(groups["rajada_2026-10-22_09-45-00"]) == 2
+    assert "" not in groups
+
+
 

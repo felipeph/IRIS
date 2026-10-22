@@ -187,6 +187,7 @@ class ProjectBase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_category ON items(category)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_status_verified ON items(status, verified)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_items_burst_id ON items(burst_id)")
 
             for ddl in p_mod.SHARED_TABLES_DDL:
                 cursor.execute(ddl)

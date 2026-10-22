@@ -18,7 +18,7 @@ general:
 
 classification:
   burst_interval_seconds: 1.5
-  enable_burst_detection: false
+  enable_burst_detection: true
   enable_timelapse_album_samples: true
   moon_zoom_threshold_mm: 1000.0
   timelapse_max_interval_seconds: 60.0

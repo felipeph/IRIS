@@ -16,6 +16,7 @@ class ProjectItemsMixin:
         status: Optional[str] = None,
         category: Optional[str] = None,
         verified: Optional[bool] = None,
+        burst_id: Optional[str] = None,
     ) -> List[ProjectItem]:
         """Recupera itens do banco de dados do projeto, com suporte a filtros diretos no SQLite."""
         if not self._project_db_file.exists() and self._get_active_conn() is None:
@@ -27,6 +28,7 @@ class ProjectItemsMixin:
             status=status,
             category=category,
             verified=verified,
+            burst_id=burst_id,
         )
 
         items = []
@@ -52,6 +54,7 @@ class ProjectItemsMixin:
         status: Optional[str] = None,
         category: Optional[str] = None,
         verified: Optional[bool] = None,
+        burst_id: Optional[str] = None,
     ) -> int:
         """Retorna a contagem de itens instantaneamente via SELECT COUNT(*) no SQLite."""
         active_conn = self._get_active_conn()
@@ -64,6 +67,7 @@ class ProjectItemsMixin:
             status=status,
             category=category,
             verified=verified,
+            burst_id=burst_id,
         )
 
         if active_conn is not None:
@@ -83,6 +87,7 @@ class ProjectItemsMixin:
         status: Optional[str] = None,
         category: Optional[str] = None,
         verified: Optional[bool] = None,
+        burst_id: Optional[str] = None,
     ) -> bool:
         """Verifica se existem itens correspondentes aos critérios com custo O(1) via SELECT 1 ... LIMIT 1."""
         active_conn = self._get_active_conn()
@@ -95,6 +100,7 @@ class ProjectItemsMixin:
             status=status,
             category=category,
             verified=verified,
+            burst_id=burst_id,
             limit=1,
         )
 
@@ -170,3 +176,13 @@ class ProjectItemsMixin:
     @items.setter
     def items(self, value: List[ProjectItem]):
         self.save_items_batch(value)
+
+    def get_burst_groups(self) -> dict[str, List[ProjectItem]]:
+        """Retorna todos os itens pertencentes a rajadas agrupados pelo respectivo burst_id."""
+        groups: dict[str, List[ProjectItem]] = {}
+        all_items = self.get_items()
+        for it in all_items:
+            b_id = getattr(it, "burst_id", "") or ""
+            if b_id:
+                groups.setdefault(b_id, []).append(it)
+        return groups

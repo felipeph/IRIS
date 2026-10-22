@@ -14,6 +14,7 @@ class ClassifiedItem:
     relative_dest_dir: Path
     target_filename: str
     extra_dest_dirs: list[Path] = field(default_factory=list)
+    burst_id: str = ""
 
 @dataclass(frozen=True)
 class TimelapseProfile:
@@ -333,7 +334,7 @@ def _classify_bursts_and_singles(photos: list[MediaMetadata], class_config: dict
     if not photos:
         return
 
-    enable_burst = class_config.get("enable_burst_detection", False)
+    enable_burst = class_config.get("enable_burst_detection", True)
     burst_interval = class_config.get("burst_interval_seconds", 1.5)
 
     if not enable_burst:
@@ -346,6 +347,7 @@ def _classify_bursts_and_singles(photos: list[MediaMetadata], class_config: dict
                 category="avulsa",
                 relative_dest_dir=bdir,
                 target_filename=target_name,
+                burst_id="",
             ))
         return
 
@@ -354,7 +356,7 @@ def _classify_bursts_and_singles(photos: list[MediaMetadata], class_config: dict
 
     for prev, curr in zip(photos[:-1], photos[1:]):
         delta = (curr.timestamp - prev.timestamp).total_seconds()
-        if 0.0 <= delta <= burst_interval:
+        if prev.date_str == curr.date_str and 0.0 <= delta <= burst_interval:
             current_burst.append(curr)
         else:
             current_burst = [curr]
@@ -364,9 +366,11 @@ def _classify_bursts_and_singles(photos: list[MediaMetadata], class_config: dict
         first = group[0]
         y, m, d = first.date_str.split("-")
         if len(group) >= 2:
+            burst_id = f"rajada_{first.date_str}_{first.time_str}"
             bdir = Path("2_AlbunsDatas") / y / m / d / f"rajada_{first.time_str}"
             cat = "rajada"
         else:
+            burst_id = ""
             bdir = Path("2_AlbunsDatas") / y / m / d
             cat = "avulsa"
 
@@ -377,6 +381,7 @@ def _classify_bursts_and_singles(photos: list[MediaMetadata], class_config: dict
                 category=cat,
                 relative_dest_dir=bdir,
                 target_filename=target_name,
+                burst_id=burst_id,
             ))
 
 def _classify_timelapse(

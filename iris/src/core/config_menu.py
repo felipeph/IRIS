@@ -129,6 +129,12 @@ def _menu_organization_classification(console: Console):
         tol_val = config.get("classification.timelapse_normal.tolerance_ratio", config.get("classification.timelapse_tolerance_ratio", 0.25))
         table.add_row("9", "Tolerância Cadência Normal (ratio)", "classification.timelapse_normal.tolerance_ratio", f"{tol_val:.2f} ({int(tol_val*100)}%)")
 
+        burst_enabled = config.get("classification.enable_burst_detection", True)
+        table.add_row("10", "Detecção de Fotos em Rajada", "classification.enable_burst_detection", "[green]Ativado[/green]" if burst_enabled else "[red]Desativado[/red]")
+        
+        burst_int_val = config.get("classification.burst_interval_seconds", 1.5)
+        table.add_row("11", "Intervalo Máx Rajada (s)", "classification.burst_interval_seconds", str(burst_int_val))
+
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
         
@@ -213,6 +219,24 @@ def _menu_organization_classification(console: Console):
                 console.print("[green]Salvo![/green]")
             except ValueError:
                 console.print("[red]Valor deve ser entre 0.01 e 1.99![/red]")
+            time.sleep(1)
+        elif choice == "10":
+            curr = config.get("classification.enable_burst_detection", True)
+            new_val = Confirm.ask("Organizar automaticamente fotos consecutivas em pastas de rajada?", default=curr)
+            config.set("classification.enable_burst_detection", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "11":
+            curr = config.get("classification.burst_interval_seconds", 1.5)
+            new_val = Prompt.ask("Intervalo máximo entre fotos para agrupar em rajada (segundos)", default=str(curr))
+            try:
+                val_float = float(new_val)
+                if val_float <= 0:
+                    raise ValueError
+                config.set("classification.burst_interval_seconds", val_float)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número positivo maior que zero![/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")
