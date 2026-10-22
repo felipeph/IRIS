@@ -35,13 +35,17 @@ class VideoBirdProcessor:
         target_frames: int = 15,
         min_interval_sec: float = 0.5,
         max_interval_sec: float = 5.0,
-        min_confident_crops: int = 3,
-        max_crops_to_classify: int = 15,
+        min_confident_crops: int = 2,
+        max_crops_to_classify: int = 5,
+        lat: Optional[float] = None,
+        lng: Optional[float] = None,
+        accuracy: Optional[float] = None,
+        observed_on: Optional[Any] = None,
         debug_crops_dir: Optional[Path] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Amostra o clipe de vídeo adaptativamente com base em sua duração,
-        ranqueia os recortes mais nítidos e vota a espécie predominante.
+        ranqueia os recortes mais nítidos pelo operador Laplaciano e vota a espécie predominante.
         """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -118,7 +122,7 @@ class VideoBirdProcessor:
         if not candidates:
             return None
 
-        # Ranqueia pelos melhores scores de nitidez
+        # Ranqueia pelos melhores scores de nitidez e seleciona até max_crops_to_classify
         candidates.sort(key=lambda x: x["score"], reverse=True)
         selected_crops = candidates[:max_crops_to_classify]
 
@@ -129,7 +133,18 @@ class VideoBirdProcessor:
         best_crop_bgr = selected_crops[0]["bgr_img"]
 
         for i, item in enumerate(selected_crops):
-            preds = self.classifier.classify_crop(item["pil_img"], top_k=3, use_tta=True)
+            preds = self.classifier.classify_crop(
+                item["pil_img"],
+                top_k=3,
+                use_tta=True,
+                lat=lat,
+                lng=lng,
+                accuracy=accuracy,
+                observed_on=observed_on
+            )
+            if not preds:
+                continue
+
             top1 = preds[0]
             sp_key = (top1["scientific_name"], top1["common_name"])
             votes[sp_key] += top1["confidence"]
@@ -140,6 +155,9 @@ class VideoBirdProcessor:
                     "family": top1.get("family", ""),
                     "order": top1.get("order", "")
                 }
+
+        if not votes:
+            return None
 
         total_weight = sum(votes.values())
         sorted_votes = sorted(votes.items(), key=lambda x: x[1], reverse=True)

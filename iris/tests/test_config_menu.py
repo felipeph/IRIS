@@ -126,16 +126,19 @@ def test_timelapse_long_exposure_fpi_edit(mock_console):
 
 
 def test_bird_id_menu_edit(mock_console):
-    """Testa edição do limiar de alta certeza no menu de aves."""
-    original_conf = config.get("modules.bird_id.min_species_confidence", 0.75)
+    """Testa edição do limiar de alta certeza e prior geográfico no menu de aves."""
+    original_conf = config.get("modules.bird_id.min_species_confidence", 0.70)
+    original_lat = config.get("modules.bird_id.inaturalist.default_lat", -19.92)
     try:
-        # Opção 2 -> novo limiar 0.85, depois 0 para sair
-        with patch("src.core.config_menu.Prompt.ask", side_effect=["2", "0.85", "0"]), \
+        # Opção 3 -> novo limiar 0.85, Opção 10 -> lat -20.50, depois 0 para sair
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["3", "0.85", "10", "-20.50", "0"]), \
              patch("src.core.config_menu.time.sleep"):
             _menu_bird_id(mock_console)
             assert config.get("modules.bird_id.min_species_confidence") == 0.85
+            assert config.get("modules.bird_id.inaturalist.default_lat") == -20.50
     finally:
         config.set("modules.bird_id.min_species_confidence", original_conf)
+        config.set("modules.bird_id.inaturalist.default_lat", original_lat)
 
 
 

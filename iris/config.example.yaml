@@ -62,16 +62,26 @@ modules:
     windows_toast: true
   bird_id:
     enabled: true
+    classifier_type: "inaturalist"       # Provedor taxonômico: 'inaturalist' (API recomendada) ou 'bioclip' (local zero-shot)
     yolo_model: "yolov8s.pt"
     yolo_confidence: 0.25
-    min_species_confidence: 0.75          # Limiar de alta certeza para renomeação, subpasta e tags EXIF
+    min_species_confidence: 0.70          # Limiar de alta certeza para renomeação, subpasta e tags EXIF
     rename_files: true                   # Renomeação tripla com [Nome_PT]_[Nome_Cientifico]_[Nome_EN]
     organize_in_subfolders: true         # Organiza em subpasta com nome popular da ave dentro da categoria
     write_exif_tags: true                # Injeta palavras-chave IPTC/EXIF/XMP via ExifTool
     video_target_frames: 15              # Alvo de frames amostrados proporcionalmente à duração do vídeo
-    video_min_confident_crops: 3         # Mínimo de recortes nítidos da mesma espécie para validar o vídeo
+    video_max_crops: 5                   # Quantidade de recortes mais nítidos enviados para votação ponderada
+    video_min_confident_crops: 2         # Mínimo de recortes nítidos da mesma espécie para validar o vídeo
     zoom_threshold_mm: 300.0             # Distância focal equivalente mínima para filtrar teleobjetivas
     save_crops: true                     # Salva recortes de alta resolução na pasta do projeto
+    inaturalist:
+      api_url: "https://api.inaturalist.org/v2/computervision/score_image"
+      credentials_file: "secrets/inaturalist.json"
+      default_lat: -19.92                # Latitude padrão para fotos sem GPS (prior geográfico regional)
+      default_lng: -43.94                # Longitude padrão para fotos sem GPS
+      positional_accuracy_meters: 25000  # Raio de confiança/precisão geográfica em metros (ex: 25km)
+      request_delay_seconds: 1.0         # Intervalo entre requisições para rate-limiting seguro
+      use_exif_gps: true                 # Extrai GPS nativo do EXIF da foto quando disponível
   cleanup:
     auto_clean: true
     allow_permanent_sd_clean: false   # Permite exclusão permanente no SD se Lixeira não for suportada (default: false - Zero Data Loss)
@@ -163,7 +173,7 @@ pipeline:
   - enabled: true
     id: bird_id
     module: src.modules.bird_id.stage
-    name: Identificação de Aves (YOLO + BioCLIP)
+    name: Identificação de Aves (YOLO + iNaturalist)
   - enabled: true
     id: astro_stack
     module: src.modules.astro_stack.stage

@@ -83,7 +83,7 @@ def test_bird_classifier_mocked(mock_tokenizer_func, mock_create_model):
     mock_model.encode_text.return_value = torch.randn(95, 512)
     mock_model.encode_image.return_value = torch.randn(2, 512)
 
-    classifier = BirdClassifier(device="cpu")
+    classifier = BirdClassifier(device="cpu", classifier_type="bioclip")
     dummy_img = Image.new("RGB", (100, 100), color="blue")
     preds = classifier.classify_crop(dummy_img, top_k=3, use_tta=True)
 
@@ -91,6 +91,39 @@ def test_bird_classifier_mocked(mock_tokenizer_func, mock_create_model):
     assert "scientific_name" in preds[0]
     assert "common_name" in preds[0]
     assert "confidence" in preds[0]
+
+
+def test_bird_classifier_inaturalist_mocked():
+    mock_client = MagicMock()
+    mock_client.score_image.return_value = [
+        {
+            "scientific_name": "Pitangus sulphuratus",
+            "common_name": "Bem-te-vi",
+            "common_name_en": "Great Kiskadee",
+            "family": "Tyrannidae",
+            "order": "Passeriformes",
+            "confidence": 0.95
+        }
+    ]
+
+    classifier = BirdClassifier(classifier_type="inaturalist", inat_client=mock_client)
+    dummy_img = Image.new("RGB", (100, 100), color="green")
+    preds = classifier.classify_crop(
+        dummy_img,
+        top_k=1,
+        lat=-19.92,
+        lng=-43.94,
+        accuracy=25000,
+        observed_on="2026-10-22 09:00:00"
+    )
+
+    assert len(preds) == 1
+    assert preds[0]["common_name"] == "Bem-te-vi"
+    assert mock_client.score_image.called
+    kwargs = mock_client.score_image.call_args[1]
+    assert kwargs["lat"] == -19.92
+    assert kwargs["lng"] == -43.94
+    assert kwargs["positional_accuracy"] == 25000
 
 
 def test_export_bird_review_csv(tmp_path):

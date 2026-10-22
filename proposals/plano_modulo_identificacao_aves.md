@@ -9,8 +9,8 @@ Este documento detalha o estado atual, a arquitetura interna em nível de engenh
 O módulo **IRIS Bird ID** foi concebido para resolver o desafio de triagem e identificação taxonômica automatizada de fauna ornitológica em fotografias superzoom (teleobjetivas $\ge 300\text{mm}$, como a Canon PowerShot SX60 HS de até $1365\text{mm}$) e clipes de vídeo capturados em campo.
 
 Diferente de classificadores monolíticos convencionais que falham quando o animal ocupa uma fração reduzida do enquadramento, o IRIS adota uma **arquitetura desacoplada em duas etapas (Two-Stage Pipeline)**:
-1. **Detecção e Localização Espacial**: Localiza com precisão a ave na imagem de alta resolução e extrai um recorte com margem contextual de preservação de silhueta.
-2. **Classificação Fine-Grained com Prior Geográfico**: Classifica o recorte ampliado usando modelos de visão fundacional biológica (BioCLIP) condicionados a uma lista de espécies com ocorrência geográfica verificada (prior regional de Minas Gerais / Brasil).
+1. **Detecção e Localização Espacial Local (YOLOv8)**: Localiza com precisão a ave na imagem de alta resolução, extrai um recorte com margem contextual de 15% para preservação de silhueta e ranqueia os melhores quadros de vídeo pela nitidez Laplaciana.
+2. **Classificação Taxonômica Global com Prior Geográfico (iNaturalist API)**: Envia o recorte de alta densidade para o motor de visão do iNaturalist condicionado a coordenadas geográficas (`lat`, `lng`), raio de precisão (`positional_accuracy_meters`) e data (`observed_on`), com suporte alternativo ao classificador BioCLIP local.
 
 ```mermaid
 flowchart TD
@@ -20,42 +20,38 @@ flowchart TD
         RawMedia --> Filter
     end
 
-    subgraph Deteccao["2. Detecção & Recorte (YOLOv8s)"]
-        Filter -->|Foto| Imread["safe_imread()"]
+    subgraph Deteccao["2. Detecção & Recorte Local (YOLOv8s)"]
+        Filter -->|Foto| Imread["safe_read_image_or_raw()\n(JPEG ou Preview RAW embutido)"]
         Imread --> YOLO_Photo["YOLOv8s (Classe 14 - Bird)"]
-        YOLO_Photo --> CropPhoto["Recorte com Margem Contextual (15%)"]
+        YOLO_Photo --> CropPhoto["Recorte com Margem Contextual (15%)\n(Densidade focada, ~150 KB)"]
         
-        Filter -->|Vídeo| VideoCap["VideoBirdProcessor\nAmostragem Temporal (ex: cada 2.0s)"]
+        Filter -->|Vídeo| VideoCap["VideoBirdProcessor\nAmostragem Temporal Adaptativa"]
         VideoCap --> YOLO_Video["YOLOv8s em cada frame amostrado"]
         YOLO_Video --> SharpnessFilter["Filtro de Nitidez\n(Variância do Laplaciano)"]
-        SharpnessFilter --> TopCrops["Seleção dos Top N Melhores Recortes"]
+        SharpnessFilter --> TopCrops["Seleção dos Top 5 Melhores Recortes"]
     end
 
-    subgraph Classificacao["3. Classificação Fine-Grained (BioCLIP)"]
-        Catalog["Catálogo Regional MG/BR\n(br_mg_aves.csv)"]
-        TextTokens["Tokens Textuais das Espécies\n('a photo of {sci_name}, a type of bird ({comm_name})')"]
-        Catalog --> TextTokens
-        TextTokens --> PrecomputedEmbeddings["Text Embeddings Pré-computados (512-dim)"]
+    subgraph Classificacao["3. Classificação Taxonômica (iNaturalist API / BioCLIP)"]
+        GeoPrior["Geo-Prior: GPS EXIF ou Padrão MG\n(lat, lng, positional_accuracy)"]
+        INatClient["INaturalistClient\n(OAuth Auto-Refresh / JWT)"]
+        
+        CropPhoto --> INatClient
+        TopCrops --> INatClient
+        GeoPrior --> INatClient
 
-        CropPhoto --> TTA_Photo["Test-Time Augmentation (Original + Flip H)"]
-        TopCrops --> TTA_Video["Test-Time Augmentation (Original + Flip H)"]
-
-        TTA_Photo --> BioCLIP_Photo["BioCLIP Image Encoder"]
-        TTA_Video --> BioCLIP_Video["BioCLIP Image Encoder"]
-
-        BioCLIP_Photo & PrecomputedEmbeddings --> CosineSim_Photo["Similaridade Cosseno + Softmax"]
-        BioCLIP_Video & PrecomputedEmbeddings --> CosineSim_Video["Similaridade Cosseno + Softmax"]
-
-        CosineSim_Video --> WeightedVote["Votação Ponderada Acumulada\n(Top-1s por Frame x Confiança)"]
+        INatClient --> INat_API["POST /v2/computervision/score_image\n(taxon_id=3 Aves)"]
+        INat_API --> JSON_Parse["Parsing Taxonômico Estruturado\n(Nome PT, Nome Científico, Família, Ordem)"]
+        JSON_Parse --> WeightedVote["Votação Ponderada em Vídeos\n(Distribuição de Votos por Espécie)"]
     end
 
-    subgraph Persistencia["4. Persistência & Relatórios"]
-        CosineSim_Photo --> RecordGen["Geração do Registro de Identificação"]
+    subgraph Persistencia["4. Persistência, Arquivos & Metadados"]
+        JSON_Parse --> RecordGen["Geração do Registro de Identificação"]
         WeightedVote --> RecordGen
         
         RecordGen --> DualWrite["SQLite Dual-Write Atômico (RFC 08/09)\n- Banco Local (main.bird_identifications)\n- Banco Central (central.bird_identifications)"]
         RecordGen --> SaveCrop["Salvar Recorte em HD/SSD\n('recortes_aves/crop_*.jpg')"]
-        RecordGen --> ExportCSV["Exportar CSV de Conferência\n('relatorio_aves.csv')"]
+        RecordGen --> TriplaAcao["Ação de Alta Certeza (>= 70%):\n1. Renomeação Tripla [PT]_[Cientifico]_[EN]\n2. Subpasta por Espécie (2_AlbunsDatas/...)\n3. Metadados EXIF/IPTC via ExifTool"]
+        RecordGen --> ExportCSV["Exportar CSV de Conferência ('relatorio_aves.csv')"]
         RecordGen --> RichTable["Renderizar Tabela Rich no Console"]
     end
 ```

@@ -1,19 +1,23 @@
 """
 Classificador Taxonômico de Espécies de Aves (IRIS Bird ID).
-Utiliza BioCLIP (OpenCLIP) para classificação fine-grained zero-shot
-com prior taxonômico regional (Minas Gerais / Brasil).
+Suporta classificação via API de Visão Computacional do iNaturalist (recomendado e padrão)
+ou BioCLIP local (OpenCLIP com catálogo regional).
 """
 
 import csv
+import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
-import torch
 from PIL import Image
+
+from .inaturalist_client import INaturalistClient
+
+logger = logging.getLogger(__name__)
 
 
 def load_species_catalog(csv_path: Path) -> List[Dict[str, str]]:
-    """Carrega lista de espécies a partir de arquivo CSV."""
+    """Carrega lista de espécies a partir de arquivo CSV (usado no modo BioCLIP)."""
     species = []
     with open(csv_path, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -29,40 +33,57 @@ def load_species_catalog(csv_path: Path) -> List[Dict[str, str]]:
 
 
 class BirdClassifier:
-    """Classificador fine-grained de espécies baseado em BioCLIP / OpenCLIP."""
+    """Classificador taxonômico de espécies com suporte a iNaturalist API e BioCLIP."""
 
     def __init__(
         self,
+        classifier_type: str = "inaturalist",
         species_csv_path: Optional[Path] = None,
         model_name: str = "hf-hub:imageomics/bioclip",
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        inat_client: Optional[INaturalistClient] = None,
+        inat_credentials_path: Optional[Union[str, Path]] = None,
+        inat_api_url: Optional[str] = None,
+        inat_request_delay: float = 1.0
     ):
-        if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.classifier_type = (classifier_type or "inaturalist").lower().strip()
+
+        if self.classifier_type == "inaturalist":
+            self.client = inat_client or INaturalistClient(
+                credentials_path=inat_credentials_path,
+                api_url=inat_api_url,
+                request_delay_seconds=inat_request_delay
+            )
+            self.model = None
+            self.species_list = []
         else:
-            self.device = device
+            # Modo BioCLIP local (lazy import para não onerar memória no modo iNaturalist)
+            import torch
+            if device is None:
+                self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            else:
+                self.device = device
 
-        if species_csv_path is None:
-            species_csv_path = Path(__file__).resolve().parent / "species_lists" / "br_mg_aves.csv"
+            if species_csv_path is None:
+                species_csv_path = Path(__file__).resolve().parent / "species_lists" / "br_mg_aves.csv"
 
-        self.species_list = load_species_catalog(species_csv_path)
+            self.species_list = load_species_catalog(species_csv_path)
 
-        import open_clip
-        try:
-            self.model, _, self.preprocess = open_clip.create_model_and_transforms(model_name)
-            self.tokenizer = open_clip.get_tokenizer(model_name)
-        except Exception:
-            # Fallback seguro para ViT-B-32 padrão
-            self.model, _, self.preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
-            self.tokenizer = open_clip.get_tokenizer('ViT-B-32')
+            import open_clip
+            try:
+                self.model, _, self.preprocess = open_clip.create_model_and_transforms(model_name)
+                self.tokenizer = open_clip.get_tokenizer(model_name)
+            except Exception:
+                self.model, _, self.preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
+                self.tokenizer = open_clip.get_tokenizer('ViT-B-32')
 
-        self.model = self.model.to(self.device)
-        self.model.eval()
-
-        # Pré-computa embeddings de texto das espécies cadastradas
-        self._init_text_embeddings()
+            self.model = self.model.to(self.device)
+            self.model.eval()
+            self._init_text_embeddings()
 
     def _init_text_embeddings(self):
+        """Pré-computa embeddings para o catálogo local no modo BioCLIP."""
+        import torch
         prompts = []
         for sp in self.species_list:
             comm_en = sp.get("common_name_en", "")
@@ -79,11 +100,38 @@ class BirdClassifier:
             text_features = self.model.encode_text(tokens)
             self.text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
-    def classify_crop(self, pil_image: Image.Image, top_k: int = 5, use_tta: bool = True) -> List[Dict[str, Any]]:
+    def classify_crop(
+        self,
+        pil_image: Image.Image,
+        top_k: int = 3,
+        use_tta: bool = True,
+        lat: Optional[float] = None,
+        lng: Optional[float] = None,
+        accuracy: Optional[float] = None,
+        observed_on: Optional[Any] = None
+    ) -> List[Dict[str, Any]]:
         """
         Classifica um recorte de ave.
-        Se use_tta=True, realiza Test-Time Augmentation (Original + Espelhamento Horizontal).
+        Se classifier_type == 'inaturalist', consulta a API do iNaturalist com prior geográfico.
+        Se classifier_type == 'bioclip', realiza inferência zero-shot local com OpenCLIP.
         """
+        if self.classifier_type == "inaturalist":
+            try:
+                return self.client.score_image(
+                    image=pil_image,
+                    lat=lat,
+                    lng=lng,
+                    positional_accuracy=accuracy,
+                    observed_on=observed_on,
+                    taxon_id=3,
+                    top_k=top_k
+                )
+            except Exception as e:
+                logger.warning(f"Erro ao consultar API do iNaturalist: {e}")
+                return []
+
+        # Rota BioCLIP local
+        import torch
         imgs = [pil_image]
         if use_tta:
             imgs.append(pil_image.transpose(Image.FLIP_LEFT_RIGHT))
@@ -94,7 +142,6 @@ class BirdClassifier:
         with torch.no_grad():
             image_features = self.model.encode_image(batch_tensors)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            # Média dos embeddings TTA
             mean_features = image_features.mean(dim=0, keepdim=True)
             mean_features = mean_features / mean_features.norm(dim=-1, keepdim=True)
 
@@ -111,6 +158,9 @@ class BirdClassifier:
                 "common_name_en": sp.get("common_name_en", ""),
                 "family": sp.get("family", ""),
                 "order": sp.get("order", ""),
-                "confidence": float(val.item())
+                "confidence": float(val.item()),
+                "vision_score": float(val.item()),
+                "combined_score": float(val.item())
             })
         return predictions
+
