@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.live import Live
 
 from src.core.config import config
+from src.core.logger import log_event
 from src.core.pipeline import PipelineStage
 from src.core.project import Project, init_central_db
 from src.core.ui import ProgressTracker, PipelineUI
@@ -70,14 +71,28 @@ class BirdClassifyStage(PipelineStage):
             # Varre se os recortes já existem na pasta física do IRIS
             for item in project.get_items():
                 p = Path(item.organized_path or item.staging_path or item.original_path)
-                candidate_crop = crops_dest_dir / f"crop_{p.stem}.jpg"
-                if candidate_crop.exists():
-                    records_with_crops.append({
-                        "item_path": str(p),
-                        "is_video": item.meta_is_video or p.suffix.lower() in [".mp4", ".mov", ".m4v"],
-                        "crop_saved_path": str(candidate_crop.resolve()),
-                        "metadata_json": {"detection_status": "detected"}
-                    })
+                is_vid = bool(item.meta_is_video or p.suffix.lower() in [".mp4", ".mov", ".m4v"])
+                if is_vid:
+                    vid_crops = sorted(crops_dest_dir.glob(f"crop_{p.stem}_f*.jpg"))
+                    if vid_crops:
+                        records_with_crops.append({
+                            "item_path": str(p),
+                            "is_video": True,
+                            "crop_saved_path": str(vid_crops[0].resolve()),
+                            "metadata_json": {
+                                "detection_status": "detected",
+                                "video_crops": [{"crop_path": str(vc.resolve())} for vc in vid_crops]
+                            }
+                        })
+                else:
+                    candidate_crop = crops_dest_dir / f"crop_{p.stem}.jpg"
+                    if candidate_crop.exists():
+                        records_with_crops.append({
+                            "item_path": str(p),
+                            "is_video": False,
+                            "crop_saved_path": str(candidate_crop.resolve()),
+                            "metadata_json": {"detection_status": "detected"}
+                        })
 
         if not records_with_crops:
             console.print("[yellow]⚠ Nenhum recorte de ave registrado no banco ou encontrado em disco.[/yellow]")
@@ -240,6 +255,7 @@ class BirdClassifyStage(PipelineStage):
                                     project.add_bird_identification(updated_rec)
                                     classified_records.append(updated_rec)
                 except Exception as e:
+                    log_event(f"Erro ao classificar recorte de {file_name}: {e}", level="error")
                     console.print(f"[yellow]Aviso ao classificar recorte de {file_name}: {e}[/yellow]")
 
                 tracker.update(1)

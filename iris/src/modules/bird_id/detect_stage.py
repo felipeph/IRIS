@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.live import Live
 
 from src.core.config import config
+from src.core.logger import log_event
 from src.core.pipeline import PipelineStage
 from src.core.project import Project, init_central_db
 from src.core.ui import ProgressTracker, PipelineUI
@@ -108,6 +109,10 @@ class BirdDetectStage(PipelineStage):
 
                         if extraction and extraction.get("saved_crops"):
                             best_path = extraction.get("best_crop_path", "")
+                            clean_video_crops = [
+                                {k: v for k, v in sc.items() if k not in ("pil_img", "bgr_img")}
+                                for sc in extraction.get("saved_crops", [])
+                            ]
                             record = {
                                 "item_path": str(file_path),
                                 "is_video": True,
@@ -117,8 +122,8 @@ class BirdDetectStage(PipelineStage):
                                     "duration_sec": extraction.get("duration_sec", 0.0),
                                     "total_sampled_frames": extraction.get("total_sampled_frames", 0),
                                     "detected_bird_frames": extraction.get("detected_bird_frames", 0),
-                                    "video_crops": extraction.get("saved_crops", []),
-                                    "evaluated_crops": len(extraction.get("saved_crops", [])),
+                                    "video_crops": clean_video_crops,
+                                    "evaluated_crops": len(clean_video_crops),
                                     "max_crops_configured": video_max_crops,
                                     "best_crop_path": best_path,
                                     "detection_status": "detected"
@@ -161,6 +166,7 @@ class BirdDetectStage(PipelineStage):
                             project.save_bird_detection(record)
                             detected_count += 1
                 except Exception as e:
+                    log_event(f"Erro ao detectar ave em {file_path.name}: {e}", level="error")
                     console.print(f"[yellow]Aviso ao detectar ave em {file_path.name}: {e}[/yellow]")
 
                 tracker.update(1)

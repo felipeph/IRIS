@@ -149,18 +149,22 @@ class VideoBirdProcessor:
                 safe_imwrite(str(crop_file), c["bgr_img"], quality=95)
                 crop_path_str = str(crop_file.resolve())
 
-            saved_crops.append({
+            crop_entry = {
                 "frame_idx": c["frame_idx"],
                 "timestamp_s": round(c["timestamp_s"], 2),
                 "yolo_conf": round(float(c["yolo_conf"]), 4),
                 "sharpness": round(float(c["sharpness"]), 2),
                 "score": round(float(c["score"]), 2),
-                "crop_path": crop_path_str,
-                "pil_img": c["pil_img"],
-                "bgr_img": c["bgr_img"]
-            })
+                "crop_path": crop_path_str
+            }
+            if not output_dir:
+                crop_entry["pil_img"] = c["pil_img"]
+                crop_entry["bgr_img"] = c["bgr_img"]
+
+            saved_crops.append(crop_entry)
 
         best_crop = saved_crops[0] if saved_crops else None
+        best_crop_bgr = selected_candidates[0]["bgr_img"] if selected_candidates else None
 
         return {
             "duration_sec": duration_sec,
@@ -168,7 +172,7 @@ class VideoBirdProcessor:
             "detected_bird_frames": len(candidates),
             "saved_crops": saved_crops,
             "best_crop_path": best_crop["crop_path"] if best_crop else "",
-            "best_crop_bgr": best_crop["bgr_img"] if best_crop else None
+            "best_crop_bgr": best_crop_bgr
         }
 
     def classify_video_crops(

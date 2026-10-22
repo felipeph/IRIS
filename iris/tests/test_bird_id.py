@@ -526,3 +526,191 @@ def test_video_bird_processor_decoupled(tmp_path):
     assert mock_classifier.classify_crop.call_count == 2
 
 
+@patch("src.modules.bird_id.detect_stage.BirdDetector")
+def test_bird_detect_stage_video_persists_in_sqlite(mock_detector_cls, tmp_path):
+    """Garante que BirdDetectStage processa vídeos, salva recortes e persiste metadados no SQLite sem erro de serialização."""
+    from src.modules.bird_id.detect_stage import BirdDetectStage
+    from src.core.config import config
+    import cv2
+
+    # Cria vídeo sintético
+    video_path = tmp_path / "video_teste.mp4"
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(str(video_path), fourcc, 10.0, (160, 160))
+    for _ in range(15):
+        frame = np.ones((160, 160, 3), dtype=np.uint8) * 100
+        out.write(frame)
+    out.release()
+
+    iris_dest_root = tmp_path / "IRIS_DEST"
+    iris_dest_root.mkdir(parents=True, exist_ok=True)
+    orig_dest = config.get("general.destination_root")
+    config.set("general.destination_root", str(iris_dest_root))
+
+    try:
+        mock_detector = MagicMock()
+        mock_detector_cls.return_value = mock_detector
+        mock_detector.confidence = 0.25
+
+        box_mock = MagicMock()
+        box_mock.conf = [0.91]
+        box_mock.xyxy = [[10, 10, 70, 70]]
+        r_mock = MagicMock()
+        r_mock.boxes = [box_mock]
+        mock_detector.model.predict.return_value = [r_mock]
+
+        proj = Project("video_detect_test_proj")
+        proj.save()
+
+        item = ProjectItem(
+            original_path=str(video_path),
+            staging_path=str(video_path),
+            status="copied",
+            meta_is_video=True
+        )
+        proj.save_item(item)
+
+        stage = BirdDetectStage("bird_detect", "Detecção de Aves")
+        success = stage.run(proj)
+        assert success is True
+
+        # Verifica persistência no SQLite
+        records = proj.list_bird_identifications()
+        assert len(records) == 1
+        rec = records[0]
+        assert rec["is_video"] is True
+        assert rec["crop_saved_path"] != ""
+        assert Path(rec["crop_saved_path"]).exists()
+
+        # Valida que metadados dos recortes são 100% serializáveis e preservam métricas
+        meta = rec["metadata_json"]
+        assert meta["yolo_detected"] is True
+        assert meta["detection_status"] == "detected"
+        assert len(meta["video_crops"]) > 0
+        first_crop = meta["video_crops"][0]
+        assert "crop_path" in first_crop
+        assert "frame_idx" in first_crop
+        assert "score" in first_crop
+        assert "pil_img" not in first_crop
+        assert "bgr_img" not in first_crop
+    finally:
+        config.set("general.destination_root", orig_dest)
+
+
+@patch("src.modules.bird_id.classify_stage.BirdClassifier")
+def test_bird_classify_stage_video_weighted_voting_and_csv(mock_classifier_cls, tmp_path):
+    """Testa a classificação de vídeo na Etapa 7 a partir do registro gerado na Etapa 6."""
+    from src.modules.bird_id.classify_stage import BirdClassifyStage
+    import cv2
+
+    crop1 = tmp_path / "crop_vid_f0.jpg"
+    crop2 = tmp_path / "crop_vid_f5.jpg"
+    cv2.imwrite(str(crop1), np.zeros((40, 40, 3), dtype=np.uint8))
+    cv2.imwrite(str(crop2), np.zeros((40, 40, 3), dtype=np.uint8))
+
+    video_file = tmp_path / "video_passaro.mp4"
+    video_file.write_text("dummy_video")
+
+    proj = Project("video_classify_test_proj")
+    proj.save()
+
+    item = ProjectItem(
+        original_path=str(video_file),
+        staging_path=str(video_file),
+        status="copied",
+        meta_is_video=True
+    )
+    proj.save_item(item)
+
+    proj.save_bird_detection({
+        "item_path": str(video_file),
+        "is_video": True,
+        "crop_saved_path": str(crop1),
+        "metadata_json": {
+            "detection_status": "detected",
+            "duration_sec": 5.0,
+            "video_crops": [
+                {"crop_path": str(crop1), "frame_idx": 0, "score": 100.0, "yolo_conf": 0.95},
+                {"crop_path": str(crop2), "frame_idx": 5, "score": 120.0, "yolo_conf": 0.96}
+            ]
+        }
+    })
+
+    mock_classifier = MagicMock()
+    mock_classifier_cls.return_value = mock_classifier
+    mock_classifier.classify_crop.return_value = [
+        {"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.92, "family": "Tyrannidae", "order": "Passeriformes"}
+    ]
+
+    stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+    success = stage.run(proj)
+    assert success is True
+
+    # Confere dados atualizados no banco
+    rec = proj.get_bird_identification(str(video_file))
+    assert rec is not None
+    assert rec["species_common"] == "Bem-te-vi"
+    assert rec["is_video"] is True
+    assert rec["confidence"] > 0.85
+    assert rec["needs_review"] is False
+
+    # Confere se relatório CSV inclui o vídeo
+    csv_file = proj.project_dir / "relatorio_aves.csv"
+    assert csv_file.exists()
+    content = csv_file.read_text(encoding="utf-8")
+    assert "video_passaro.mp4" in content
+    assert "Bem-te-vi" in content
+
+
+def test_bird_classify_stage_video_fallback_disk_search(tmp_path):
+    """Testa fallback de vídeo no disco quando o banco SQLite não possui registro prévio."""
+    from src.modules.bird_id.classify_stage import BirdClassifyStage
+    from src.core.config import config
+    import cv2
+
+    iris_dest_root = tmp_path / "IRIS_FALLBACK"
+    iris_dest_root.mkdir(parents=True, exist_ok=True)
+    orig_dest = config.get("general.destination_root")
+    config.set("general.destination_root", str(iris_dest_root))
+
+    try:
+        proj = Project("video_fallback_proj")
+        proj.save()
+
+        video_file = tmp_path / "video_avulso.mp4"
+        video_file.write_text("dummy")
+
+        item = ProjectItem(
+            original_path=str(video_file),
+            staging_path=str(video_file),
+            status="copied",
+            meta_is_video=True
+        )
+        proj.save_item(item)
+
+        # Cria recortes físicos no padrão crop_{stem}_f*.jpg
+        crops_dir = iris_dest_root / "10_Aves" / "Recortes" / proj.name
+        crops_dir.mkdir(parents=True, exist_ok=True)
+        crop_f0 = crops_dir / f"crop_{video_file.stem}_f0.jpg"
+        cv2.imwrite(str(crop_f0), np.zeros((30, 30, 3), dtype=np.uint8))
+
+        with patch("src.modules.bird_id.classify_stage.BirdClassifier") as mock_clf_cls:
+            mock_clf = MagicMock()
+            mock_clf_cls.return_value = mock_clf
+            mock_clf.classify_crop.return_value = [
+                {"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.90}
+            ]
+
+            stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+            success = stage.run(proj)
+            assert success is True
+
+        rec = proj.get_bird_identification(str(video_file))
+        assert rec is not None
+        assert rec["is_video"] is True
+        assert rec["species_common"] == "Bem-te-vi"
+    finally:
+        config.set("general.destination_root", orig_dest)
+
+
+

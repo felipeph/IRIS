@@ -9,6 +9,20 @@ import sqlite3
 from typing import List, Dict, Any, Optional
 
 
+def _sanitize_meta_dict(val: Any) -> Any:
+    """Garante recursivamente que dicionários e listas contenham apenas tipos serializáveis em JSON."""
+    if isinstance(val, dict):
+        return {k: _sanitize_meta_dict(v) for k, v in val.items() if k not in ("pil_img", "bgr_img")}
+    elif isinstance(val, (list, tuple)):
+        return [_sanitize_meta_dict(item) for item in val]
+    elif hasattr(val, "item"):
+        return val.item()
+    elif isinstance(val, (str, int, float, bool)) or val is None:
+        return val
+    else:
+        return str(val)
+
+
 class ProjectBirdsMixin:
     """Mixin com operações relativas à identificação e classificação de espécies de aves."""
 
@@ -37,7 +51,8 @@ class ProjectBirdsMixin:
                 merged_meta.update(meta_val)
                 meta_val = merged_meta
 
-        meta_json_str = json.dumps(meta_val)
+        meta_val = _sanitize_meta_dict(meta_val)
+        meta_json_str = json.dumps(meta_val, default=str)
 
         params = (
             self.name,
@@ -93,7 +108,11 @@ class ProjectBirdsMixin:
         record_copy["project_name"] = self.name
 
         meta_val = record_copy.get("metadata_json", {})
-        meta_json_str = json.dumps(meta_val) if isinstance(meta_val, dict) else str(meta_val)
+        if isinstance(meta_val, dict):
+            meta_val = _sanitize_meta_dict(meta_val)
+            meta_json_str = json.dumps(meta_val, default=str)
+        else:
+            meta_json_str = str(meta_val)
 
         params = (
             self.name,
