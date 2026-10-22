@@ -8,12 +8,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import cv2
+from PIL import Image
 from rich.console import Console
 from rich.live import Live
 
 from src.core.config import config
 from src.core.pipeline import PipelineStage
-from src.core.project import Project
+from src.core.project import Project, init_central_db
 from src.core.ui import ProgressTracker, PipelineUI
 
 from .detector import BirdDetector, safe_imread, safe_imwrite, safe_read_image_or_raw
@@ -29,6 +31,8 @@ class BirdIdStage(PipelineStage):
     """Estágio do IRIS responsável pela identificação taxonômica de espécies de aves."""
 
     def run(self, project: Project, **kwargs) -> bool:
+        init_central_db()
+
         if not project.has_items():
             console.print("[yellow]Nenhum arquivo no projeto para identificar aves.[/yellow]")
             return True
@@ -142,46 +146,70 @@ class BirdIdStage(PipelineStage):
                             records_to_save.append(record)
                             item_record_pairs.append((item, record))
                     else:
-                        img_bgr = safe_read_image_or_raw(str(file_path))
-                        if img_bgr is not None:
-                            crop_pil, crop_bgr, detected, yolo_c, _ = detector.detect_and_crop(img_bgr)
-                            # Se detectou ave ou fallback de foto estática
-                            if detected or focal is not None:
-                                preds = classifier.classify_crop(crop_pil, top_k=3, use_tta=True)
-                                top1 = preds[0]
-                                conf = top1["confidence"]
-                                needs_review = conf < min_species_conf
+                        crop_pil = None
+                        crop_bgr = None
+                        detected = False
+                        yolo_c = 0.0
 
-                                crop_path_str = ""
-                                if save_crops and crop_bgr is not None:
-                                    crop_file = crops_dest_dir / f"crop_{file_path.stem}.jpg"
+                        # Reutiliza recorte prévio se já existir no disco
+                        orig_stem = getattr(item, "meta_original_stem", "") or file_path.stem
+                        clean_stem = file_path.stem.split("_[")[0]
+                        candidate_crops = [
+                            crops_dest_dir / f"crop_{file_path.stem}.jpg",
+                            crops_dest_dir / f"crop_{clean_stem}.jpg",
+                            crops_dest_dir / f"crop_{orig_stem}.jpg"
+                        ]
+                        existing_crop = next((p for p in candidate_crops if p.exists()), None)
+                        if existing_crop:
+                            crop_bgr = safe_imread(str(existing_crop))
+                            if crop_bgr is not None:
+                                crop_pil = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
+                                detected = True
+                                yolo_c = 1.0
+
+                        if crop_pil is None:
+                            img_bgr = safe_read_image_or_raw(str(file_path))
+                            if img_bgr is not None:
+                                crop_pil, crop_bgr, detected, yolo_c, _ = detector.detect_and_crop(img_bgr)
+
+                        # Se detectou ave ou fallback de foto estática
+                        if crop_pil is not None and (detected or focal is not None):
+                            preds = classifier.classify_crop(crop_pil, top_k=3, use_tta=True)
+                            top1 = preds[0]
+                            conf = top1["confidence"]
+                            needs_review = conf < min_species_conf
+
+                            crop_path_str = ""
+                            if save_crops and crop_bgr is not None:
+                                crop_file = existing_crop or (crops_dest_dir / f"crop_{file_path.stem}.jpg")
+                                if not crop_file.exists():
                                     safe_imwrite(str(crop_file), crop_bgr)
-                                    crop_path_str = str(crop_file)
+                                crop_path_str = str(crop_file)
 
-                                record = {
-                                    "item_path": str(file_path),
-                                    "is_video": False,
-                                    "species_common": top1["common_name"],
-                                    "species_common_en": top1.get("common_name_en", ""),
-                                    "species_scientific": top1["scientific_name"],
-                                    "family": top1.get("family", ""),
-                                    "order": top1.get("order", ""),
-                                    "confidence": conf,
-                                    "top2_common": preds[1]["common_name"] if len(preds) > 1 else "",
-                                    "top2_scientific": preds[1]["scientific_name"] if len(preds) > 1 else "",
-                                    "top2_confidence": preds[1]["confidence"] if len(preds) > 1 else 0.0,
-                                    "top3_common": preds[2]["common_name"] if len(preds) > 2 else "",
-                                    "top3_scientific": preds[2]["scientific_name"] if len(preds) > 2 else "",
-                                    "top3_confidence": preds[2]["confidence"] if len(preds) > 2 else 0.0,
-                                    "needs_review": needs_review,
-                                    "crop_saved_path": crop_path_str,
-                                    "metadata_json": {
-                                        "yolo_detected": detected,
-                                        "yolo_conf": yolo_c
-                                    }
+                            record = {
+                                "item_path": str(file_path),
+                                "is_video": False,
+                                "species_common": top1["common_name"],
+                                "species_common_en": top1.get("common_name_en", ""),
+                                "species_scientific": top1["scientific_name"],
+                                "family": top1.get("family", ""),
+                                "order": top1.get("order", ""),
+                                "confidence": conf,
+                                "top2_common": preds[1]["common_name"] if len(preds) > 1 else "",
+                                "top2_scientific": preds[1]["scientific_name"] if len(preds) > 1 else "",
+                                "top2_confidence": preds[1]["confidence"] if len(preds) > 1 else 0.0,
+                                "top3_common": preds[2]["common_name"] if len(preds) > 2 else "",
+                                "top3_scientific": preds[2]["scientific_name"] if len(preds) > 2 else "",
+                                "top3_confidence": preds[2]["confidence"] if len(preds) > 2 else 0.0,
+                                "needs_review": needs_review,
+                                "crop_saved_path": crop_path_str,
+                                "metadata_json": {
+                                    "yolo_detected": detected,
+                                    "yolo_conf": yolo_c
                                 }
-                                records_to_save.append(record)
-                                item_record_pairs.append((item, record))
+                            }
+                            records_to_save.append(record)
+                            item_record_pairs.append((item, record))
                 except Exception as e:
                     console.print(f"[yellow]Aviso ao processar {file_path.name}: {e}[/yellow]")
 
@@ -201,15 +229,24 @@ class BirdIdStage(PipelineStage):
         # Persistir no banco do projeto
         if records_to_save:
             for rec in records_to_save:
-                project.add_bird_identification(rec)
+                try:
+                    project.add_bird_identification(rec)
+                except Exception as e:
+                    console.print(f"[yellow]Aviso ao persistir identificação de ave ({rec.get('species_common')}): {e}[/yellow]")
 
             # Exportar relatório CSV
-            csv_path = project.project_dir / "relatorio_aves.csv"
-            export_bird_review_csv(records_to_save, csv_path)
+            try:
+                csv_path = project.project_dir / "relatorio_aves.csv"
+                export_bird_review_csv(records_to_save, csv_path)
+            except Exception as e:
+                console.print(f"[yellow]Aviso ao exportar relatório CSV de aves: {e}[/yellow]")
 
             # Renderiza resumo na saída do terminal
-            render_bird_summary_table(records_to_save, console)
-            console.print(f"[bold green]✓ Relatório de revisão gerado com sucesso em:[/bold green] {csv_path}")
+            try:
+                render_bird_summary_table(records_to_save, console)
+                console.print(f"[bold green]OK: Relatório de revisão gerado com sucesso em:[/bold green] {csv_path}")
+            except Exception as e:
+                console.print(f"[yellow]Aviso ao renderizar tabela de aves: {e}[/yellow]")
 
         console.print("[bold green]Identificação de aves concluída![/bold green]")
         return True

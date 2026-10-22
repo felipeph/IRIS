@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from src.core.project import Project, ProjectItem, get_project, create_project, init_central_db
+from src.core.project import Project, ProjectItem, get_project, create_project, init_central_db, CURRENT_SCHEMA_VERSION
 
 @pytest.fixture
 def mock_projects_dir(tmp_path):
@@ -117,7 +117,7 @@ def test_user_version_and_indexes_created(mock_projects_dir):
         cursor = conn.cursor()
         cursor.execute("PRAGMA user_version")
         ver = cursor.fetchone()[0]
-        assert ver == 1
+        assert ver == CURRENT_SCHEMA_VERSION
         
         # Verifica criação dos índices
         cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='items'")
@@ -130,7 +130,7 @@ def test_user_version_and_indexes_created(mock_projects_dir):
         cursor = conn.cursor()
         cursor.execute("PRAGMA user_version")
         ver = cursor.fetchone()[0]
-        assert ver == 1
+        assert ver == CURRENT_SCHEMA_VERSION
 
 def test_db_initialized_caching(mock_projects_dir):
     """Testa se o cache de inicialização em memória evita re-execuções redundantes."""

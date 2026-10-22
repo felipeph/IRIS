@@ -34,7 +34,7 @@ def get_attached_project_connection(project_db_path: Path, central_db_path: Opti
                 raise
     return conn
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 SHARED_TABLES_DDL = [
     """CREATE TABLE IF NOT EXISTS timelapses (
@@ -141,56 +141,48 @@ SHARED_TABLES_DDL = [
 
 def init_central_db(force: bool = False):
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
-    if not force and CENTRAL_DB_PATH.exists():
-        with get_db_connection(CENTRAL_DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA user_version")
-            row = cursor.fetchone()
-            if row and row[0] >= CURRENT_SCHEMA_VERSION:
-                return
-
     with get_db_connection(CENTRAL_DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("PRAGMA user_version")
         row = cursor.fetchone()
         ver = row[0] if row else 0
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS projects (
+                name TEXT PRIMARY KEY,
+                source_path TEXT,
+                current_stage_id TEXT,
+                total_source_files INTEGER,
+                total_source_size_bytes INTEGER,
+                auto_cleanup INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
+                updated_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+            )
+        """)
+        try:
+            cursor.execute("ALTER TABLE projects ADD COLUMN auto_cleanup INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        for ddl in SHARED_TABLES_DDL:
+            cursor.execute(ddl)
+
+        try:
+            cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE timelapses ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
         if ver < CURRENT_SCHEMA_VERSION or force:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS projects (
-                    name TEXT PRIMARY KEY,
-                    source_path TEXT,
-                    current_stage_id TEXT,
-                    total_source_files INTEGER,
-                    total_source_size_bytes INTEGER,
-                    auto_cleanup INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
-                    updated_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
-                )
-            """)
-            try:
-                cursor.execute("ALTER TABLE projects ADD COLUMN auto_cleanup INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-
-            for ddl in SHARED_TABLES_DDL:
-                cursor.execute(ddl)
-
-            try:
-                cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                cursor.execute("ALTER TABLE timelapses ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                cursor.execute("ALTER TABLE edited_videos ADD COLUMN local_file_deleted INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-
             cursor.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
-            conn.commit()
+        conn.commit()
 
 init_central_db()
 
