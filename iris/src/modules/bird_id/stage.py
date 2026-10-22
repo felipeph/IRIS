@@ -16,10 +16,11 @@ from src.core.pipeline import PipelineStage
 from src.core.project import Project
 from src.core.ui import ProgressTracker, PipelineUI
 
-from .detector import BirdDetector, safe_imread, safe_imwrite
+from .detector import BirdDetector, safe_imread, safe_imwrite, safe_read_image_or_raw
 from .classifier import BirdClassifier
 from .video_processor import VideoBirdProcessor
 from .reporter import export_bird_review_csv, render_bird_summary_table
+from .action import apply_bird_organization
 
 console = Console()
 
@@ -40,13 +41,16 @@ class BirdIdStage(PipelineStage):
         # Parâmetros
         yolo_model = module_cfg.get("yolo_model", "yolov8s.pt")
         yolo_conf = float(module_cfg.get("yolo_confidence", 0.25))
-        min_species_conf = float(module_cfg.get("min_species_confidence", 0.60))
+        min_species_conf = float(module_cfg.get("min_species_confidence", 0.75))
         zoom_threshold_mm = float(module_cfg.get("zoom_threshold_mm", 300.0))
-        video_sample_sec = float(module_cfg.get("video_sample_interval_seconds", 2.0))
+        video_sample_sec = module_cfg.get("video_sample_interval_seconds", None)
+        video_target_frames = int(module_cfg.get("video_target_frames", 15))
+        video_min_crops = int(module_cfg.get("video_min_confident_crops", 3))
         save_crops = bool(module_cfg.get("save_crops", True))
 
         # Selecionar itens elegíveis no projeto
         eligible_items = []
+        raw_exts = {".cr2", ".cr3", ".arw", ".dng", ".nef", ".raw"}
         for item in project.get_items():
             file_path = Path(item.organized_path or item.staging_path or item.original_path)
             ext = file_path.suffix.lower()
@@ -56,11 +60,10 @@ class BirdIdStage(PipelineStage):
             focal = getattr(item, "meta_focal_length_equiv", None)
             is_telephoto = focal is not None and focal >= zoom_threshold_mm
             
-            # 2. Ou categoria marcada como ave / fotos e vídeos elegíveis se zoom não estiver disponível
+            # 2. Vídeos ou Fotos (JPEG e RAW)
             if item.meta_is_video or ext in [".mp4", ".mov", ".m4v"]:
                 eligible_items.append((item, file_path, True))
-            elif ext in [".jpg", ".jpeg"]:
-                # Se tiver metadado de zoom, filtra por teleobjetiva; se não tiver, inclui
+            elif ext in [".jpg", ".jpeg"] or ext in raw_exts:
                 if focal is None or is_telephoto:
                     eligible_items.append((item, file_path, False))
 
@@ -84,6 +87,7 @@ class BirdIdStage(PipelineStage):
             crops_dest_dir.mkdir(parents=True, exist_ok=True)
 
         records_to_save = []
+        item_record_pairs = []
         total_files = len(eligible_items)
         tracker = ProgressTracker(total_files, mode="items")
         start_str = datetime.now().strftime("%H:%M:%S")
@@ -94,7 +98,12 @@ class BirdIdStage(PipelineStage):
 
                 try:
                     if is_video:
-                        res = video_proc.process_video(file_path, sample_interval_sec=video_sample_sec)
+                        res = video_proc.process_video(
+                            file_path,
+                            sample_interval_sec=float(video_sample_sec) if video_sample_sec else None,
+                            target_frames=video_target_frames,
+                            min_confident_crops=video_min_crops
+                        )
                         if res:
                             crop_path_str = ""
                             if save_crops and res.get("best_crop_bgr") is not None:
@@ -103,13 +112,17 @@ class BirdIdStage(PipelineStage):
                                 crop_path_str = str(crop_file)
 
                             conf = res["confidence"]
-                            needs_review = conf < min_species_conf
+                            is_confident = res.get("is_confident_detection", True)
+                            needs_review = (conf < min_species_conf) or (not is_confident)
 
                             record = {
                                 "item_path": str(file_path),
                                 "is_video": True,
                                 "species_common": res["species_common"],
+                                "species_common_en": res.get("species_common_en", ""),
                                 "species_scientific": res["species_scientific"],
+                                "family": res.get("family", ""),
+                                "order": res.get("order", ""),
                                 "confidence": conf,
                                 "top2_common": res.get("top2_common", ""),
                                 "top2_scientific": res.get("top2_scientific", ""),
@@ -121,12 +134,15 @@ class BirdIdStage(PipelineStage):
                                 "crop_saved_path": crop_path_str,
                                 "metadata_json": {
                                     "evaluated_crops": res.get("evaluated_crops", 0),
+                                    "species_crops_count": res.get("species_crops_count", 0),
+                                    "min_confident_crops": video_min_crops,
                                     "vote_distribution": res.get("vote_distribution", {})
                                 }
                             }
                             records_to_save.append(record)
+                            item_record_pairs.append((item, record))
                     else:
-                        img_bgr = safe_imread(str(file_path))
+                        img_bgr = safe_read_image_or_raw(str(file_path))
                         if img_bgr is not None:
                             crop_pil, crop_bgr, detected, yolo_c, _ = detector.detect_and_crop(img_bgr)
                             # Se detectou ave ou fallback de foto estática
@@ -146,7 +162,10 @@ class BirdIdStage(PipelineStage):
                                     "item_path": str(file_path),
                                     "is_video": False,
                                     "species_common": top1["common_name"],
+                                    "species_common_en": top1.get("common_name_en", ""),
                                     "species_scientific": top1["scientific_name"],
+                                    "family": top1.get("family", ""),
+                                    "order": top1.get("order", ""),
                                     "confidence": conf,
                                     "top2_common": preds[1]["common_name"] if len(preds) > 1 else "",
                                     "top2_scientific": preds[1]["scientific_name"] if len(preds) > 1 else "",
@@ -162,6 +181,7 @@ class BirdIdStage(PipelineStage):
                                     }
                                 }
                                 records_to_save.append(record)
+                                item_record_pairs.append((item, record))
                 except Exception as e:
                     console.print(f"[yellow]Aviso ao processar {file_path.name}: {e}[/yellow]")
 
@@ -169,6 +189,14 @@ class BirdIdStage(PipelineStage):
                 live.update(PipelineUI.generate_renderable(tracker, "ETAPA: IDENTIFICAÇÃO DE AVES", start_str, total_files, 0.0, file_path.name, "Progresso"))
 
             live.update(PipelineUI.generate_renderable(tracker, "ETAPA: IDENTIFICAÇÃO DE AVES", start_str, total_files, 0.0, "Concluído", "Finalizando"))
+
+        # Executar ação unificada de alta certeza (Renomeação + Subpasta + EXIF)
+        for item, rec in item_record_pairs:
+            try:
+                new_path = apply_bird_organization(item, project, rec, module_cfg)
+                rec["item_path"] = str(new_path)
+            except Exception as e:
+                console.print(f"[yellow]Aviso na organização física da ave {rec.get('species_common')}: {e}[/yellow]")
 
         # Persistir no banco do projeto
         if records_to_save:

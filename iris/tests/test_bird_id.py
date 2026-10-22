@@ -178,3 +178,104 @@ def test_bird_id_stage_with_telephoto_item(mock_classifier_cls, mock_detector_cl
     csv_rep = proj.project_dir / "relatorio_aves.csv"
     assert csv_rep.exists()
 
+
+def test_build_bird_filename():
+    from src.modules.bird_id.action import build_bird_filename
+    original = "2026-09-06_15-10-00_Canon-SX60_16MP_1365mm_IMG_1234.JPG"
+    new_name = build_bird_filename(original, "Bem-te-vi", "Pitangus sulphuratus", "Great Kiskadee")
+    assert "[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]" in new_name
+    assert new_name.endswith(".JPG")
+    assert new_name.startswith("2026-09-06_15-10-00_Canon-SX60_16MP_1365mm_IMG_1234_")
+
+    # Idempotência: não duplica tags se já presentes
+    double_call = build_bird_filename(new_name, "Bem-te-vi", "Pitangus sulphuratus", "Great Kiskadee")
+    assert double_call == new_name
+
+
+@patch("rawpy.imread")
+def test_safe_read_image_or_raw_mocked(mock_rawpy_imread, tmp_path):
+    from src.modules.bird_id.detector import safe_read_image_or_raw
+    import cv2
+    import rawpy
+
+    # Simula extração de thumbnail JPEG embutido
+    dummy_bgr = np.ones((50, 50, 3), dtype=np.uint8) * 100
+    _, jpeg_buf = cv2.imencode(".jpg", dummy_bgr)
+
+    mock_thumb = MagicMock()
+    mock_thumb.format = rawpy.ThumbFormat.JPEG
+    mock_thumb.data = jpeg_buf.tobytes()
+
+    mock_raw = MagicMock()
+    mock_raw.extract_thumb.return_value = mock_thumb
+    mock_rawpy_imread.return_value.__enter__.return_value = mock_raw
+
+    raw_fake = tmp_path / "teste_foto.cr2"
+    raw_fake.write_bytes(b"dummy_raw_data")
+
+    res = safe_read_image_or_raw(str(raw_fake))
+    assert res is not None
+    assert res.shape == (50, 50, 3)
+
+
+def test_apply_bird_organization_high_and_low_certainty(tmp_path):
+    from src.modules.bird_id.action import apply_bird_organization
+    import cv2
+
+    base_dir = tmp_path / "2_AlbunsDatas" / "2026" / "09" / "06"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    photo_file = base_dir / "2026-09-06_15-10-00_SX60_IMG_1234.JPG"
+    cv2.imwrite(str(photo_file), np.zeros((20, 20, 3), dtype=np.uint8))
+
+    proj = Project("test_action_proj")
+    proj.save()
+
+    item = ProjectItem(
+        original_path=str(photo_file),
+        staging_path=str(photo_file),
+        organized_path=str(photo_file),
+        status="organized"
+    )
+    proj.save_item(item)
+
+    cfg = {
+        "min_species_confidence": 0.75,
+        "rename_files": True,
+        "organize_in_subfolders": True,
+        "write_exif_tags": False  # desativa escrita real de EXIF no teste unitário
+    }
+
+    # 1. Caso de Baixa Certeza (confiança 0.60 < 0.75): NÃO deve renomear nem mover
+    low_rec = {
+        "species_common": "Sabiá-laranjeira",
+        "species_scientific": "Turdus rufiventris",
+        "species_common_en": "Rufous-bellied Thrush",
+        "confidence": 0.60,
+        "needs_review": True
+    }
+    path_low = apply_bird_organization(item, proj, low_rec, cfg)
+    assert path_low == photo_file
+    assert photo_file.exists()
+
+    # 2. Caso de Alta Certeza (confiança 0.88 >= 0.75): DEVE mover para subpasta e renomear
+    high_rec = {
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "confidence": 0.88,
+        "needs_review": False
+    }
+    path_high = apply_bird_organization(item, proj, high_rec, cfg)
+    assert path_high != photo_file
+    assert path_high.exists()
+    assert not photo_file.exists()
+    # Verifica que foi movido para subpasta com nome popular
+    assert path_high.parent.name == "Bem-te-vi"
+    # Verifica renomeação tripla
+    assert "[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]" in path_high.name
+    # Verifica atualização no SQLite
+    updated_item = proj.get_item(item.original_path)
+    assert updated_item is not None
+    assert updated_item.organized_path == str(path_high.resolve())
+    assert updated_item.target_filename == path_high.name
+

@@ -813,6 +813,167 @@ def _menu_timelapse_long_exposure(console: Console):
             time.sleep(1)
 
 
+def _menu_bird_id(console: Console):
+    """Sub-menu: Identificação de Aves (YOLO + BioCLIP)."""
+    while True:
+        console.clear()
+        console.print(Panel("[bold yellow]Configurações: Identificação de Aves (YOLO + BioCLIP)[/bold yellow]", expand=False))
+        
+        table = Table(title="Identificação Taxonômica de Aves")
+        table.add_column("Opção", style="cyan", justify="center")
+        table.add_column("Configuração", style="bold white")
+        table.add_column("Chave YAML", style="magenta")
+        table.add_column("Valor Atual", style="green")
+        
+        enabled_val = config.get("modules.bird_id.enabled", True)
+        table.add_row("1", "Ativar Módulo de Aves", "modules.bird_id.enabled", "[green]Sim[/green]" if enabled_val else "[red]Não[/red]")
+        
+        min_conf = config.get("modules.bird_id.min_species_confidence", 0.75)
+        table.add_row("2", "Limiar de Alta Certeza (Confiança)", "modules.bird_id.min_species_confidence", f"{float(min_conf)*100:.0f}%")
+        
+        rename_val = config.get("modules.bird_id.rename_files", True)
+        table.add_row("3", "Renomeação Tripla (PT + Científico + EN)", "modules.bird_id.rename_files", "[green]Sim[/green]" if rename_val else "[red]Não[/red]")
+        
+        subfolder_val = config.get("modules.bird_id.organize_in_subfolders", True)
+        table.add_row("4", "Organizar em Subpasta por Nome Popular", "modules.bird_id.organize_in_subfolders", "[green]Sim[/green]" if subfolder_val else "[red]Não[/red]")
+        
+        exif_val = config.get("modules.bird_id.write_exif_tags", True)
+        table.add_row("5", "Injetar Metadados EXIF/IPTC (ExifTool)", "modules.bird_id.write_exif_tags", "[green]Sim[/green]" if exif_val else "[red]Não[/red]")
+        
+        tf_val = config.get("modules.bird_id.video_target_frames", 15)
+        table.add_row("6", "Alvo de Frames Amostrados em Vídeo", "modules.bird_id.video_target_frames", str(tf_val))
+        
+        crops_val = config.get("modules.bird_id.video_min_confident_crops", 3)
+        table.add_row("7", "Mínimo de Recortes Confiáveis no Vídeo", "modules.bird_id.video_min_confident_crops", str(crops_val))
+        
+        zoom_val = config.get("modules.bird_id.zoom_threshold_mm", 300.0)
+        table.add_row("8", "Limiar de Zoom Teleobjetiva (mm)", "modules.bird_id.zoom_threshold_mm", f"{float(zoom_val):.0f}mm")
+        
+        crops_disk = config.get("modules.bird_id.save_crops", True)
+        table.add_row("9", "Salvar Recortes em Disco (recortes_aves/)", "modules.bird_id.save_crops", "[green]Sim[/green]" if crops_disk else "[red]Não[/red]")
+        
+        yolo_mod = config.get("modules.bird_id.yolo_model", "yolov8s.pt")
+        table.add_row("10", "Modelo Detector YOLOv8", "modules.bird_id.yolo_model", str(yolo_mod))
+        
+        yolo_c = config.get("modules.bird_id.yolo_confidence", 0.25)
+        table.add_row("11", "Confiança Mínima YOLO", "modules.bird_id.yolo_confidence", f"{float(yolo_c)*100:.0f}%")
+        
+        console.print(table)
+        console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
+        
+        choice = Prompt.ask("\nEscolha uma opção para editar", default="0")
+        if choice == "0":
+            break
+        elif choice == "1":
+            curr = config.get("modules.bird_id.enabled", True)
+            new_val = Confirm.ask("Habilitar módulo de identificação de aves no pipeline?", default=curr)
+            config.set("modules.bird_id.enabled", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "2":
+            curr = float(config.get("modules.bird_id.min_species_confidence", 0.75))
+            new_val = Prompt.ask("Limiar de confiança para ações ativas (0.10 a 0.99)", default=f"{curr:.2f}")
+            try:
+                val_f = float(new_val)
+                if 0.10 <= val_f <= 0.99:
+                    config.set("modules.bird_id.min_species_confidence", val_f)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve estar entre 0.10 e 0.99![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número decimal![/red]")
+            time.sleep(1)
+        elif choice == "3":
+            curr = config.get("modules.bird_id.rename_files", True)
+            new_val = Confirm.ask("Renomear arquivos incluindo [Nome_PT]_[Cientifico]_[Nome_EN]?", default=curr)
+            config.set("modules.bird_id.rename_files", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "4":
+            curr = config.get("modules.bird_id.organize_in_subfolders", True)
+            new_val = Confirm.ask("Mover para subpasta com nome popular da espécie dentro da categoria?", default=curr)
+            config.set("modules.bird_id.organize_in_subfolders", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "5":
+            curr = config.get("modules.bird_id.write_exif_tags", True)
+            new_val = Confirm.ask("Injetar tags taxonômicas nos metadados EXIF/IPTC via ExifTool?", default=curr)
+            config.set("modules.bird_id.write_exif_tags", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "6":
+            curr = config.get("modules.bird_id.video_target_frames", 15)
+            new_val = Prompt.ask("Quantidade alvo de frames amostrados proporcionalmente à duração (5 a 60)", default=str(curr))
+            try:
+                tf_int = int(new_val)
+                if 5 <= tf_int <= 60:
+                    config.set("modules.bird_id.video_target_frames", tf_int)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve ser entre 5 e 60![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "7":
+            curr = config.get("modules.bird_id.video_min_confident_crops", 3)
+            new_val = Prompt.ask("Mínimo de recortes com a mesma espécie para consolidar o vídeo (1 a 15)", default=str(curr))
+            try:
+                mc_int = int(new_val)
+                if 1 <= mc_int <= 15:
+                    config.set("modules.bird_id.video_min_confident_crops", mc_int)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve ser entre 1 e 15![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "8":
+            curr = config.get("modules.bird_id.zoom_threshold_mm", 300.0)
+            new_val = Prompt.ask("Distância focal equivalente mínima para elegibilidade (mm)", default=f"{float(curr):.0f}")
+            try:
+                val_f = float(new_val)
+                if val_f >= 50.0:
+                    config.set("modules.bird_id.zoom_threshold_mm", val_f)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve ser no mínimo 50mm![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser numérico![/red]")
+            time.sleep(1)
+        elif choice == "9":
+            curr = config.get("modules.bird_id.save_crops", True)
+            new_val = Confirm.ask("Salvar recortes ampliados na pasta 'recortes_aves/'?", default=curr)
+            config.set("modules.bird_id.save_crops", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "10":
+            console.print("Modelos disponíveis: [bold]yolov8n.pt[/bold] (Nano/Rápido), [bold]yolov8s.pt[/bold] (Small/Padrão), [bold]yolov8m.pt[/bold] (Medium)")
+            curr = config.get("modules.bird_id.yolo_model", "yolov8s.pt")
+            new_val = Prompt.ask("Escolha o modelo YOLO", default=str(curr)).strip()
+            if new_val in ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt"]:
+                config.set("modules.bird_id.yolo_model", new_val)
+                console.print("[green]Salvo![/green]")
+            else:
+                console.print("[red]Modelo inválido![/red]")
+            time.sleep(1)
+        elif choice == "11":
+            curr = float(config.get("modules.bird_id.yolo_confidence", 0.25))
+            new_val = Prompt.ask("Confiança mínima para detecção YOLO (0.10 a 0.90)", default=f"{curr:.2f}")
+            try:
+                val_f = float(new_val)
+                if 0.10 <= val_f <= 0.90:
+                    config.set("modules.bird_id.yolo_confidence", val_f)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve estar entre 0.10 e 0.90![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número decimal![/red]")
+            time.sleep(1)
+        else:
+            console.print("[red]Opção inválida.[/red]")
+            time.sleep(1)
+
+
 def show_config_menu(console: Console = None):
     """Menu principal das configurações: hub de categorias e subpáginas."""
     if console is None:
@@ -835,6 +996,7 @@ def show_config_menu(console: Console = None):
         console.print("  [cyan]5.[/cyan] 📢 YouTube & Notificações [dim](Privacidade, Playlists, Canal NTFY)[/dim]")
         console.print("  [cyan]6.[/cyan] 🌕 Astrofotografia Lunar [dim](Empilhamento PSS, Percentuais, Wavelets, Limbo)[/dim]")
         console.print("  [cyan]7.[/cyan] 🌌 Timelapse Longa Exposição [dim](Mín Fotos, Shutter Mín, Gaps Buffer, Render)[/dim]")
+        console.print("  [cyan]8.[/cyan] 🦜 Identificação de Aves [dim](YOLOv8 + BioCLIP, Renomeação, EXIF, Vídeo)[/dim]")
         console.print("  [cyan]0.[/cyan] ↩ Voltar")
         
         choice = Prompt.ask("\nSelecione uma opção", default="0")
@@ -854,6 +1016,8 @@ def show_config_menu(console: Console = None):
             _menu_astro(console)
         elif choice == "7":
             _menu_timelapse_long_exposure(console)
+        elif choice == "8":
+            _menu_bird_id(console)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)

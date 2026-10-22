@@ -31,12 +31,17 @@ class VideoBirdProcessor:
     def process_video(
         self,
         video_path: Path,
-        sample_interval_sec: float = 2.0,
+        sample_interval_sec: Optional[float] = None,
+        target_frames: int = 15,
+        min_interval_sec: float = 0.5,
+        max_interval_sec: float = 5.0,
+        min_confident_crops: int = 3,
         max_crops_to_classify: int = 15,
         debug_crops_dir: Optional[Path] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Amostra o vídeo, ranqueia os recortes mais nítidos e vota a espécie predominante.
+        Amostra o clipe de vídeo adaptativamente com base em sua duração,
+        ranqueia os recortes mais nítidos e vota a espécie predominante.
         """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -45,7 +50,16 @@ class VideoBirdProcessor:
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration_sec = total_frames / fps
-        frame_step = max(1, int(fps * sample_interval_sec))
+
+        # Amostragem adaptativa baseada na duração do clipe se sample_interval_sec não for fixo
+        if sample_interval_sec is not None:
+            actual_interval = sample_interval_sec
+        else:
+            tf = max(1, target_frames)
+            adaptive_interval = duration_sec / tf
+            actual_interval = max(min_interval_sec, min(max_interval_sec, adaptive_interval))
+
+        frame_step = max(1, int(fps * actual_interval))
 
         candidates = []
         frame_idx = 0
@@ -69,7 +83,7 @@ class VideoBirdProcessor:
                         if bw < 40 or bh < 40:
                             continue
 
-                        # Margem de 15%
+                        # Margem contextual de 15%
                         mx = int(bw * 0.15)
                         my = int(bh * 0.15)
                         crop_x1 = max(0, x1 - mx)
@@ -110,7 +124,7 @@ class VideoBirdProcessor:
 
         votes = defaultdict(float)
         vote_counts = Counter()
-        all_top1s = []
+        species_meta = {}
 
         best_crop_bgr = selected_crops[0]["bgr_img"]
 
@@ -120,13 +134,22 @@ class VideoBirdProcessor:
             sp_key = (top1["scientific_name"], top1["common_name"])
             votes[sp_key] += top1["confidence"]
             vote_counts[sp_key] += 1
-            all_top1s.append(preds)
+            if sp_key not in species_meta:
+                species_meta[sp_key] = {
+                    "common_en": top1.get("common_name_en", ""),
+                    "family": top1.get("family", ""),
+                    "order": top1.get("order", "")
+                }
 
         total_weight = sum(votes.values())
         sorted_votes = sorted(votes.items(), key=lambda x: x[1], reverse=True)
 
         predominant_sci, predominant_comm = sorted_votes[0][0]
         confidence_pct = (sorted_votes[0][1] / total_weight) if total_weight > 0 else 0.0
+        meta_top1 = species_meta.get((predominant_sci, predominant_comm), {})
+
+        crops_for_top_species = vote_counts[(predominant_sci, predominant_comm)]
+        is_confident = crops_for_top_species >= min_confident_crops
 
         # Top 2 e Top 3
         top2_sci, top2_comm, top2_conf = "", "", 0.0
@@ -144,8 +167,14 @@ class VideoBirdProcessor:
             "duration_sec": duration_sec,
             "evaluated_crops": len(selected_crops),
             "species_common": predominant_comm,
+            "species_common_en": meta_top1.get("common_en", ""),
             "species_scientific": predominant_sci,
+            "family": meta_top1.get("family", ""),
+            "order": meta_top1.get("order", ""),
             "confidence": confidence_pct,
+            "species_crops_count": crops_for_top_species,
+            "min_confident_crops": min_confident_crops,
+            "is_confident_detection": is_confident,
             "top2_common": top2_comm,
             "top2_scientific": top2_sci,
             "top2_confidence": top2_conf,

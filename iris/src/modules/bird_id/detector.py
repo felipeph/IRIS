@@ -22,6 +22,37 @@ def safe_imread(path_str: str) -> Optional[np.ndarray]:
         return None
 
 
+def safe_read_image_or_raw(path_str: str) -> Optional[np.ndarray]:
+    """
+    Lê imagem convencional (JPEG/PNG) ou arquivo RAW (.CR2, .CR3, .ARW, .DNG, .NEF).
+    Para arquivos RAW, extrai o preview JPEG embutido (~30ms) sem custo de demosaicing completo.
+    """
+    ext = os.path.splitext(path_str)[1].lower()
+    raw_extensions = {".cr2", ".cr3", ".arw", ".dng", ".nef", ".raw"}
+    if ext in raw_extensions:
+        try:
+            import rawpy
+            with rawpy.imread(path_str) as raw:
+                try:
+                    thumb = raw.extract_thumb()
+                    if thumb.format == rawpy.ThumbFormat.JPEG:
+                        img = cv2.imdecode(np.frombuffer(thumb.data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                        if img is not None:
+                            return img
+                    elif thumb.format == rawpy.ThumbFormat.BITMAP:
+                        return cv2.cvtColor(thumb.data, cv2.COLOR_RGB2BGR)
+                except Exception:
+                    pass
+
+                # Fallback se não tiver thumbnail embutido: meio-tamanho rápido
+                rgb = raw.postprocess(half_size=True, use_camera_wb=True)
+                return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        except Exception:
+            pass
+
+    return safe_imread(path_str)
+
+
 def safe_imwrite(path_str: str, img_bgr: np.ndarray, quality: int = 95) -> bool:
     """Salva imagem em disco suportando caminhos com acentuação."""
     try:

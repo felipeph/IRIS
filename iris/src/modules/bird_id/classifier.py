@@ -21,6 +21,7 @@ def load_species_catalog(csv_path: Path) -> List[Dict[str, str]]:
             species.append({
                 "scientific_name": row["scientific_name"].strip(),
                 "common_name": row["common_name_pt"].strip(),
+                "common_name_en": row.get("common_name_en", "").strip(),
                 "family": row.get("family", "").strip(),
                 "order": row.get("order", "").strip()
             })
@@ -62,10 +63,17 @@ class BirdClassifier:
         self._init_text_embeddings()
 
     def _init_text_embeddings(self):
-        prompts = [
-            f"a photo of {sp['scientific_name']}, a type of bird ({sp['common_name']})"
-            for sp in self.species_list
-        ]
+        prompts = []
+        for sp in self.species_list:
+            comm_en = sp.get("common_name_en", "")
+            comm_pt = sp.get("common_name", "")
+            sci = sp.get("scientific_name", "")
+            family = sp.get("family", "")
+            if comm_en and comm_pt != comm_en:
+                prompts.append(f"a photo of {sci}, also known as {comm_en} or {comm_pt}, a type of bird ({family})")
+            else:
+                prompts.append(f"a photo of {sci}, a type of bird ({comm_pt})")
+
         tokens = self.tokenizer(prompts).to(self.device)
         with torch.no_grad():
             text_features = self.model.encode_text(tokens)
@@ -100,6 +108,9 @@ class BirdClassifier:
             predictions.append({
                 "scientific_name": sp["scientific_name"],
                 "common_name": sp["common_name"],
+                "common_name_en": sp.get("common_name_en", ""),
+                "family": sp.get("family", ""),
+                "order": sp.get("order", ""),
                 "confidence": float(val.item())
             })
         return predictions

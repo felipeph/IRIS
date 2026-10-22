@@ -97,6 +97,7 @@ nav:
       - 09. Empilhamento Lunar (PSS): modulos/09-astro-stack.md
       - 10. Wavelets À Trous (Sharpening): modulos/10-astro-wavelets.md
       - 11. CLI iris-astro: modulos/11-cli-astro.md
+      - 12. Identificação de Aves (YOLO + BioCLIP): modulos/12-bird-id.md
   - IA & Engenharia:
       - Guia para Agentes de IA: ia-e-engenharia/contexto-para-ia.md
       - Suíte de Testes (pytest): ia-e-engenharia/suite-de-testes.md

@@ -17,6 +17,7 @@ def export_bird_review_csv(records: List[Dict[str, Any]], output_csv_path: Path)
         "item_path",
         "is_video",
         "species_common",
+        "species_common_en",
         "species_scientific",
         "confidence",
         "needs_review",
@@ -44,7 +45,7 @@ def render_bird_summary_table(records: List[Dict[str, Any]], console: Console):
     table = Table(title="[bold green]IRIS Bird ID - Resumo de Aves Identificadas[/bold green]", show_header=True, header_style="bold cyan")
     table.add_column("Tipo", style="dim", width=6)
     table.add_column("Arquivo / Clipe", style="white", min_width=25)
-    table.add_column("Espécie Identificada", style="bold green", min_width=20)
+    table.add_column("Espécie Identificada (PT / EN)", style="bold green", min_width=24)
     table.add_column("Nome Científico", style="italic", min_width=20)
     table.add_column("Confiança", justify="right", width=10)
     table.add_column("Revisão?", justify="center", width=9)
@@ -53,15 +54,17 @@ def render_bird_summary_table(records: List[Dict[str, Any]], console: Console):
         tipo = "Vídeo" if r.get("is_video") else "Foto"
         fname = Path(r.get("item_path", "")).name
         comm = r.get("species_common", "Desconhecido")
+        comm_en = r.get("species_common_en", "")
+        display_comm = f"{comm} ({comm_en})" if comm_en else comm
         sci = r.get("species_scientific", "")
         conf = float(r.get("confidence", 0.0)) * 100
         needs_rev = r.get("needs_review", False)
 
         rev_badge = "[bold red]SIM[/bold red]" if needs_rev else "[green]Não[/green]"
         conf_str = f"{conf:.1f}%"
-        if conf < 65.0:
+        if conf < 75.0:
             conf_str = f"[yellow]{conf_str}[/yellow]"
 
-        table.add_row(tipo, fname, comm, sci, conf_str, rev_badge)
+        table.add_row(tipo, fname, display_comm, sci, conf_str, rev_badge)
 
     console.print(table)

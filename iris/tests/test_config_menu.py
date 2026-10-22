@@ -10,7 +10,8 @@ from src.core.config_menu import (
     _menu_timelapse,
     _menu_timelapse_long_exposure,
     _menu_video_edit,
-    _menu_youtube_notifications
+    _menu_youtube_notifications,
+    _menu_bird_id
 )
 
 @pytest.fixture
@@ -27,6 +28,7 @@ def test_config_menu_subpages_exit(mock_console):
         _menu_timelapse_long_exposure(mock_console)
         _menu_video_edit(mock_console)
         _menu_youtube_notifications(mock_console)
+        _menu_bird_id(mock_console)
 
 def test_show_config_menu_hub(mock_console):
     """Testa a navegação no menu hub principal saindo com 0."""
@@ -42,6 +44,7 @@ def test_show_config_menu_routes_to_subpages(mock_console):
         ("3", "_menu_timelapse"),
         ("4", "_menu_video_edit"),
         ("5", "_menu_youtube_notifications"),
+        ("8", "_menu_bird_id"),
     ]:
         with patch("src.core.config_menu.Prompt.ask", side_effect=[opt, "0"]), \
              patch(f"src.core.config_menu.{target_func}") as mock_sub, \
@@ -120,6 +123,19 @@ def test_timelapse_long_exposure_fpi_edit(mock_console):
             assert config.get("modules.timelapse_long_exposure.frames_per_image") == 3
     finally:
         config.set("modules.timelapse_long_exposure.frames_per_image", original_fpi)
+
+
+def test_bird_id_menu_edit(mock_console):
+    """Testa edição do limiar de alta certeza no menu de aves."""
+    original_conf = config.get("modules.bird_id.min_species_confidence", 0.75)
+    try:
+        # Opção 2 -> novo limiar 0.85, depois 0 para sair
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["2", "0.85", "0"]), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_bird_id(mock_console)
+            assert config.get("modules.bird_id.min_species_confidence") == 0.85
+    finally:
+        config.set("modules.bird_id.min_species_confidence", original_conf)
 
 
 

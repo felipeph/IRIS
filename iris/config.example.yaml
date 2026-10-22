@@ -64,9 +64,13 @@ modules:
     enabled: true
     yolo_model: "yolov8s.pt"
     yolo_confidence: 0.25
-    min_species_confidence: 0.60          # Abaixo deste limiar marca needs_review=True
+    min_species_confidence: 0.75          # Limiar de alta certeza para renomeação, subpasta e tags EXIF
+    rename_files: true                   # Renomeação tripla com [Nome_PT]_[Nome_Cientifico]_[Nome_EN]
+    organize_in_subfolders: true         # Organiza em subpasta com nome popular da ave dentro da categoria
+    write_exif_tags: true                # Injeta palavras-chave IPTC/EXIF/XMP via ExifTool
+    video_target_frames: 15              # Alvo de frames amostrados proporcionalmente à duração do vídeo
+    video_min_confident_crops: 3         # Mínimo de recortes nítidos da mesma espécie para validar o vídeo
     zoom_threshold_mm: 300.0             # Distância focal equivalente mínima para filtrar teleobjetivas
-    video_sample_interval_seconds: 2.0   # Passo temporal para amostragem em vídeos
     save_crops: true                     # Salva recortes de alta resolução na pasta do projeto
   cleanup:
     auto_clean: true
