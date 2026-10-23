@@ -5,11 +5,13 @@ Testes unitários automatizados para o módulo de Identificação de Aves (BirdI
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import cv2
 import pytest
 import numpy as np
 from PIL import Image
 
-from src.core.project import Project, ProjectItem
+from src.core.config import config
+from src.core.project import Project, ProjectItem, create_project
 from src.core.pipeline import PipelineRunner
 from src.modules.bird_id.detector import BirdDetector
 from src.modules.bird_id.classifier import BirdClassifier, load_species_catalog
@@ -224,7 +226,7 @@ def test_bird_id_stage_with_telephoto_item(mock_classifier_cls, mock_detector_cl
 
 
 @patch("src.modules.bird_id.detect_stage.BirdDetector")
-def test_bird_detect_stage_saves_only_in_iris_root(mock_detector_cls, tmp_path):
+def test_bird_detect_stage_saves_only_in_iris_root(mock_detector_cls, tmp_path, monkeypatch):
     from src.modules.bird_id.detect_stage import BirdDetectStage
     from src.core.config import config
     import cv2
@@ -237,46 +239,43 @@ def test_bird_detect_stage_saves_only_in_iris_root(mock_detector_cls, tmp_path):
 
     iris_dest_root = tmp_path / "IRIS_ROOT"
     iris_dest_root.mkdir(parents=True, exist_ok=True)
-    orig_dest = config.get("general.destination_root")
-    config.set("general.destination_root", str(iris_dest_root))
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: str(iris_dest_root) if k in ("general.destination_root", "storage.destination_root") else orig_get(k, d))
 
-    try:
-        photo_file = tmp_path / "aves_sx60.jpg"
-        cv2.imwrite(str(photo_file), dummy_bgr)
+    photo_file = tmp_path / "aves_sx60.jpg"
+    cv2.imwrite(str(photo_file), dummy_bgr)
 
-        proj = Project("detect_only_proj")
-        proj.save()
+    proj = Project("detect_only_proj")
+    proj.save()
 
-        item = ProjectItem(
-            original_path=str(photo_file),
-            staging_path=str(photo_file),
-            status="copied",
-            meta_focal_length_equiv=1365.0,
-            meta_is_video=False
-        )
-        proj.save_item(item)
+    item = ProjectItem(
+        original_path=str(photo_file),
+        staging_path=str(photo_file),
+        status="copied",
+        meta_focal_length_equiv=1365.0,
+        meta_is_video=False
+    )
+    proj.save_item(item)
 
-        stage = BirdDetectStage("bird_detect", "Detecção e Recorte de Aves")
-        success = stage.run(proj)
-        assert success is True
+    stage = BirdDetectStage("bird_detect", "Detecção e Recorte de Aves")
+    success = stage.run(proj)
+    assert success is True
 
-        # Verifica se o recorte foi salvo EXCLUSIVAMENTE na raiz do IRIS
-        iris_crop_file = iris_dest_root / "10_Aves" / "Recortes" / proj.name / f"crop_{photo_file.stem}.jpg"
-        assert iris_crop_file.exists()
+    # Verifica se o recorte foi salvo EXCLUSIVAMENTE na raiz do IRIS
+    iris_crop_file = iris_dest_root / "10_Aves" / "Recortes" / proj.name / f"crop_{photo_file.stem}.jpg"
+    assert iris_crop_file.exists()
 
-        # Verifica que NÃO foi salvo na pasta oculta do projeto
-        project_crop_dir = proj.project_dir / "recortes_aves"
-        assert not project_crop_dir.exists()
+    # Verifica que NÃO foi salvo na pasta oculta do projeto
+    project_crop_dir = proj.project_dir / "recortes_aves"
+    assert not project_crop_dir.exists()
 
-        # Verifica persistência no banco
-        records = proj.list_bird_identifications()
-        assert len(records) == 1
-        rec = records[0]
-        assert rec["crop_saved_path"] == str(iris_crop_file.resolve())
-        assert rec["metadata_json"]["detection_status"] == "detected"
-        assert rec["metadata_json"]["yolo_conf"] == pytest.approx(0.94, 0.01)
-    finally:
-        config.set("general.destination_root", orig_dest)
+    # Verifica persistência no banco
+    records = proj.list_bird_identifications()
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["crop_saved_path"] == str(iris_crop_file.resolve())
+    assert rec["metadata_json"]["detection_status"] == "detected"
+    assert rec["metadata_json"]["yolo_conf"] == pytest.approx(0.94, 0.01)
 
 
 @patch("src.modules.bird_id.classify_stage.BirdClassifier")
@@ -335,8 +334,9 @@ def test_bird_classify_stage_atomic_does_not_touch_files(mock_classifier_cls, tm
     assert csv_file.exists()
 
 
-def test_bird_organize_stage_atomic_moves_and_tags(tmp_path):
+def test_bird_organize_stage_atomic_moves_and_tags(tmp_path, monkeypatch):
     from src.modules.bird_id.organize_stage import BirdOrganizeStage
+    from src.core.config import config
     import cv2
 
     base_dir = tmp_path / "2_AlbunsDatas" / "2026" / "10" / "22"
@@ -367,27 +367,23 @@ def test_bird_organize_stage_atomic_moves_and_tags(tmp_path):
         "crop_saved_path": "dummy_crop.jpg"
     })
 
-    from src.core.config import config
-    orig_exif = config.get("modules.bird_id.write_exif_tags")
-    config.set("modules.bird_id.write_exif_tags", False)
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
 
-    try:
-        stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
-        success = stage.run(proj)
-        assert success is True
+    stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
+    success = stage.run(proj)
+    assert success is True
 
-        # Arquivo original deve ter sido movido para subpasta {Bem-te-vi} e renomeado
-        assert not orig_file.exists()
-        species_dir = base_dir / "Bem-te-vi"
-        assert species_dir.exists()
-        renamed_file = next(species_dir.glob("*.JPG"))
-        assert "[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]" in renamed_file.name
+    # Arquivo original deve ter sido movido para subpasta {Bem-te-vi} e renomeado
+    assert not orig_file.exists()
+    species_dir = base_dir / "Bem-te-vi"
+    assert species_dir.exists()
+    renamed_file = next(species_dir.glob("*.JPG"))
+    assert "[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]" in renamed_file.name
 
-        # Verifica sincronização no banco de dados do projeto
-        updated_item = proj.get_item(item.original_path)
-        assert updated_item.organized_path == str(renamed_file.resolve())
-    finally:
-        config.set("modules.bird_id.write_exif_tags", orig_exif)
+    # Verifica sincronização no banco de dados do projeto
+    updated_item = proj.get_item(item.original_path)
+    assert updated_item.organized_path == str(renamed_file.resolve())
 
 
 def test_build_bird_filename():
@@ -527,7 +523,7 @@ def test_video_bird_processor_decoupled(tmp_path):
 
 
 @patch("src.modules.bird_id.detect_stage.BirdDetector")
-def test_bird_detect_stage_video_persists_in_sqlite(mock_detector_cls, tmp_path):
+def test_bird_detect_stage_video_persists_in_sqlite(mock_detector_cls, tmp_path, monkeypatch):
     """Garante que BirdDetectStage processa vídeos, salva recortes e persiste metadados no SQLite sem erro de serialização."""
     from src.modules.bird_id.detect_stage import BirdDetectStage
     from src.core.config import config
@@ -544,57 +540,54 @@ def test_bird_detect_stage_video_persists_in_sqlite(mock_detector_cls, tmp_path)
 
     iris_dest_root = tmp_path / "IRIS_DEST"
     iris_dest_root.mkdir(parents=True, exist_ok=True)
-    orig_dest = config.get("general.destination_root")
-    config.set("general.destination_root", str(iris_dest_root))
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: str(iris_dest_root) if k in ("general.destination_root", "storage.destination_root") else orig_get(k, d))
 
-    try:
-        mock_detector = MagicMock()
-        mock_detector_cls.return_value = mock_detector
-        mock_detector.confidence = 0.25
+    mock_detector = MagicMock()
+    mock_detector_cls.return_value = mock_detector
+    mock_detector.confidence = 0.25
 
-        box_mock = MagicMock()
-        box_mock.conf = [0.91]
-        box_mock.xyxy = [[10, 10, 70, 70]]
-        r_mock = MagicMock()
-        r_mock.boxes = [box_mock]
-        mock_detector.model.predict.return_value = [r_mock]
+    box_mock = MagicMock()
+    box_mock.conf = [0.91]
+    box_mock.xyxy = [[10, 10, 70, 70]]
+    r_mock = MagicMock()
+    r_mock.boxes = [box_mock]
+    mock_detector.model.predict.return_value = [r_mock]
 
-        proj = Project("video_detect_test_proj")
-        proj.save()
+    proj = Project("video_detect_test_proj")
+    proj.save()
 
-        item = ProjectItem(
-            original_path=str(video_path),
-            staging_path=str(video_path),
-            status="copied",
-            meta_is_video=True
-        )
-        proj.save_item(item)
+    item = ProjectItem(
+        original_path=str(video_path),
+        staging_path=str(video_path),
+        status="copied",
+        meta_is_video=True
+    )
+    proj.save_item(item)
 
-        stage = BirdDetectStage("bird_detect", "Detecção de Aves")
-        success = stage.run(proj)
-        assert success is True
+    stage = BirdDetectStage("bird_detect", "Detecção de Aves")
+    success = stage.run(proj)
+    assert success is True
 
-        # Verifica persistência no SQLite
-        records = proj.list_bird_identifications()
-        assert len(records) == 1
-        rec = records[0]
-        assert rec["is_video"] is True
-        assert rec["crop_saved_path"] != ""
-        assert Path(rec["crop_saved_path"]).exists()
+    # Verifica persistência no SQLite
+    records = proj.list_bird_identifications()
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["is_video"] is True
+    assert rec["crop_saved_path"] != ""
+    assert Path(rec["crop_saved_path"]).exists()
 
-        # Valida que metadados dos recortes são 100% serializáveis e preservam métricas
-        meta = rec["metadata_json"]
-        assert meta["yolo_detected"] is True
-        assert meta["detection_status"] == "detected"
-        assert len(meta["video_crops"]) > 0
-        first_crop = meta["video_crops"][0]
-        assert "crop_path" in first_crop
-        assert "frame_idx" in first_crop
-        assert "score" in first_crop
-        assert "pil_img" not in first_crop
-        assert "bgr_img" not in first_crop
-    finally:
-        config.set("general.destination_root", orig_dest)
+    # Valida que metadados dos recortes são 100% serializáveis e preservam métricas
+    meta = rec["metadata_json"]
+    assert meta["yolo_detected"] is True
+    assert meta["detection_status"] == "detected"
+    assert len(meta["video_crops"]) > 0
+    first_crop = meta["video_crops"][0]
+    assert "crop_path" in first_crop
+    assert "frame_idx" in first_crop
+    assert "score" in first_crop
+    assert "pil_img" not in first_crop
+    assert "bgr_img" not in first_crop
 
 
 @patch("src.modules.bird_id.classify_stage.BirdClassifier")
@@ -662,7 +655,7 @@ def test_bird_classify_stage_video_weighted_voting_and_csv(mock_classifier_cls, 
     assert "Bem-te-vi" in content
 
 
-def test_bird_classify_stage_video_fallback_disk_search(tmp_path):
+def test_bird_classify_stage_video_fallback_disk_search(tmp_path, monkeypatch):
     """Testa fallback de vídeo no disco quando o banco SQLite não possui registro prévio."""
     from src.modules.bird_id.classify_stage import BirdClassifyStage
     from src.core.config import config
@@ -670,47 +663,156 @@ def test_bird_classify_stage_video_fallback_disk_search(tmp_path):
 
     iris_dest_root = tmp_path / "IRIS_FALLBACK"
     iris_dest_root.mkdir(parents=True, exist_ok=True)
-    orig_dest = config.get("general.destination_root")
-    config.set("general.destination_root", str(iris_dest_root))
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: str(iris_dest_root) if k in ("general.destination_root", "storage.destination_root") else orig_get(k, d))
 
-    try:
-        proj = Project("video_fallback_proj")
-        proj.save()
+    proj = Project("video_fallback_proj")
+    proj.save()
 
-        video_file = tmp_path / "video_avulso.mp4"
-        video_file.write_text("dummy")
+    video_file = tmp_path / "video_avulso.mp4"
+    video_file.write_text("dummy")
 
-        item = ProjectItem(
-            original_path=str(video_file),
-            staging_path=str(video_file),
-            status="copied",
-            meta_is_video=True
-        )
-        proj.save_item(item)
+    item = ProjectItem(
+        original_path=str(video_file),
+        staging_path=str(video_file),
+        status="copied",
+        meta_is_video=True
+    )
+    proj.save_item(item)
 
-        # Cria recortes físicos no padrão crop_{stem}_f*.jpg
-        crops_dir = iris_dest_root / "10_Aves" / "Recortes" / proj.name
-        crops_dir.mkdir(parents=True, exist_ok=True)
-        crop_f0 = crops_dir / f"crop_{video_file.stem}_f0.jpg"
-        cv2.imwrite(str(crop_f0), np.zeros((30, 30, 3), dtype=np.uint8))
+    # Cria recortes físicos no padrão crop_{stem}_f*.jpg
+    crops_dir = iris_dest_root / "10_Aves" / "Recortes" / proj.name
+    crops_dir.mkdir(parents=True, exist_ok=True)
+    crop_f0 = crops_dir / f"crop_{video_file.stem}_f0.jpg"
+    cv2.imwrite(str(crop_f0), np.zeros((30, 30, 3), dtype=np.uint8))
 
-        with patch("src.modules.bird_id.classify_stage.BirdClassifier") as mock_clf_cls:
-            mock_clf = MagicMock()
-            mock_clf_cls.return_value = mock_clf
-            mock_clf.classify_crop.return_value = [
-                {"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.90}
+    with patch("src.modules.bird_id.classify_stage.BirdClassifier") as mock_clf_cls:
+        mock_clf = MagicMock()
+        mock_clf_cls.return_value = mock_clf
+        mock_clf.classify_crop.return_value = [
+            {"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.90}
+        ]
+
+        stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+        success = stage.run(proj)
+        assert success is True
+
+    rec = proj.get_bird_identification(str(video_file))
+    assert rec is not None
+    assert rec["is_video"] is True
+    assert rec["species_common"] == "Bem-te-vi"
+
+
+def test_bird_classify_stage_burst_consensus(tmp_path):
+    """Garante que fotos com o mesmo burst_id recebam classificação consensual unificada."""
+    from src.modules.bird_id.classify_stage import BirdClassifyStage
+    proj = create_project("test_burst_id_proj", str(tmp_path))
+
+    photo1 = tmp_path / "BURST_001.JPG"
+    photo2 = tmp_path / "BURST_002.JPG"
+    photo3 = tmp_path / "BURST_003.JPG"
+    for p in [photo1, photo2, photo3]:
+        p.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    crop1 = tmp_path / "crop_BURST_001.jpg"
+    crop2 = tmp_path / "crop_BURST_002.jpg"
+    crop3 = tmp_path / "crop_BURST_003.jpg"
+    for c in [crop1, crop2, crop3]:
+        cv2.imwrite(str(c), np.zeros((40, 40, 3), dtype=np.uint8))
+
+    burst_id = "rajada_2026-10-22_10-00-00"
+    item1 = ProjectItem(str(photo1), str(photo1), category="rajada", burst_id=burst_id, status="copied", verified=True)
+    item2 = ProjectItem(str(photo2), str(photo2), category="rajada", burst_id=burst_id, status="copied", verified=True)
+    item3 = ProjectItem(str(photo3), str(photo3), category="rajada", burst_id=burst_id, status="copied", verified=True)
+    proj.save_items_batch([item1, item2, item3])
+
+    proj.save_bird_detection({"item_path": str(photo1), "is_video": False, "crop_saved_path": str(crop1), "metadata_json": {}})
+    proj.save_bird_detection({"item_path": str(photo2), "is_video": False, "crop_saved_path": str(crop2), "metadata_json": {}})
+    proj.save_bird_detection({"item_path": str(photo3), "is_video": False, "crop_saved_path": str(crop3), "metadata_json": {}})
+
+    with patch("src.modules.bird_id.classify_stage.BirdClassifier") as mock_clf_cls:
+        mock_clf = MagicMock()
+        mock_clf_cls.return_value = mock_clf
+
+        # Simula: foto 1 e foto 2 muito nítidas de Bem-te-vi, foto 3 com pose desfavorável sugerindo Neinei como top1
+        def mock_classify(pil_img, **kwargs):
+            # Se for a foto 3 (baseada em kwargs ou contador simples)
+            return [
+                {"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "common_name_en": "Great Kiskadee", "family": "Tyrannidae", "order": "Passeriformes", "confidence": 0.88},
+                {"scientific_name": "Megarynchus pitangua", "common_name": "Neinei", "confidence": 0.10}
             ]
+        mock_clf.classify_crop.side_effect = mock_classify
 
-            stage = BirdClassifyStage("bird_id", "Classificação de Aves")
-            success = stage.run(proj)
-            assert success is True
+        stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+        success = stage.run(proj)
+        assert success is True
 
-        rec = proj.get_bird_identification(str(video_file))
+    # Verifica se todas as 3 fotos da rajada receberam o consenso
+    for p in [photo1, photo2, photo3]:
+        rec = proj.get_bird_identification(str(p))
         assert rec is not None
-        assert rec["is_video"] is True
         assert rec["species_common"] == "Bem-te-vi"
-    finally:
-        config.set("general.destination_root", orig_dest)
+        assert rec["species_scientific"] == "Pitangus sulphuratus"
+        assert rec["confidence"] > 0.80
+        assert rec["needs_review"] is False
+        assert rec["metadata_json"]["burst_consensus"] is True
+        assert rec["metadata_json"]["burst_id"] == burst_id
+        assert rec["metadata_json"]["burst_crops_count"] == 3
+
+
+def test_bird_organize_stage_burst_siblings_unification(tmp_path, monkeypatch):
+    """Garante que fotos da mesma rajada sem recorte sejam unificadas na subpasta da espécie."""
+    from src.modules.bird_id.organize_stage import BirdOrganizeStage
+
+    proj = create_project("test_burst_org_proj", str(tmp_path))
+
+    burst_dir = tmp_path / "2_AlbunsDatas" / "2026" / "10" / "22" / "rajada_10-00-00"
+    burst_dir.mkdir(parents=True, exist_ok=True)
+
+    photo_with_crop = burst_dir / "BURST_001.JPG"
+    photo_without_crop = burst_dir / "BURST_002.JPG"
+    photo_with_crop.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+    photo_without_crop.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    burst_id = "rajada_2026-10-22_10-00-00"
+    item1 = ProjectItem(str(photo_with_crop), str(photo_with_crop), organized_path=str(photo_with_crop), category="rajada", burst_id=burst_id, status="organized", verified=True)
+    item2 = ProjectItem(str(photo_without_crop), str(photo_without_crop), organized_path=str(photo_without_crop), category="rajada", burst_id=burst_id, status="organized", verified=True)
+    proj.save_items_batch([item1, item2])
+
+    proj.add_bird_identification({
+        "item_path": str(photo_with_crop),
+        "is_video": False,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "family": "Tyrannidae",
+        "order": "Passeriformes",
+        "confidence": 0.90,
+        "needs_review": False,
+        "crop_saved_path": str(photo_with_crop)
+    })
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
+    success = stage.run(proj)
+    assert success is True
+
+    # Ambas as fotos devem ter sido movidas para burst_dir / "Bem-te-vi"
+    species_dir = burst_dir / "Bem-te-vi"
+    assert species_dir.exists()
+
+    target_photo1 = next(species_dir.glob("*BURST_001*"))
+    target_photo2 = species_dir / "BURST_002.JPG"
+
+    assert target_photo1.exists()
+    assert target_photo2.exists()
+
+    # O item 2 sem recorte teve seu organized_path atualizado
+    item2_updated = proj.get_item(str(photo_without_crop))
+    assert Path(item2_updated.organized_path).parent == species_dir
+
 
 
 

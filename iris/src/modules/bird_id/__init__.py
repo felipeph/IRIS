@@ -12,6 +12,7 @@ from .inaturalist_client import INaturalistClient
 from .detect_stage import BirdDetectStage
 from .classify_stage import BirdClassifyStage
 from .organize_stage import BirdOrganizeStage
+from .burst_consensus import aggregate_burst_species
 from .stage import BirdIdStage, get_stage
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "BirdOrganizeStage",
     "BirdIdStage",
     "get_stage",
+    "aggregate_burst_species",
 ]

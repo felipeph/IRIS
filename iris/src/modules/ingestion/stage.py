@@ -22,7 +22,7 @@ class IngestionStage(PipelineStage):
     VALID_EXTENSIONS = MEDIA_EXTENSIONS
 
     def _get_destination_dir(self, project: Project) -> Path:
-        dest_root = config.get("general.destination_root", "/caminho/para/destino")
+        dest_root = config.get("general.destination_root", "C:\\IRIS")
         return Path(dest_root) / "1_Entrada" / project.name / "raw"
 
     def _is_media_file(self, file_path: Path) -> bool:

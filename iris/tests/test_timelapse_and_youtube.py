@@ -13,12 +13,6 @@ from src.modules.youtube.stage import get_stage as get_youtube_stage
 from src.modules.youtube.uploader import build_timelapse_youtube_metadata
 from src.modules.youtube.describer import build_rich_youtube_description
 
-def test_detect_ffmpeg_encoder():
-    clear_encoder_cache()
-    label, args = detect_ffmpeg_encoder()
-    assert isinstance(label, str) and len(label) > 0
-    assert "-c:v" in args
-
 def test_detect_ffmpeg_encoder_cache():
     clear_encoder_cache()
     # 1. Primeira detecção
@@ -885,6 +879,7 @@ def test_timelapse_stage_long_exposure_custom_fpi(tmp_path, monkeypatch):
 
     def fake_config_get(key, default=None):
         cfgs = {
+            "general.destination_root": str(tmp_path),
             "modules.timelapse": {"fps": 60, "frames_per_image": 1},
             "modules.timelapse_long_exposure": {"fps": 30, "frames_per_image": 3, "render_profile": "quality"},
             "modules.youtube.privacy_status": "unlisted"

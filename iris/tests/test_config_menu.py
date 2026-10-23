@@ -258,3 +258,50 @@ def test_config_manager_auto_migrates_long_exposure_fpi(tmp_path: Path):
         cm.load()
         assert cm.get("modules.timelapse_long_exposure.frames_per_image") == 1
 
+
+def test_bird_id_menu_burst_consensus_edit(mock_console):
+    """Testa edição das opções 18 (toggle consenso rajada) e 19 (concordância mínima) no menu de aves."""
+    from unittest.mock import patch
+    orig_consensus = config.get("modules.bird_id.enable_burst_consensus", True)
+    orig_ratio = config.get("modules.bird_id.burst_min_agreement_ratio", 0.50)
+    try:
+        # Testa opção 18 com Confirm.ask -> False
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["18", "0"]), \
+             patch("src.core.config_menu.Confirm.ask", return_value=False), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_bird_id(mock_console)
+            assert config.get("modules.bird_id.enable_burst_consensus") is False
+
+        # Testa opção 19 com Prompt.ask -> 0.75
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["19", "0.75", "0"]), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_bird_id(mock_console)
+            assert config.get("modules.bird_id.burst_min_agreement_ratio") == 0.75
+    finally:
+        config.set("modules.bird_id.enable_burst_consensus", orig_consensus)
+        config.set("modules.bird_id.burst_min_agreement_ratio", orig_ratio)
+
+
+def test_config_manager_auto_migrates_burst_consensus(tmp_path: Path):
+    """Garante que ConfigManager insere enable_burst_consensus e burst_min_agreement_ratio em configs legadas."""
+    import yaml
+    from src.core.config import ConfigManager
+
+    test_cfg_file = tmp_path / "legacy_bird_config.yaml"
+    legacy_data = {
+        "modules": {
+            "bird_id": {
+                "enabled": True,
+                "classifier_type": "inaturalist"
+            }
+        }
+    }
+    with open(test_cfg_file, "w", encoding="utf-8") as f:
+        yaml.dump(legacy_data, f)
+
+    with patch("src.core.config.CONFIG_FILE", test_cfg_file):
+        cm = ConfigManager()
+        cm.load()
+        assert cm.get("modules.bird_id.enable_burst_consensus") is True
+        assert cm.get("modules.bird_id.burst_min_agreement_ratio") == 0.50
+

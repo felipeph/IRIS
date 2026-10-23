@@ -8,6 +8,7 @@ Executa as ações de alta certeza para as aves identificadas no banco SQLite:
 Casos de dúvida ou confiança < limiar permanecem inalterados no disco.
 """
 
+import shutil
 from pathlib import Path
 from rich.console import Console
 
@@ -55,6 +56,7 @@ class BirdOrganizeStage(PipelineStage):
         organized_count = 0
         skipped_review_count = 0
         missing_file_count = 0
+        organized_bursts: dict[str, Path] = {}
 
         console.print(f"[bold cyan]Iniciando organização física de aves ({len(records)} registros avaliados, limiar >= {min_confidence*100:.0f}%)...[/bold cyan]")
 
@@ -92,12 +94,33 @@ class BirdOrganizeStage(PipelineStage):
                     items_by_path[str(new_path.resolve())] = item
                     rec["item_path"] = str(new_path.resolve())
 
+                b_id = getattr(item, "burst_id", "") or ""
+                if b_id and new_path.exists():
+                    organized_bursts[b_id] = new_path.parent
+
                 organized_count += 1
             except Exception as e:
                 console.print(f"[yellow]Aviso ao organizar fisicamente a ave {rec.get('species_common')}: {e}[/yellow]")
 
+        # Mover fotos irmãs da mesma rajada (sem recorte individual) para a mesma subpasta da espécie
+        burst_siblings_moved = 0
+        for b_id, target_subfolder in organized_bursts.items():
+            siblings = project.get_items(burst_id=b_id)
+            for sib in siblings:
+                sib_p = Path(sib.organized_path or sib.staging_path or sib.original_path)
+                if sib_p.exists() and sib_p.parent != target_subfolder:
+                    dest_sib = target_subfolder / sib_p.name
+                    if not dest_sib.exists():
+                        shutil.move(str(sib_p), str(dest_sib))
+                        sib.organized_path = str(dest_sib.resolve())
+                        project.save_item(sib)
+                        items_by_path[str(dest_sib.resolve())] = sib
+                        burst_siblings_moved += 1
+
         console.print(f"[bold green]OK: Organização de aves concluída![/bold green]")
         console.print(f"  [green]• Arquivos organizados com alta certeza:[/green] [bold cyan]{organized_count}[/bold cyan]")
+        if burst_siblings_moved > 0:
+            console.print(f"  [green]• Fotos irmãs de rajada unificadas na subpasta da espécie:[/green] [bold cyan]{burst_siblings_moved}[/bold cyan]")
         if skipped_review_count > 0:
             console.print(f"  [yellow]• Arquivos preservados para revisão manual (confiança < {min_confidence*100:.0f}%):[/yellow] [dim]{skipped_review_count}[/dim]")
         if missing_file_count > 0:

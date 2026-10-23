@@ -900,6 +900,12 @@ def _menu_bird_id(console: Console):
         creds_p = config.get("modules.bird_id.inaturalist.credentials_file", "secrets/inaturalist.json")
         table.add_row("17", "Arquivo de Credenciais iNaturalist", "modules.bird_id.inaturalist.credentials_file", str(creds_p))
         
+        burst_consensus_val = config.get("modules.bird_id.enable_burst_consensus", True)
+        table.add_row("18", "Consenso de Espécies em Rajadas", "modules.bird_id.enable_burst_consensus", "[green]Sim[/green]" if burst_consensus_val else "[red]Não[/red]")
+        
+        min_agree = config.get("modules.bird_id.burst_min_agreement_ratio", 0.50)
+        table.add_row("19", "Concordância Mínima na Rajada", "modules.bird_id.burst_min_agreement_ratio", f"{float(min_agree)*100:.0f}%")
+        
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
         
@@ -1079,6 +1085,25 @@ def _menu_bird_id(console: Console):
             if new_val:
                 config.set("modules.bird_id.inaturalist.credentials_file", new_val)
                 console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "18":
+            curr = config.get("modules.bird_id.enable_burst_consensus", True)
+            new_val = Confirm.ask("Habilitar consenso de espécies em fotos da mesma rajada (Soft Voting)?", default=curr)
+            config.set("modules.bird_id.enable_burst_consensus", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "19":
+            curr = float(config.get("modules.bird_id.burst_min_agreement_ratio", 0.50))
+            new_val = Prompt.ask("Razão mínima de concordância entre fotos da rajada (0.20 a 1.00)", default=f"{curr:.2f}")
+            try:
+                val_f = float(new_val)
+                if 0.20 <= val_f <= 1.00:
+                    config.set("modules.bird_id.burst_min_agreement_ratio", val_f)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve estar entre 0.20 e 1.00![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número decimal![/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

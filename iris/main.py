@@ -85,7 +85,7 @@ def run_pipeline_for_project(active_project):
             console.print(Panel(header_text, expand=False, border_style="cyan"))
             
             # Status do Ambiente
-            dest_root = config.get("general.destination_root", "/caminho/para/destino")
+            dest_root = config.get("general.destination_root", "C:\\IRIS")
             free_space = get_free_space_gb(dest_root)
             
             # Realiza scan rápido se o projeto for novo e não tiver dados de contagem

@@ -1,6 +1,9 @@
 # Projeto IRIS - TODO List
 
 ## 📌 Pendentes (A Fazer)
+- [ ] **feat**: Estabelecer regra e delimitadores visuais na nomenclatura dos arquivos de aves (ex: colchetes ou prefixos dedicados) para distinguir e localizar facilmente o nome popular em PT-BR, o nome científico e o nome popular em inglês. *(Adicionado em: 22/10/2026 20:24)*
+- [ ] **feat**: Incluir o nome da espécie identificada no título e na descrição dos vídeos de aves processados e publicados no YouTube. *(Adicionado em: 22/10/2026 20:24)*
+- [ ] **feat**: Atualizar o template da descrição dos vídeos de aves no YouTube para informar explicitamente que a detecção e identificação taxonômica utilizam o iNaturalist. *(Adicionado em: 22/10/2026 20:24)*
 - [ ] **test**: Validação manual da detecção de fotos em rajada na CLI: abrir o menu interativo (`python .\iris\main.py` -> Opção 2 -> Opção 2), verificar opções 10 ("Detecção de Fotos em Rajada") e 11 ("Intervalo Máx Rajada"), e processar lote com disparos contínuos confirmando geração de subpastas `2_AlbunsDatas/.../rajada_HH-MM-SS/` e persistência de `burst_id` uniforme no SQLite. *(Adicionado em: 22/10/2026 13:45)*
 - [ ] **test**: Teste de validação em campo com fotos reais de teleobjetiva da Canon SX60 HS (ex: Bem-te-vi, Sabiá-laranjeira): auditar detecção/recorte pelo YOLO, consulta com prior geográfico à API do iNaturalist, retorno de nomes em PT (`preferred_common_name`), renomeação tripla no SSD e injeção de metadados EXIF/IPTC via ExifTool. *(Adicionado em: 22/10/2026 08:20)*
 - [ ] **test**: Teste com vídeo real de ave (`.mp4`): validar amostragem temporal, ranqueamento dos 5 melhores recortes por nitidez Laplaciana, consulta cirúrgica à API do iNaturalist e consolidação da espécie por votação ponderada. *(Adicionado em: 22/10/2026 08:20)*

@@ -2,10 +2,20 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from src.core.config import config, LOG_DIR
+import src.core.config as config_mod
+from src.core.config import config
 
-# Configurações do arquivo de log
-LOG_FILE = LOG_DIR / "iris.log"
+def get_log_dir() -> Path:
+    """Retorna o diretório de logs atualizado (suporta patch em testes e env vars)."""
+    return config_mod.LOG_DIR
+
+def get_log_file() -> Path:
+    """Retorna o caminho do arquivo de log principal."""
+    return get_log_dir() / "iris.log"
+
+# Configurações do arquivo de log (mantido para compatibilidade retroativa)
+LOG_DIR = get_log_dir()
+LOG_FILE = get_log_file()
 _project_handler = None
 
 def get_log_formatter():
@@ -30,8 +40,10 @@ def setup_logger():
     formatter = get_log_formatter()
 
     # Handler para escrever no arquivo global (com tratamento de erro)
+    log_file = get_log_file()
     try:
-        file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(log_level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
@@ -60,8 +72,9 @@ def bind_project_logger(project_name: str):
     if not project_name:
         return
 
-    proj_log_file = LOG_DIR / f"iris_{project_name}.log"
+    proj_log_file = get_log_dir() / f"iris_{project_name}.log"
     try:
+        proj_log_file.parent.mkdir(parents=True, exist_ok=True)
         _project_handler = logging.FileHandler(proj_log_file, encoding='utf-8')
         _project_handler.setLevel(log_level)
         _project_handler.setFormatter(get_log_formatter())

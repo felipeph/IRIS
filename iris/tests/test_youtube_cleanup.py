@@ -13,13 +13,6 @@ from src.modules.youtube.cleaner import (
 from src.modules.youtube.stage import YouTubeUploadStage
 from src.core.project import init_central_db
 
-@pytest.fixture(autouse=True)
-def mock_projects_dir(tmp_path):
-    with patch("src.core.project.PROJECTS_DIR", tmp_path), \
-         patch("src.core.project.CENTRAL_DB_PATH", tmp_path / "iris_central.db"):
-        init_central_db()
-        yield tmp_path
-
 def test_verify_youtube_upload_status_success():
     mock_yt = MagicMock()
     # Teste para uploaded
@@ -310,6 +303,7 @@ def test_youtube_upload_stage_calls_cleanup_after_insert(tmp_path):
          patch("src.modules.youtube.stage.add_video_to_playlist"), \
          patch("src.modules.youtube.stage.send_windows_toast"), \
          patch("src.modules.youtube.stage.send_ntfy_notification"), \
+         patch("src.modules.youtube.stage.time.sleep"), \
          patch("src.modules.youtube.stage.execute_post_upload_cleanup") as mock_cleanup:
 
         ok = stage.run(project, interactive=False)
@@ -405,6 +399,7 @@ def test_youtube_upload_stage_releases_media_file_descriptor(tmp_path):
          patch("src.modules.youtube.stage.add_video_to_playlist"), \
          patch("src.modules.youtube.stage.send_windows_toast"), \
          patch("src.modules.youtube.stage.send_ntfy_notification"), \
+         patch("src.modules.youtube.stage.time.sleep"), \
          patch("src.modules.youtube.stage.execute_post_upload_cleanup"):
 
         ok = stage.run(project, interactive=False)

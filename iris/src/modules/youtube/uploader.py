@@ -22,7 +22,7 @@ SCOPES = [
 
 _GEOCODE_CACHE = {}
 
-SECRETS_DIR = Path(__file__).resolve().parents[3] / "secrets"
+SECRETS_DIR = Path(os.environ.get("IRIS_SECRETS_DIR", str(Path(__file__).resolve().parents[3] / "secrets")))
 
 def find_client_secrets_file() -> Optional[Path]:
     """Retorna o client_secrets.json em iris/secrets/, se existir."""

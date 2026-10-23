@@ -3,14 +3,14 @@ import yaml
 from pathlib import Path
 
 # Definição dos caminhos globais
-GLOBAL_DIR = Path.home() / ".iris"
+GLOBAL_DIR = Path(os.environ.get("IRIS_GLOBAL_DIR", str(Path.home() / ".iris")))
 LOG_DIR = GLOBAL_DIR / "logs"
 DB_DIR = GLOBAL_DIR / "db"
 PROJECTS_DIR = GLOBAL_DIR / "projects"
 
 # O arquivo de configuração principal agora fica na pasta raiz do projeto (iris/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-CONFIG_FILE = PROJECT_ROOT / "config.yaml"
+CONFIG_FILE = Path(os.environ.get("IRIS_CONFIG_FILE", str(PROJECT_ROOT / "config.yaml")))
 
 class ConfigManager:
     def __init__(self):
@@ -125,7 +125,7 @@ class ConfigManager:
             gen = self.config["general"]
             gen.setdefault("theme", "dark")
             gen.setdefault("log_level", "INFO")
-            gen.setdefault("destination_root", "/caminho/para/destino")
+            gen.setdefault("destination_root", "C:\\IRIS")
             gen.setdefault("default_source", "/caminho/para/origem")
             gen.setdefault("last_project", None)
             
@@ -217,6 +217,14 @@ class ConfigManager:
                     mods["youtube"]["timelapse_long_exposure_playlist"] = "Timelapses Longa Exposição"
                     has_changes = True
 
+            if "bird_id" in mods:
+                if "enable_burst_consensus" not in mods["bird_id"]:
+                    mods["bird_id"]["enable_burst_consensus"] = True
+                    has_changes = True
+                if "burst_min_agreement_ratio" not in mods["bird_id"]:
+                    mods["bird_id"]["burst_min_agreement_ratio"] = 0.50
+                    has_changes = True
+
             if "classification" not in self.config:
                 self.config["classification"] = {}
             cls_cfg = self.config["classification"]
@@ -261,7 +269,7 @@ class ConfigManager:
             "general": {
                 "theme": "dark",
                 "log_level": "INFO",
-                "destination_root": "/caminho/para/destino",
+                "destination_root": "C:\\IRIS",
                 "default_source": "/caminho/para/origem",
                 "last_project": None
             },
@@ -381,6 +389,32 @@ class ConfigManager:
                     "privacy_status": "unlisted"
                 },
                 "bird_detect": {"enabled": True},
+                "bird_id": {
+                    "enabled": True,
+                    "classifier_type": "inaturalist",
+                    "min_species_confidence": 0.70,
+                    "enable_burst_consensus": True,
+                    "burst_min_agreement_ratio": 0.50,
+                    "rename_files": True,
+                    "organize_in_subfolders": True,
+                    "write_exif_tags": True,
+                    "zoom_threshold_mm": 300.0,
+                    "iris_crops_folder": "10_Aves/Recortes",
+                    "yolo_model": "yolov8s.pt",
+                    "yolo_confidence": 0.25,
+                    "video_target_frames": 15,
+                    "video_max_crops": 5,
+                    "video_min_confident_crops": 2,
+                    "inaturalist": {
+                        "api_url": "https://api.inaturalist.org/v2/computervision/score_image",
+                        "credentials_file": "secrets/inaturalist.json",
+                        "default_lat": -20.456887,
+                        "default_lng": -45.438307,
+                        "positional_accuracy_meters": 25000,
+                        "request_delay_seconds": 1.0,
+                        "use_exif_gps": True
+                    }
+                },
                 "cleanup": {"auto_clean": False}
             }
         }

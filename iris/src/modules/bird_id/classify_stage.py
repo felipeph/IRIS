@@ -9,7 +9,8 @@ Arquivos originais e organizados PERMANECEM INTACTOS nesta etapa.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
+from collections import defaultdict
 
 import cv2
 from PIL import Image
@@ -25,6 +26,7 @@ from src.core.ui import ProgressTracker, PipelineUI
 from .detector import safe_imread
 from .classifier import BirdClassifier
 from .video_processor import VideoBirdProcessor
+from .burst_consensus import aggregate_burst_species
 from .reporter import export_bird_review_csv, render_bird_summary_table
 
 console = Console()
@@ -48,6 +50,8 @@ class BirdClassifyStage(PipelineStage):
         classifier_type = module_cfg.get("classifier_type", "inaturalist")
         min_species_conf = float(module_cfg.get("min_species_confidence", 0.70))
         video_min_crops = int(module_cfg.get("video_min_confident_crops", 2))
+        enable_burst_consensus = bool(module_cfg.get("enable_burst_consensus", True))
+        burst_min_agreement = float(module_cfg.get("burst_min_agreement_ratio", 0.50))
 
         inat_cfg = module_cfg.get("inaturalist", {})
         default_lat = inat_cfg.get("default_lat", None)
@@ -127,139 +131,303 @@ class BirdClassifyStage(PipelineStage):
         tracker = ProgressTracker(total_files, mode="items")
         start_str = datetime.now().strftime("%H:%M:%S")
 
+        # Agrupamento para consenso de rajadas
+        groups: List[Tuple[Optional[str], List[Dict[str, Any]]]] = []
+        burst_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+        for rec in records_with_crops:
+            item_path_str = rec.get("item_path", "")
+            p_item = items_by_path.get(item_path_str)
+            b_id = getattr(p_item, "burst_id", "") or "" if (p_item and not rec.get("is_video", False)) else ""
+            if enable_burst_consensus and b_id:
+                burst_map[b_id].append(rec)
+            else:
+                groups.append((None, [rec]))
+
+        for b_id, b_recs in burst_map.items():
+            groups.append((b_id, b_recs))
+
         with Live(
             PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, "Carregando...", "Iniciando"),
             console=console,
             refresh_per_second=4
         ) as live:
-            for rec in records_with_crops:
-                item_path_str = rec.get("item_path", "")
-                p_item = items_by_path.get(item_path_str)
-                file_name = Path(item_path_str).name if item_path_str else "Recorte"
-                live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, "Classificando..."))
+            for b_id, rec_list in groups:
+                if b_id is not None:
+                    # Classificação em lote de rajada com consenso
+                    burst_crop_predictions = []
+                    burst_eval_items = []
 
-                # Resolução de Geo-Prior (EXIF ou Padrão)
-                exif_lat = getattr(p_item, "meta_latitude", None) if (p_item and use_exif_gps) else None
-                exif_lng = getattr(p_item, "meta_longitude", None) if (p_item and use_exif_gps) else None
-                item_lat = exif_lat if exif_lat is not None else default_lat
-                item_lng = exif_lng if exif_lng is not None else default_lng
-                item_acc = getattr(p_item, "meta_gps_accuracy", None) or default_acc if p_item else default_acc
-                observed_on = getattr(p_item, "meta_datetime_original", None) if p_item else None
+                    for rec in rec_list:
+                        item_path_str = rec.get("item_path", "")
+                        p_item = items_by_path.get(item_path_str)
+                        file_name = Path(item_path_str).name if item_path_str else "Recorte"
+                        live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, f"Rajada ({len(rec_list)} fotos)..."))
 
-                is_video = rec.get("is_video", False)
-                crop_saved_path = rec.get("crop_saved_path", "")
-                meta_json = rec.get("metadata_json", {})
+                        exif_lat = getattr(p_item, "meta_latitude", None) if (p_item and use_exif_gps) else None
+                        exif_lng = getattr(p_item, "meta_longitude", None) if (p_item and use_exif_gps) else None
+                        item_lat = exif_lat if exif_lat is not None else default_lat
+                        item_lng = exif_lng if exif_lng is not None else default_lng
+                        item_acc = getattr(p_item, "meta_gps_accuracy", None) or default_acc if p_item else default_acc
+                        observed_on = getattr(p_item, "meta_datetime_original", None) if p_item else None
 
-                try:
-                    if is_video:
-                        # Extrai a lista de recortes salvos na Etapa 1
-                        video_crops = meta_json.get("video_crops", [])
-                        if not video_crops and crop_saved_path:
-                            video_crops = [{"crop_path": crop_saved_path}]
+                        crop_saved_path = rec.get("crop_saved_path", "")
+                        meta_json = rec.get("metadata_json", {})
+                        preds = []
 
-                        res = video_proc.classify_video_crops(
-                            saved_crops=video_crops,
-                            classifier=classifier,
-                            duration_sec=meta_json.get("duration_sec", 0.0),
-                            lat=item_lat,
-                            lng=item_lng,
-                            accuracy=item_acc,
-                            observed_on=observed_on,
-                            min_confident_crops=video_min_crops
-                        )
+                        try:
+                            if crop_saved_path and Path(crop_saved_path).exists():
+                                crop_bgr = safe_imread(crop_saved_path)
+                                if crop_bgr is not None:
+                                    crop_pil = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
+                                    preds = classifier.classify_crop(
+                                        crop_pil,
+                                        top_k=3,
+                                        use_tta=True,
+                                        lat=item_lat,
+                                        lng=item_lng,
+                                        accuracy=item_acc,
+                                        observed_on=observed_on
+                                    )
+                        except Exception as e:
+                            log_event(f"Erro ao classificar recorte de {file_name}: {e}", level="error")
+                            console.print(f"[yellow]Aviso ao classificar recorte de {file_name}: {e}[/yellow]")
 
-                        if res:
-                            conf = res["confidence"]
-                            is_confident = res.get("is_confident_detection", True)
-                            needs_review = (conf < min_species_conf) or (not is_confident)
+                        burst_crop_predictions.append({
+                            "crop_path": crop_saved_path,
+                            "item_path": item_path_str,
+                            "predictions": preds
+                        })
+                        burst_eval_items.append({
+                            "rec": rec,
+                            "item_path_str": item_path_str,
+                            "crop_saved_path": crop_saved_path,
+                            "meta_json": meta_json,
+                            "item_lat": item_lat,
+                            "item_lng": item_lng,
+                            "preds": preds
+                        })
 
+                        tracker.update(1)
+                        live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, "Progresso"))
+
+                    # Consolidar espécie consensual por Soft Voting
+                    consensus = aggregate_burst_species(
+                        burst_crop_predictions,
+                        min_species_confidence=min_species_conf,
+                        min_agreement_ratio=burst_min_agreement
+                    )
+
+                    for ev in burst_eval_items:
+                        item_path_str = ev["item_path_str"]
+                        crop_saved_path = ev["crop_saved_path"]
+                        meta_json = ev["meta_json"]
+                        preds = ev["preds"]
+
+                        if consensus:
                             merged_meta = dict(meta_json)
                             merged_meta.update({
-                                "evaluated_crops": res.get("evaluated_crops", len(video_crops)),
-                                "species_crops_count": res.get("species_crops_count", 0),
-                                "min_confident_crops": video_min_crops,
-                                "vote_distribution": res.get("vote_distribution", {}),
-                                "geo_lat": item_lat,
-                                "geo_lng": item_lng,
+                                "geo_lat": ev["item_lat"],
+                                "geo_lng": ev["item_lng"],
                                 "provider": classifier_type,
-                                "detection_status": "classified"
+                                "detection_status": "classified",
+                                "burst_consensus": True,
+                                "burst_id": b_id,
+                                "burst_crops_count": consensus["total_crops"],
+                                "burst_supporting_crops": consensus["supporting_crops"],
+                                "burst_agreement_ratio": consensus["agreement_ratio"],
+                                "burst_mean_individual_confidence": consensus["mean_individual_confidence"],
+                                "burst_vote_distribution": consensus["vote_distribution"],
+                                "individual_top1_species": preds[0]["common_name"] if preds else "",
+                                "individual_top1_confidence": preds[0]["confidence"] if preds else 0.0,
                             })
 
                             updated_rec = {
                                 "item_path": item_path_str,
-                                "is_video": True,
-                                "species_common": res["species_common"],
-                                "species_common_en": res.get("species_common_en", ""),
-                                "species_scientific": res["species_scientific"],
-                                "family": res.get("family", ""),
-                                "order": res.get("order", ""),
+                                "is_video": False,
+                                "species_common": consensus["species_common"],
+                                "species_common_en": consensus["species_common_en"],
+                                "species_scientific": consensus["species_scientific"],
+                                "family": consensus["family"],
+                                "order": consensus["order"],
+                                "confidence": consensus["confidence"],
+                                "top2_common": consensus["top2_common"],
+                                "top2_scientific": consensus["top2_scientific"],
+                                "top2_confidence": consensus["top2_confidence"],
+                                "top3_common": consensus["top3_common"],
+                                "top3_scientific": consensus["top3_scientific"],
+                                "top3_confidence": consensus["top3_confidence"],
+                                "needs_review": consensus["needs_review"],
+                                "crop_saved_path": crop_saved_path,
+                                "metadata_json": merged_meta
+                            }
+                            project.add_bird_identification(updated_rec)
+                            classified_records.append(updated_rec)
+                        elif preds:
+                            top1 = preds[0]
+                            conf = top1["confidence"]
+                            needs_review = conf < min_species_conf
+
+                            merged_meta = dict(meta_json)
+                            merged_meta.update({
+                                "geo_lat": ev["item_lat"],
+                                "geo_lng": ev["item_lng"],
+                                "provider": classifier_type,
+                                "detection_status": "classified",
+                                "burst_id": b_id,
+                                "burst_consensus": False
+                            })
+
+                            updated_rec = {
+                                "item_path": item_path_str,
+                                "is_video": False,
+                                "species_common": top1["common_name"],
+                                "species_common_en": top1.get("common_name_en", ""),
+                                "species_scientific": top1["scientific_name"],
+                                "family": top1.get("family", ""),
+                                "order": top1.get("order", ""),
                                 "confidence": conf,
-                                "top2_common": res.get("top2_common", ""),
-                                "top2_scientific": res.get("top2_scientific", ""),
-                                "top2_confidence": res.get("top2_confidence", 0.0),
-                                "top3_common": res.get("top3_common", ""),
-                                "top3_scientific": res.get("top3_scientific", ""),
-                                "top3_confidence": res.get("top3_confidence", 0.0),
+                                "top2_common": preds[1]["common_name"] if len(preds) > 1 else "",
+                                "top2_scientific": preds[1]["scientific_name"] if len(preds) > 1 else "",
+                                "top2_confidence": preds[1]["confidence"] if len(preds) > 1 else 0.0,
+                                "top3_common": preds[2]["common_name"] if len(preds) > 2 else "",
+                                "top3_scientific": preds[2]["scientific_name"] if len(preds) > 2 else "",
+                                "top3_confidence": preds[2]["confidence"] if len(preds) > 2 else 0.0,
                                 "needs_review": needs_review,
                                 "crop_saved_path": crop_saved_path,
                                 "metadata_json": merged_meta
                             }
                             project.add_bird_identification(updated_rec)
                             classified_records.append(updated_rec)
-                    else:
-                        if crop_saved_path and Path(crop_saved_path).exists():
-                            crop_bgr = safe_imread(crop_saved_path)
-                            if crop_bgr is not None:
-                                crop_pil = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
-                                preds = classifier.classify_crop(
-                                    crop_pil,
-                                    top_k=3,
-                                    use_tta=True,
-                                    lat=item_lat,
-                                    lng=item_lng,
-                                    accuracy=item_acc,
-                                    observed_on=observed_on
-                                )
-                                if preds:
-                                    top1 = preds[0]
-                                    conf = top1["confidence"]
-                                    needs_review = conf < min_species_conf
+                else:
+                    rec = rec_list[0]
+                    item_path_str = rec.get("item_path", "")
+                    p_item = items_by_path.get(item_path_str)
+                    file_name = Path(item_path_str).name if item_path_str else "Recorte"
+                    live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, "Classificando..."))
 
-                                    merged_meta = dict(meta_json)
-                                    merged_meta.update({
-                                        "geo_lat": item_lat,
-                                        "geo_lng": item_lng,
-                                        "provider": classifier_type,
-                                        "detection_status": "classified"
-                                    })
+                    # Resolução de Geo-Prior (EXIF ou Padrão)
+                    exif_lat = getattr(p_item, "meta_latitude", None) if (p_item and use_exif_gps) else None
+                    exif_lng = getattr(p_item, "meta_longitude", None) if (p_item and use_exif_gps) else None
+                    item_lat = exif_lat if exif_lat is not None else default_lat
+                    item_lng = exif_lng if exif_lng is not None else default_lng
+                    item_acc = getattr(p_item, "meta_gps_accuracy", None) or default_acc if p_item else default_acc
+                    observed_on = getattr(p_item, "meta_datetime_original", None) if p_item else None
 
-                                    updated_rec = {
-                                        "item_path": item_path_str,
-                                        "is_video": False,
-                                        "species_common": top1["common_name"],
-                                        "species_common_en": top1.get("common_name_en", ""),
-                                        "species_scientific": top1["scientific_name"],
-                                        "family": top1.get("family", ""),
-                                        "order": top1.get("order", ""),
-                                        "confidence": conf,
-                                        "top2_common": preds[1]["common_name"] if len(preds) > 1 else "",
-                                        "top2_scientific": preds[1]["scientific_name"] if len(preds) > 1 else "",
-                                        "top2_confidence": preds[1]["confidence"] if len(preds) > 1 else 0.0,
-                                        "top3_common": preds[2]["common_name"] if len(preds) > 2 else "",
-                                        "top3_scientific": preds[2]["scientific_name"] if len(preds) > 2 else "",
-                                        "top3_confidence": preds[2]["confidence"] if len(preds) > 2 else 0.0,
-                                        "needs_review": needs_review,
-                                        "crop_saved_path": crop_saved_path,
-                                        "metadata_json": merged_meta
-                                    }
-                                    project.add_bird_identification(updated_rec)
-                                    classified_records.append(updated_rec)
-                except Exception as e:
-                    log_event(f"Erro ao classificar recorte de {file_name}: {e}", level="error")
-                    console.print(f"[yellow]Aviso ao classificar recorte de {file_name}: {e}[/yellow]")
+                    is_video = rec.get("is_video", False)
+                    crop_saved_path = rec.get("crop_saved_path", "")
+                    meta_json = rec.get("metadata_json", {})
 
-                tracker.update(1)
-                live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, "Progresso"))
+                    try:
+                        if is_video:
+                            # Extrai a lista de recortes salvos na Etapa 1
+                            video_crops = meta_json.get("video_crops", [])
+                            if not video_crops and crop_saved_path:
+                                video_crops = [{"crop_path": crop_saved_path}]
+
+                            res = video_proc.classify_video_crops(
+                                saved_crops=video_crops,
+                                classifier=classifier,
+                                duration_sec=meta_json.get("duration_sec", 0.0),
+                                lat=item_lat,
+                                lng=item_lng,
+                                accuracy=item_acc,
+                                observed_on=observed_on,
+                                min_confident_crops=video_min_crops
+                            )
+
+                            if res:
+                                conf = res["confidence"]
+                                is_confident = res.get("is_confident_detection", True)
+                                needs_review = (conf < min_species_conf) or (not is_confident)
+
+                                merged_meta = dict(meta_json)
+                                merged_meta.update({
+                                    "evaluated_crops": res.get("evaluated_crops", len(video_crops)),
+                                    "species_crops_count": res.get("species_crops_count", 0),
+                                    "min_confident_crops": video_min_crops,
+                                    "vote_distribution": res.get("vote_distribution", {}),
+                                    "geo_lat": item_lat,
+                                    "geo_lng": item_lng,
+                                    "provider": classifier_type,
+                                    "detection_status": "classified"
+                                })
+
+                                updated_rec = {
+                                    "item_path": item_path_str,
+                                    "is_video": True,
+                                    "species_common": res["species_common"],
+                                    "species_common_en": res.get("species_common_en", ""),
+                                    "species_scientific": res["species_scientific"],
+                                    "family": res.get("family", ""),
+                                    "order": res.get("order", ""),
+                                    "confidence": conf,
+                                    "top2_common": res.get("top2_common", ""),
+                                    "top2_scientific": res.get("top2_scientific", ""),
+                                    "top2_confidence": res.get("top2_confidence", 0.0),
+                                    "top3_common": res.get("top3_common", ""),
+                                    "top3_scientific": res.get("top3_scientific", ""),
+                                    "top3_confidence": res.get("top3_confidence", 0.0),
+                                    "needs_review": needs_review,
+                                    "crop_saved_path": crop_saved_path,
+                                    "metadata_json": merged_meta
+                                }
+                                project.add_bird_identification(updated_rec)
+                                classified_records.append(updated_rec)
+                        else:
+                            if crop_saved_path and Path(crop_saved_path).exists():
+                                crop_bgr = safe_imread(crop_saved_path)
+                                if crop_bgr is not None:
+                                    crop_pil = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
+                                    preds = classifier.classify_crop(
+                                        crop_pil,
+                                        top_k=3,
+                                        use_tta=True,
+                                        lat=item_lat,
+                                        lng=item_lng,
+                                        accuracy=item_acc,
+                                        observed_on=observed_on
+                                    )
+                                    if preds:
+                                        top1 = preds[0]
+                                        conf = top1["confidence"]
+                                        needs_review = conf < min_species_conf
+
+                                        merged_meta = dict(meta_json)
+                                        merged_meta.update({
+                                            "geo_lat": item_lat,
+                                            "geo_lng": item_lng,
+                                            "provider": classifier_type,
+                                            "detection_status": "classified"
+                                        })
+
+                                        updated_rec = {
+                                            "item_path": item_path_str,
+                                            "is_video": False,
+                                            "species_common": top1["common_name"],
+                                            "species_common_en": top1.get("common_name_en", ""),
+                                            "species_scientific": top1["scientific_name"],
+                                            "family": top1.get("family", ""),
+                                            "order": top1.get("order", ""),
+                                            "confidence": conf,
+                                            "top2_common": preds[1]["common_name"] if len(preds) > 1 else "",
+                                            "top2_scientific": preds[1]["scientific_name"] if len(preds) > 1 else "",
+                                            "top2_confidence": preds[1]["confidence"] if len(preds) > 1 else 0.0,
+                                            "top3_common": preds[2]["common_name"] if len(preds) > 2 else "",
+                                            "top3_scientific": preds[2]["scientific_name"] if len(preds) > 2 else "",
+                                            "top3_confidence": preds[2]["confidence"] if len(preds) > 2 else 0.0,
+                                            "needs_review": needs_review,
+                                            "crop_saved_path": crop_saved_path,
+                                            "metadata_json": merged_meta
+                                        }
+                                        project.add_bird_identification(updated_rec)
+                                        classified_records.append(updated_rec)
+                    except Exception as e:
+                        log_event(f"Erro ao classificar recorte de {file_name}: {e}", level="error")
+                        console.print(f"[yellow]Aviso ao classificar recorte de {file_name}: {e}[/yellow]")
+
+                    tracker.update(1)
+                    live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, "Progresso"))
 
             live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, "Concluído", "Finalizando"))
 

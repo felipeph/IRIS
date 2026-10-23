@@ -78,7 +78,7 @@ class OrganizeStage(PipelineStage):
                 reporter.log("Nenhum arquivo planejado/pronto para organização.", level="warning")
             return True
 
-        dest_root = Path(config.get("general.destination_root", "/caminho/para/destino"))
+        dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
         
         # 1. Tabela de Resumo Prévia
         console.print(f"\n[bold cyan]=== Resumo da Organização Física ({project.name}) ===[/bold cyan]")
