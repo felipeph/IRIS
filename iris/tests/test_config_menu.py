@@ -282,8 +282,31 @@ def test_bird_id_menu_burst_consensus_edit(mock_console):
         config.set("modules.bird_id.burst_min_agreement_ratio", orig_ratio)
 
 
+def test_bird_id_menu_burst_early_exit_edit(mock_console):
+    """Testa edição das opções 20 (toggle early exit) e 21 (confirmações mínimas) no menu de aves."""
+    from unittest.mock import patch
+    orig_ee = config.get("modules.bird_id.enable_burst_early_exit", True)
+    orig_confirms = config.get("modules.bird_id.burst_early_exit_confirmations", 3)
+    try:
+        # Testa opção 20 com Confirm.ask -> False
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["20", "0"]), \
+             patch("src.core.config_menu.Confirm.ask", return_value=False), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_bird_id(mock_console)
+            assert config.get("modules.bird_id.enable_burst_early_exit") is False
+
+        # Testa opção 21 com Prompt.ask -> 4
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["21", "4", "0"]), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_bird_id(mock_console)
+            assert config.get("modules.bird_id.burst_early_exit_confirmations") == 4
+    finally:
+        config.set("modules.bird_id.enable_burst_early_exit", orig_ee)
+        config.set("modules.bird_id.burst_early_exit_confirmations", orig_confirms)
+
+
 def test_config_manager_auto_migrates_burst_consensus(tmp_path: Path):
-    """Garante que ConfigManager insere enable_burst_consensus e burst_min_agreement_ratio em configs legadas."""
+    """Garante que ConfigManager insere configurações de consenso e early exit em configs legadas."""
     import yaml
     from src.core.config import ConfigManager
 
@@ -304,4 +327,7 @@ def test_config_manager_auto_migrates_burst_consensus(tmp_path: Path):
         cm.load()
         assert cm.get("modules.bird_id.enable_burst_consensus") is True
         assert cm.get("modules.bird_id.burst_min_agreement_ratio") == 0.50
+        assert cm.get("modules.bird_id.enable_burst_early_exit") is True
+        assert cm.get("modules.bird_id.burst_early_exit_confirmations") == 3
+
 

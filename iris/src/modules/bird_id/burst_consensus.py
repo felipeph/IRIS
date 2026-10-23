@@ -6,7 +6,86 @@ a espécie predominante e calcular a confiança consolidada da rajada.
 """
 
 from collections import Counter, defaultdict
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+
+
+def calculate_crop_quality_score(rec: Dict[str, Any]) -> float:
+    """
+    Calcula o score de qualidade visual de um recorte baseado em nitidez e confiança YOLO.
+    Prioriza recortes com maior nitidez (variância Laplaciana) e maior probabilidade de ave.
+    """
+    meta = rec.get("metadata_json", {})
+    sharpness = meta.get("sharpness")
+    if sharpness is None:
+        crop_path = rec.get("crop_saved_path", "")
+        if crop_path:
+            p = Path(crop_path)
+            if p.exists():
+                try:
+                    import cv2
+                    from .detector import safe_imread
+                    img_bgr = safe_imread(str(p))
+                    if img_bgr is not None:
+                        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+                        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                    else:
+                        sharpness = 0.0
+                except Exception:
+                    sharpness = 0.0
+            else:
+                sharpness = 0.0
+        else:
+            sharpness = 0.0
+
+    yolo_conf = float(meta.get("yolo_conf", 1.0))
+    # Score composto: nitidez modulada pela confiança YOLO
+    return float(sharpness) * (yolo_conf if yolo_conf > 0 else 0.5)
+
+
+def rank_burst_crops(crops_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Ranqueia a lista de recortes da rajada em ordem decrescente de nitidez e qualidade visual.
+    Garante que as fotos mais nítidas e confiáveis sejam avaliadas primeiro.
+    """
+    return sorted(crops_list, key=calculate_crop_quality_score, reverse=True)
+
+
+def check_burst_early_exit(
+    evaluated_predictions: List[Dict[str, Any]],
+    required_confirmations: int,
+    min_species_confidence: float = 0.70
+) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Verifica se alguma espécie já alcançou o número mínimo configurado de fotos
+    com alta confiança dentro da rajada.
+
+    Retorna:
+    - (is_early_exit, winning_scientific_name, winner_top1_dict)
+    """
+    if not evaluated_predictions or required_confirmations <= 0:
+        return False, None, None
+
+    species_confirmations = Counter()
+    species_samples: Dict[str, Dict[str, Any]] = {}
+
+    for item in evaluated_predictions:
+        preds = item.get("predictions", [])
+        if not preds:
+            continue
+        top1 = preds[0]
+        conf = float(top1.get("confidence", 0.0))
+        sci = top1.get("scientific_name", "")
+
+        if conf >= min_species_confidence and sci:
+            species_confirmations[sci] += 1
+            if sci not in species_samples:
+                species_samples[sci] = top1
+
+            if species_confirmations[sci] >= required_confirmations:
+                return True, sci, species_samples[sci]
+
+    return False, None, None
 
 
 def aggregate_burst_species(

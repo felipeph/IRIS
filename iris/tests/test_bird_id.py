@@ -281,6 +281,7 @@ def test_bird_detect_stage_saves_only_in_iris_root(mock_detector_cls, tmp_path, 
     assert rec["crop_saved_path"] == str(iris_crop_file.resolve())
     assert rec["metadata_json"]["detection_status"] == "detected"
     assert rec["metadata_json"]["yolo_conf"] == pytest.approx(0.94, 0.01)
+    assert "sharpness" in rec["metadata_json"]
 
 
 @patch("src.modules.bird_id.classify_stage.BirdClassifier")
@@ -769,6 +770,192 @@ def test_bird_classify_stage_burst_consensus(tmp_path):
         assert rec["metadata_json"]["burst_consensus"] is True
         assert rec["metadata_json"]["burst_id"] == burst_id
         assert rec["metadata_json"]["burst_crops_count"] == 3
+
+
+def test_bird_classify_stage_burst_early_exit_stops_at_quorum(tmp_path, monkeypatch):
+    """
+    Garante que em uma rajada de 6 fotos com quorum = 3 de alta certeza,
+    o classificador seja invocado estritamente 3 vezes e a identificação seja
+    propagada para todas as 6 fotos no SQLite.
+    """
+    from src.modules.bird_id.classify_stage import BirdClassifyStage
+    proj = create_project("test_burst_ee_proj", str(tmp_path))
+
+    photos = [tmp_path / f"BURST_{i:03d}.JPG" for i in range(1, 7)]
+    crops = [tmp_path / f"crop_BURST_{i:03d}.jpg" for i in range(1, 7)]
+    for p in photos:
+        p.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+    for c in crops:
+        cv2.imwrite(str(c), np.zeros((40, 40, 3), dtype=np.uint8))
+
+    burst_id = "rajada_2026-10-22_11-30-00"
+    items = [
+        ProjectItem(str(p), str(p), category="rajada", burst_id=burst_id, status="copied", verified=True)
+        for p in photos
+    ]
+    proj.save_items_batch(items)
+
+    for i in range(6):
+        proj.save_bird_detection({
+            "item_path": str(photos[i]),
+            "is_video": False,
+            "crop_saved_path": str(crops[i]),
+            "metadata_json": {"sharpness": float(100 - i * 10), "yolo_conf": 0.9}
+        })
+
+    orig_get = config.get
+    monkeypatch.setattr(
+        config, "get",
+        lambda k, d=None: (
+            True if k == "modules.bird_id.enable_burst_early_exit" else
+            3 if k == "modules.bird_id.burst_early_exit_confirmations" else
+            orig_get(k, d)
+        )
+    )
+
+    with patch("src.modules.bird_id.classify_stage.BirdClassifier") as mock_clf_cls:
+        mock_clf = MagicMock()
+        mock_clf_cls.return_value = mock_clf
+
+        # Todas as fotos retornam Bem-te-vi com 90% de confiança
+        mock_clf.classify_crop.return_value = [
+            {"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "common_name_en": "Great Kiskadee", "family": "Tyrannidae", "order": "Passeriformes", "confidence": 0.90},
+            {"scientific_name": "Megarynchus pitangua", "common_name": "Neinei", "confidence": 0.05}
+        ]
+
+        stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+        success = stage.run(proj)
+        assert success is True
+
+        # O classificador deve ter sido chamado EXATAMENTE 3 vezes (e não 6!)
+        assert mock_clf.classify_crop.call_count == 3
+
+    # Verifica se todas as 6 fotos foram persistidas com o consenso de Bem-te-vi
+    all_recs = proj.list_bird_identifications()
+    assert len(all_recs) == 6
+    for rec in all_recs:
+        assert rec["species_common"] == "Bem-te-vi"
+        assert rec["species_scientific"] == "Pitangus sulphuratus"
+        assert rec["needs_review"] is False
+        assert rec["metadata_json"]["burst_consensus"] is True
+        assert rec["metadata_json"]["burst_early_exit"] is True
+        assert rec["metadata_json"]["burst_crops_evaluated"] == 3
+        assert rec["metadata_json"]["burst_crops_skipped"] == 3
+
+    # As 3 primeiras foram avaliadas, as 3 últimas foram dispensadas por early exit
+    evaluated = [r for r in all_recs if not r["metadata_json"].get("skipped_by_early_exit")]
+    skipped = [r for r in all_recs if r["metadata_json"].get("skipped_by_early_exit")]
+    assert len(evaluated) == 3
+    assert len(skipped) == 3
+
+
+def test_bird_classify_stage_burst_early_exit_disabled(tmp_path, monkeypatch):
+    """Garante que quando enable_burst_early_exit é False, todas as fotos da rajada sejam consultadas."""
+    from src.modules.bird_id.classify_stage import BirdClassifyStage
+    proj = create_project("test_burst_ee_dis_proj", str(tmp_path))
+
+    photos = [tmp_path / f"BURST_{i:03d}.JPG" for i in range(1, 5)]
+    crops = [tmp_path / f"crop_BURST_{i:03d}.jpg" for i in range(1, 5)]
+    for p in photos:
+        p.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+    for c in crops:
+        cv2.imwrite(str(c), np.zeros((40, 40, 3), dtype=np.uint8))
+
+    burst_id = "rajada_2026-10-22_12-00-00"
+    items = [
+        ProjectItem(str(p), str(p), category="rajada", burst_id=burst_id, status="copied", verified=True)
+        for p in photos
+    ]
+    proj.save_items_batch(items)
+
+    for i in range(4):
+        proj.save_bird_detection({
+            "item_path": str(photos[i]),
+            "is_video": False,
+            "crop_saved_path": str(crops[i]),
+            "metadata_json": {}
+        })
+
+    orig_get = config.get
+    monkeypatch.setattr(
+        config, "get",
+        lambda k, d=None: (
+            False if k == "modules.bird_id.enable_burst_early_exit" else
+            orig_get(k, d)
+        )
+    )
+
+    with patch("src.modules.bird_id.classify_stage.BirdClassifier") as mock_clf_cls:
+        mock_clf = MagicMock()
+        mock_clf_cls.return_value = mock_clf
+        mock_clf.classify_crop.return_value = [
+            {"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "common_name_en": "Great Kiskadee", "confidence": 0.90}
+        ]
+
+        stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+        success = stage.run(proj)
+        assert success is True
+
+        # Sem early exit, todas as 4 fotos devem ter sido consultadas na API
+        assert mock_clf.classify_crop.call_count == 4
+
+
+def test_bird_classify_stage_burst_early_exit_small_burst_adapts(tmp_path, monkeypatch):
+    """Garante que rajadas menores que o quorum configurado adaptem o quorum para o tamanho da rajada."""
+    from src.modules.bird_id.classify_stage import BirdClassifyStage
+    proj = create_project("test_burst_ee_small_proj", str(tmp_path))
+
+    photos = [tmp_path / "BURST_001.JPG", tmp_path / "BURST_002.JPG"]
+    crops = [tmp_path / "crop_BURST_001.jpg", tmp_path / "crop_BURST_002.jpg"]
+    for p in photos:
+        p.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+    for c in crops:
+        cv2.imwrite(str(c), np.zeros((40, 40, 3), dtype=np.uint8))
+
+    burst_id = "rajada_2026-10-22_12-30-00"
+    items = [
+        ProjectItem(str(p), str(p), category="rajada", burst_id=burst_id, status="copied", verified=True)
+        for p in photos
+    ]
+    proj.save_items_batch(items)
+
+    for i in range(2):
+        proj.save_bird_detection({
+            "item_path": str(photos[i]),
+            "is_video": False,
+            "crop_saved_path": str(crops[i]),
+            "metadata_json": {}
+        })
+
+    orig_get = config.get
+    monkeypatch.setattr(
+        config, "get",
+        lambda k, d=None: (
+            True if k == "modules.bird_id.enable_burst_early_exit" else
+            3 if k == "modules.bird_id.burst_early_exit_confirmations" else
+            orig_get(k, d)
+        )
+    )
+
+    with patch("src.modules.bird_id.classify_stage.BirdClassifier") as mock_clf_cls:
+        mock_clf = MagicMock()
+        mock_clf_cls.return_value = mock_clf
+        mock_clf.classify_crop.return_value = [
+            {"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "common_name_en": "Great Kiskadee", "confidence": 0.92}
+        ]
+
+        stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+        success = stage.run(proj)
+        assert success is True
+
+        # Como len(rec_list) == 2, quorum adaptado = min(3, 2) = 2 chamadas
+        assert mock_clf.classify_crop.call_count == 2
+        for p in photos:
+            rec = proj.get_bird_identification(str(p))
+            assert rec["species_common"] == "Bem-te-vi"
+            assert rec["needs_review"] is False
+            assert rec["metadata_json"]["burst_early_exit"] is True
+
 
 
 def test_bird_organize_stage_burst_siblings_unification(tmp_path, monkeypatch):

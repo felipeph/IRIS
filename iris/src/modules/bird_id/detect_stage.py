@@ -19,8 +19,9 @@ from src.core.pipeline import PipelineStage
 from src.core.project import Project, init_central_db
 from src.core.ui import ProgressTracker, PipelineUI
 
+import cv2
 from .detector import BirdDetector, safe_imwrite, safe_read_image_or_raw
-from .video_processor import VideoBirdProcessor
+from .video_processor import VideoBirdProcessor, calculate_sharpness
 
 console = Console()
 
@@ -137,6 +138,7 @@ class BirdDetectStage(PipelineStage):
                         detected = False
                         yolo_c = 0.0
                         bbox = None
+                        sharpness = None
 
                         if crop_file.exists():
                             detected = True
@@ -149,19 +151,27 @@ class BirdDetectStage(PipelineStage):
                                 if detected and crop_bgr is not None:
                                     safe_imwrite(str(crop_file), crop_bgr, quality=95)
                                     crop_path_str = str(crop_file.resolve())
+                                    try:
+                                        crop_gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+                                        sharpness = calculate_sharpness(crop_gray)
+                                    except Exception:
+                                        sharpness = 0.0
 
                         if detected and crop_path_str:
+                            meta = {
+                                "yolo_detected": True,
+                                "yolo_conf": float(yolo_c),
+                                "bbox": bbox,
+                                "crop_saved_path": crop_path_str,
+                                "detection_status": "detected"
+                            }
+                            if sharpness is not None:
+                                meta["sharpness"] = float(sharpness)
                             record = {
                                 "item_path": str(file_path),
                                 "is_video": False,
                                 "crop_saved_path": crop_path_str,
-                                "metadata_json": {
-                                    "yolo_detected": True,
-                                    "yolo_conf": float(yolo_c),
-                                    "bbox": bbox,
-                                    "crop_saved_path": crop_path_str,
-                                    "detection_status": "detected"
-                                }
+                                "metadata_json": meta
                             }
                             project.save_bird_detection(record)
                             detected_count += 1

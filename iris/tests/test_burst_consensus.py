@@ -3,7 +3,12 @@ Testes unitários automatizados para o módulo de consenso de espécies em rajad
 """
 
 import pytest
-from src.modules.bird_id.burst_consensus import aggregate_burst_species
+from src.modules.bird_id.burst_consensus import (
+    aggregate_burst_species,
+    rank_burst_crops,
+    calculate_crop_quality_score,
+    check_burst_early_exit
+)
 
 
 def test_aggregate_burst_species_empty():
@@ -153,3 +158,48 @@ def test_aggregate_burst_species_single_crop():
     assert res["supporting_crops"] == 1
     assert res["agreement_ratio"] == 1.0
     assert res["needs_review"] is False
+
+
+def test_rank_burst_crops_by_sharpness_and_conf():
+    """Garante que os recortes sejam ordenados decrescentemente por nitidez e confiança YOLO."""
+    crops = [
+        {"item_path": "photo_low.jpg", "metadata_json": {"sharpness": 10.0, "yolo_conf": 0.5}},
+        {"item_path": "photo_high.jpg", "metadata_json": {"sharpness": 150.0, "yolo_conf": 0.9}},
+        {"item_path": "photo_mid.jpg", "metadata_json": {"sharpness": 80.0, "yolo_conf": 0.8}},
+    ]
+    ranked = rank_burst_crops(crops)
+    assert ranked[0]["item_path"] == "photo_high.jpg"
+    assert ranked[1]["item_path"] == "photo_mid.jpg"
+    assert ranked[2]["item_path"] == "photo_low.jpg"
+
+
+def test_check_burst_early_exit():
+    """Garante que check_burst_early_exit detecte quorum de alta confiança com exatidão."""
+    # Lista vazia ou sem quorum
+    assert check_burst_early_exit([], required_confirmations=3)[0] is False
+
+    evals = [
+        {"predictions": [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.85}]},
+        {"predictions": [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.92}]},
+    ]
+    # Com 2 confirmações e quorum 3 -> False
+    is_ee, winner, meta = check_burst_early_exit(evals, required_confirmations=3, min_species_confidence=0.70)
+    assert is_ee is False
+    assert winner is None
+
+    # Adiciona 3ª confirmação com alta confiança -> True
+    evals.append({"predictions": [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.78}]})
+    is_ee, winner, meta = check_burst_early_exit(evals, required_confirmations=3, min_species_confidence=0.70)
+    assert is_ee is True
+    assert winner == "Pitangus sulphuratus"
+    assert meta["common_name"] == "Bem-te-vi"
+
+    # Confirmação abaixo do limiar (ex: 0.60) não deve contar
+    evals_low = [
+        {"predictions": [{"scientific_name": "Pitangus sulphuratus", "confidence": 0.60}]},
+        {"predictions": [{"scientific_name": "Pitangus sulphuratus", "confidence": 0.65}]},
+        {"predictions": [{"scientific_name": "Pitangus sulphuratus", "confidence": 0.68}]},
+    ]
+    is_ee_low, _, _ = check_burst_early_exit(evals_low, required_confirmations=3, min_species_confidence=0.70)
+    assert is_ee_low is False
+

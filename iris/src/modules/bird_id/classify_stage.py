@@ -26,7 +26,7 @@ from src.core.ui import ProgressTracker, PipelineUI
 from .detector import safe_imread
 from .classifier import BirdClassifier
 from .video_processor import VideoBirdProcessor
-from .burst_consensus import aggregate_burst_species
+from .burst_consensus import aggregate_burst_species, rank_burst_crops, check_burst_early_exit
 from .reporter import export_bird_review_csv, render_bird_summary_table
 
 console = Console()
@@ -50,8 +50,10 @@ class BirdClassifyStage(PipelineStage):
         classifier_type = module_cfg.get("classifier_type", "inaturalist")
         min_species_conf = float(module_cfg.get("min_species_confidence", 0.70))
         video_min_crops = int(module_cfg.get("video_min_confident_crops", 2))
-        enable_burst_consensus = bool(module_cfg.get("enable_burst_consensus", True))
-        burst_min_agreement = float(module_cfg.get("burst_min_agreement_ratio", 0.50))
+        enable_burst_consensus = bool(config.get("modules.bird_id.enable_burst_consensus", module_cfg.get("enable_burst_consensus", True)))
+        burst_min_agreement = float(config.get("modules.bird_id.burst_min_agreement_ratio", module_cfg.get("burst_min_agreement_ratio", 0.50)))
+        enable_burst_early_exit = bool(config.get("modules.bird_id.enable_burst_early_exit", module_cfg.get("enable_burst_early_exit", True)))
+        burst_early_exit_confirmations = int(config.get("modules.bird_id.burst_early_exit_confirmations", module_cfg.get("burst_early_exit_confirmations", 3)))
 
         inat_cfg = module_cfg.get("inaturalist", {})
         default_lat = inat_cfg.get("default_lat", None)
@@ -154,15 +156,26 @@ class BirdClassifyStage(PipelineStage):
         ) as live:
             for b_id, rec_list in groups:
                 if b_id is not None:
-                    # Classificação em lote de rajada com consenso
+                    # Classificação em lote de rajada com consenso e early exit
+                    if enable_burst_early_exit:
+                        rec_list = rank_burst_crops(rec_list)
+
+                    required_confirmations = min(burst_early_exit_confirmations, len(rec_list))
                     burst_crop_predictions = []
                     burst_eval_items = []
+                    early_exit_triggered = False
+                    early_exit_species = ""
+                    early_exit_count = 0
+                    evaluated_indices = set()
 
-                    for rec in rec_list:
+                    for idx, rec in enumerate(rec_list):
                         item_path_str = rec.get("item_path", "")
                         p_item = items_by_path.get(item_path_str)
                         file_name = Path(item_path_str).name if item_path_str else "Recorte"
-                        live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, f"Rajada ({len(rec_list)} fotos)..."))
+                        live.update(PipelineUI.generate_renderable(
+                            tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0,
+                            file_name, f"Rajada ({len(burst_eval_items) + 1}/{len(rec_list)} fotos)..."
+                        ))
 
                         exif_lat = getattr(p_item, "meta_latitude", None) if (p_item and use_exif_gps) else None
                         exif_lng = getattr(p_item, "meta_longitude", None) if (p_item and use_exif_gps) else None
@@ -207,9 +220,36 @@ class BirdClassifyStage(PipelineStage):
                             "item_lng": item_lng,
                             "preds": preds
                         })
+                        evaluated_indices.add(idx)
 
                         tracker.update(1)
-                        live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, "Progresso"))
+                        live.update(PipelineUI.generate_renderable(
+                            tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0,
+                            file_name, "Progresso"
+                        ))
+
+                        # Verifica condição de parada antecipada (Early Exit)
+                        if enable_burst_early_exit and len(rec_list) > 1:
+                            is_ee, winner_sci, winner_meta = check_burst_early_exit(
+                                burst_crop_predictions,
+                                required_confirmations=required_confirmations,
+                                min_species_confidence=min_species_conf
+                            )
+                            if is_ee and winner_sci:
+                                early_exit_triggered = True
+                                early_exit_species = winner_sci
+                                early_exit_count = required_confirmations
+                                skipped_count = len(rec_list) - len(burst_eval_items)
+                                log_event(
+                                    f"Early exit acionado na rajada {b_id}: {winner_sci} confirmado em "
+                                    f"{early_exit_count} fotos com alta confiança. Dispensando consulta de "
+                                    f"{skipped_count} fotos restantes da rajada."
+                                )
+                                live.update(PipelineUI.generate_renderable(
+                                    tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0,
+                                    file_name, f"Rajada ({b_id}): {winner_sci} confirmado ({skipped_count} fotos dispensadas)."
+                                ))
+                                break
 
                     # Consolidar espécie consensual por Soft Voting
                     consensus = aggregate_burst_species(
@@ -218,6 +258,12 @@ class BirdClassifyStage(PipelineStage):
                         min_agreement_ratio=burst_min_agreement
                     )
 
+                    # Se o early exit foi acionado com o quorum necessário de alta confiança,
+                    # a identificação é confirmada e não requer revisão manual
+                    if consensus and early_exit_triggered:
+                        consensus["needs_review"] = False
+
+                    # 1. Aplica identificação consensual para os itens avaliados
                     for ev in burst_eval_items:
                         item_path_str = ev["item_path_str"]
                         crop_saved_path = ev["crop_saved_path"]
@@ -234,6 +280,10 @@ class BirdClassifyStage(PipelineStage):
                                 "burst_consensus": True,
                                 "burst_id": b_id,
                                 "burst_crops_count": consensus["total_crops"],
+                                "burst_total_items": len(rec_list),
+                                "burst_crops_evaluated": len(burst_eval_items),
+                                "burst_crops_skipped": len(rec_list) - len(burst_eval_items),
+                                "burst_early_exit": early_exit_triggered,
                                 "burst_supporting_crops": consensus["supporting_crops"],
                                 "burst_agreement_ratio": consensus["agreement_ratio"],
                                 "burst_mean_individual_confidence": consensus["mean_individual_confidence"],
@@ -299,6 +349,67 @@ class BirdClassifyStage(PipelineStage):
                             }
                             project.add_bird_identification(updated_rec)
                             classified_records.append(updated_rec)
+
+                    # 2. Propaga identificação consensual para os itens dispensados por Early Exit
+                    for idx, rec in enumerate(rec_list):
+                        if idx in evaluated_indices:
+                            continue
+                        item_path_str = rec.get("item_path", "")
+                        p_item = items_by_path.get(item_path_str)
+                        crop_saved_path = rec.get("crop_saved_path", "")
+                        meta_json = rec.get("metadata_json", {})
+
+                        exif_lat = getattr(p_item, "meta_latitude", None) if (p_item and use_exif_gps) else None
+                        exif_lng = getattr(p_item, "meta_longitude", None) if (p_item and use_exif_gps) else None
+                        item_lat = exif_lat if exif_lat is not None else default_lat
+                        item_lng = exif_lng if exif_lng is not None else default_lng
+
+                        if consensus:
+                            merged_meta = dict(meta_json)
+                            merged_meta.update({
+                                "geo_lat": item_lat,
+                                "geo_lng": item_lng,
+                                "provider": classifier_type,
+                                "detection_status": "classified",
+                                "burst_consensus": True,
+                                "burst_id": b_id,
+                                "burst_crops_count": consensus["total_crops"],
+                                "burst_total_items": len(rec_list),
+                                "burst_crops_evaluated": len(burst_eval_items),
+                                "burst_crops_skipped": len(rec_list) - len(burst_eval_items),
+                                "burst_early_exit": True,
+                                "skipped_by_early_exit": True,
+                                "burst_supporting_crops": consensus["supporting_crops"],
+                                "burst_agreement_ratio": consensus["agreement_ratio"],
+                                "burst_mean_individual_confidence": consensus["mean_individual_confidence"],
+                                "burst_vote_distribution": consensus["vote_distribution"],
+                                "individual_top1_species": consensus["species_common"],
+                                "individual_top1_confidence": consensus["confidence"],
+                            })
+
+                            skipped_rec = {
+                                "item_path": item_path_str,
+                                "is_video": False,
+                                "species_common": consensus["species_common"],
+                                "species_common_en": consensus["species_common_en"],
+                                "species_scientific": consensus["species_scientific"],
+                                "family": consensus["family"],
+                                "order": consensus["order"],
+                                "confidence": consensus["confidence"],
+                                "top2_common": consensus["top2_common"],
+                                "top2_scientific": consensus["top2_scientific"],
+                                "top2_confidence": consensus["top2_confidence"],
+                                "top3_common": consensus["top3_common"],
+                                "top3_scientific": consensus["top3_scientific"],
+                                "top3_confidence": consensus["top3_confidence"],
+                                "needs_review": False,
+                                "crop_saved_path": crop_saved_path,
+                                "metadata_json": merged_meta
+                            }
+                            project.add_bird_identification(skipped_rec)
+                            classified_records.append(skipped_rec)
+
+                        tracker.update(1)
                 else:
                     rec = rec_list[0]
                     item_path_str = rec.get("item_path", "")

@@ -224,6 +224,12 @@ class ConfigManager:
                 if "burst_min_agreement_ratio" not in mods["bird_id"]:
                     mods["bird_id"]["burst_min_agreement_ratio"] = 0.50
                     has_changes = True
+                if "enable_burst_early_exit" not in mods["bird_id"]:
+                    mods["bird_id"]["enable_burst_early_exit"] = True
+                    has_changes = True
+                if "burst_early_exit_confirmations" not in mods["bird_id"]:
+                    mods["bird_id"]["burst_early_exit_confirmations"] = 3
+                    has_changes = True
 
             if "classification" not in self.config:
                 self.config["classification"] = {}
@@ -395,6 +401,8 @@ class ConfigManager:
                     "min_species_confidence": 0.70,
                     "enable_burst_consensus": True,
                     "burst_min_agreement_ratio": 0.50,
+                    "enable_burst_early_exit": True,
+                    "burst_early_exit_confirmations": 3,
                     "rename_files": True,
                     "organize_in_subfolders": True,
                     "write_exif_tags": True,

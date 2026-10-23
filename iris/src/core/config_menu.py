@@ -918,6 +918,12 @@ def _menu_bird_id(console: Console):
         min_agree = config.get("modules.bird_id.burst_min_agreement_ratio", 0.50)
         table.add_row("19", "Concordância Mínima na Rajada", "modules.bird_id.burst_min_agreement_ratio", f"{float(min_agree)*100:.0f}%")
         
+        ee_val = config.get("modules.bird_id.enable_burst_early_exit", True)
+        table.add_row("20", "Parada Antecipada em Rajadas (Early Exit)", "modules.bird_id.enable_burst_early_exit", "[green]Sim[/green]" if ee_val else "[red]Não[/red]")
+        
+        ee_confirms = config.get("modules.bird_id.burst_early_exit_confirmations", 3)
+        table.add_row("21", "Confirmações Mínimas p/ Early Exit", "modules.bird_id.burst_early_exit_confirmations", f"{int(ee_confirms)} fotos")
+        
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
         
@@ -1116,6 +1122,25 @@ def _menu_bird_id(console: Console):
                     console.print("[red]Valor deve estar entre 0.20 e 1.00![/red]")
             except ValueError:
                 console.print("[red]Valor deve ser um número decimal![/red]")
+            time.sleep(1)
+        elif choice == "20":
+            curr = config.get("modules.bird_id.enable_burst_early_exit", True)
+            new_val = Confirm.ask("Habilitar parada antecipada (early exit) em rajadas após quorum de certeza?", default=curr)
+            config.set("modules.bird_id.enable_burst_early_exit", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "21":
+            curr = int(config.get("modules.bird_id.burst_early_exit_confirmations", 3))
+            new_val = Prompt.ask("Número mínimo de confirmações com alta certeza para early exit (1 a 10 fotos)", default=str(curr))
+            try:
+                val_i = int(new_val)
+                if 1 <= val_i <= 10:
+                    config.set("modules.bird_id.burst_early_exit_confirmations", val_i)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve estar entre 1 e 10![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

@@ -70,6 +70,11 @@ flowchart TD
   - **iNaturalist Computer Vision API v2**: Utiliza coordenadas GPS extraídas dos metadados da imagem/vídeo para condicionamento geográfico (*geomodel*), obtendo precisão em escala regional.
   - **BioCLIP (Zero-Shot)**: Fallback local robusto via embeddings textuais de catálogo regional (`br_mg_aves.csv`).
 - **Vídeos**: Realiza votação ponderada acumulada entre os múltiplos frames extraídos pelo estágio 1.
+- **Rajadas de Fotos (Amostragem Seletiva e Early Exit)**:
+  - **Ranquamento por Nitidez**: Recortes da rajada (`burst_id`) são previamente ordenados decrescentemente pelo score composto de qualidade visual:
+    $$S = \text{Var}(\nabla^2 I) \times \text{conf}_{\text{YOLO}}$$
+  - **Parada Antecipada (Early Exit)**: Consulta sequencialmente apenas as principais amostras da rajada. Assim que um número configurável de fotos ($K$, padrão: 3) confirmar com alta confiança a mesma espécie, as consultas restantes à API para aquela rajada são interrompidas.
+  - **Propagação Consensual**: A espécie consensual é propagada para todas as fotos da rajada (avaliadas e dispensadas), garantindo redução de até $90\%$ no tempo de requisições de rede.
 - **Auditoria**: Atualiza os registros no SQLite com dados taxonômicos completos (`species_sci`, `species_pt`, `species_en`, `family`, `order`, `confidence`, `needs_review`) e gera o relatório `relatorio_aves.csv` no diretório do projeto.
 
 ### 2.3. Estágio 3: `bird_organize` (`BirdOrganizeStage`)
@@ -118,6 +123,10 @@ flowchart TD
 | `modules.bird_id.zoom_threshold_mm` | float | `300.0` | Distância focal equivalente mínima para teleobjetivas. |
 | `modules.bird_id.yolo_model` | str | `yolov8s.pt` | Modelo YOLOv8 utilizado (`yolov8s.pt`, etc.). |
 | `modules.bird_id.yolo_confidence` | float | `0.25` | Limiar mínimo de confiança do detector YOLO. |
+| `modules.bird_id.enable_burst_consensus` | bool | `true` | Ativa consolidação consensual de espécies por rajada fotográfica. |
+| `modules.bird_id.burst_min_agreement_ratio` | float | `0.50` | Razão mínima de concordância entre os membros da rajada ($50\%$). |
+| `modules.bird_id.enable_burst_early_exit` | bool | `true` | Habilita parada antecipada na classificação após quorum de confirmações. |
+| `modules.bird_id.burst_early_exit_confirmations` | int | `3` | Número de confirmações de alta confiança para disparar o early exit. |
 
 Todos os parâmetros podem ser ajustados interativamente através da opção `8. 🦜 Identificação de Aves` no menu global de configurações (`python iris/main.py -> C`).
 
