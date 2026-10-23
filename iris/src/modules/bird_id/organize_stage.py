@@ -1,28 +1,32 @@
 """
 Estágio do Pipeline: Organização Física de Aves (BirdOrganizeStage).
-Executa as ações de alta certeza para as aves identificadas no banco SQLite:
-1. Renomeação taxonômica tripla: [Nome_Popular_PT]_[Nome_Científico]_[Nome_Popular_EN]
+Executa as ações físicas de alta certeza para as aves identificadas no banco SQLite:
+1. Renomeação taxonômica segura: {stem}_{Nome_PT}_{Nome_Cientifico}.{ext}
 2. Movimentação física para subpasta da espécie dentro da categoria (ex: 2_AlbunsDatas/.../{Nome_PT}/)
-3. Injeção de metadados taxonômicos EXIF/IPTC/XMP via ExifTool
-4. Sincronização atômica do SQLite do projeto (items e bird_identifications).
-Casos de dúvida ou confiança < limiar permanecem inalterados no disco.
+3. Agrupamento de fotos irmãs de rajada na pasta da espécie
+4. Limpeza e poda de pastas vazias residuais
+5. Sincronização atômica do SQLite do projeto (items e bird_identifications)
+Painel Rich Live padronizado com acompanhamento em tempo real.
 """
 
+from datetime import datetime
 import shutil
 from pathlib import Path
 from rich.console import Console
+from rich.live import Live
 
 from src.core.config import config
 from src.core.pipeline import PipelineStage
 from src.core.project import Project, init_central_db
 from src.core.cleanup import clean_empty_parent_dirs, clean_empty_directories
-from .action import apply_bird_organization
+from src.core.ui import ProgressTracker, PipelineUI
+from .action import apply_bird_physical_move
 
 console = Console()
 
 
 class BirdOrganizeStage(PipelineStage):
-    """Estágio atômico de organização física, renomeação e injeção EXIF de aves identificadas."""
+    """Estágio atômico de organização física e renomeação de aves identificadas."""
 
     def run(self, project: Project, **kwargs) -> bool:
         init_central_db()
@@ -59,81 +63,100 @@ class BirdOrganizeStage(PipelineStage):
         missing_file_count = 0
         organized_bursts: dict[str, Path] = {}
 
-        console.print(f"[bold cyan]Iniciando organização física de aves ({len(records)} registros avaliados, limiar >= {min_confidence*100:.0f}%)...[/bold cyan]")
+        total_records = len(records)
+        tracker = ProgressTracker(total_records, mode="items")
+        start_str = datetime.now().strftime("%H:%M:%S")
+        stage_title = "ETAPA: ORGANIZAÇÃO FÍSICA E RENOMEAÇÃO DE AVES"
 
-        for rec in records:
-            item_path_str = rec.get("item_path", "")
-            item = items_by_path.get(item_path_str)
-            if not item:
-                # Tenta buscar pelo resolved path
-                try:
-                    item = items_by_path.get(str(Path(item_path_str).resolve()))
-                except Exception:
-                    item = None
+        with Live(
+            PipelineUI.generate_renderable(tracker, stage_title, start_str, total_records, 0.0, "Carregando...", "Iniciando"),
+            console=console,
+            refresh_per_second=4
+        ) as live:
+            for rec in records:
+                item_path_str = rec.get("item_path", "")
+                item = items_by_path.get(item_path_str)
+                if not item:
+                    try:
+                        item = items_by_path.get(str(Path(item_path_str).resolve()))
+                    except Exception:
+                        item = None
 
-            if not item:
-                missing_file_count += 1
-                continue
+                cur_filename = Path(item_path_str).name if item_path_str else "desconhecido"
+                live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_records, 0.0, cur_filename, "Organizando..."))
 
-            conf = float(rec.get("confidence", 0.0))
-            needs_review = bool(rec.get("needs_review", False))
-            has_species = bool(rec.get("species_common") or rec.get("species_scientific"))
-
-            if not has_species or conf < min_confidence or needs_review:
-                skipped_review_count += 1
-                continue
-
-            try:
-                current_p = Path(item.organized_path or item.staging_path or item.original_path)
-                if not current_p.exists():
+                if not item:
                     missing_file_count += 1
+                    tracker.update(1)
                     continue
 
-                new_path = apply_bird_organization(item, project, rec, module_cfg)
-                if new_path != current_p:
-                    # Atualiza o índice em memória com o novo caminho
-                    items_by_path[str(new_path.resolve())] = item
-                    rec["item_path"] = str(new_path.resolve())
+                conf = float(rec.get("confidence", 0.0))
+                needs_review = bool(rec.get("needs_review", False))
+                has_species = bool(rec.get("species_common") or rec.get("species_scientific"))
 
-                b_id = getattr(item, "burst_id", "") or ""
-                if b_id and new_path.exists():
-                    organized_bursts[b_id] = new_path.parent
+                if not has_species or conf < min_confidence or needs_review:
+                    skipped_review_count += 1
+                    tracker.update(1)
+                    continue
 
-                organized_count += 1
-            except Exception as e:
-                console.print(f"[yellow]Aviso ao organizar fisicamente a ave {rec.get('species_common')}: {e}[/yellow]")
+                try:
+                    current_p = Path(item.organized_path or item.staging_path or item.original_path)
+                    if not current_p.exists():
+                        missing_file_count += 1
+                        tracker.update(1)
+                        continue
 
-        # Mover fotos irmãs da mesma rajada (sem recorte individual) para a mesma subpasta da espécie
-        burst_siblings_moved = 0
-        dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
-        old_burst_dirs_to_clean: set[Path] = set()
+                    new_path = apply_bird_physical_move(item, project, rec, module_cfg)
+                    if new_path != current_p:
+                        # Atualiza o índice em memória com o novo caminho
+                        items_by_path[str(new_path.resolve())] = item
+                        rec["item_path"] = str(new_path.resolve())
 
-        for b_id, target_subfolder in organized_bursts.items():
-            siblings = project.get_items(burst_id=b_id)
-            for sib in siblings:
-                sib_p = Path(sib.organized_path or sib.staging_path or sib.original_path)
-                if sib_p.exists() and sib_p.parent.resolve() != target_subfolder.resolve():
-                    old_sib_dir = sib_p.parent
-                    dest_sib = target_subfolder / sib_p.name
-                    if not dest_sib.exists():
-                        shutil.move(str(sib_p), str(dest_sib))
-                        sib.organized_path = str(dest_sib.resolve())
-                        sib.target_filename = dest_sib.name
-                        try:
-                            sib.relative_dest_dir = str(dest_sib.parent.relative_to(dest_root))
-                        except Exception:
-                            pass
-                        project.save_item(sib)
-                        items_by_path[str(dest_sib.resolve())] = sib
-                        burst_siblings_moved += 1
-                        old_burst_dirs_to_clean.add(old_sib_dir)
+                    b_id = getattr(item, "burst_id", "") or ""
+                    if b_id and new_path.exists():
+                        organized_bursts[b_id] = new_path.parent
 
-        # Limpeza defensiva de pastas de rajadas originais e poda na raiz do IRIS
-        for old_bdir in old_burst_dirs_to_clean:
-            clean_empty_parent_dirs(old_bdir, stop_at_dir=dest_root)
-        clean_empty_directories(dest_root, preserve_root=True)
+                    organized_count += 1
+                except Exception as e:
+                    console.print(f"[yellow]Aviso ao organizar fisicamente a ave {rec.get('species_common')}: {e}[/yellow]")
+                finally:
+                    tracker.update(1)
 
-        console.print(f"[bold green]OK: Organização de aves concluída![/bold green]")
+            # Mover fotos irmãs da mesma rajada (sem recorte individual) para a mesma subpasta da espécie
+            burst_siblings_moved = 0
+            dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
+            old_burst_dirs_to_clean: set[Path] = set()
+
+            if organized_bursts:
+                live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_records, 0.0, "Rajadas", "Unificando fotos irmãs de rajada..."))
+                for b_id, target_subfolder in organized_bursts.items():
+                    siblings = project.get_items(burst_id=b_id)
+                    for sib in siblings:
+                        sib_p = Path(sib.organized_path or sib.staging_path or sib.original_path)
+                        if sib_p.exists() and sib_p.parent.resolve() != target_subfolder.resolve():
+                            old_sib_dir = sib_p.parent
+                            dest_sib = target_subfolder / sib_p.name
+                            if not dest_sib.exists():
+                                shutil.move(str(sib_p), str(dest_sib))
+                                sib.organized_path = str(dest_sib.resolve())
+                                sib.target_filename = dest_sib.name
+                                try:
+                                    sib.relative_dest_dir = str(dest_sib.parent.relative_to(dest_root))
+                                except Exception:
+                                    pass
+                                project.save_item(sib)
+                                items_by_path[str(dest_sib.resolve())] = sib
+                                burst_siblings_moved += 1
+                                old_burst_dirs_to_clean.add(old_sib_dir)
+
+            # Limpeza defensiva de pastas de rajadas originais e poda na raiz do IRIS
+            for old_bdir in old_burst_dirs_to_clean:
+                clean_empty_parent_dirs(old_bdir, stop_at_dir=dest_root)
+            clean_empty_directories(dest_root, preserve_root=True)
+
+            live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_records, 0.0, "Concluído", "Finalizando"))
+
+        console.print(f"[bold green]OK: Organização física de aves concluída![/bold green]")
         console.print(f"  [green]• Arquivos organizados com alta certeza:[/green] [bold cyan]{organized_count}[/bold cyan]")
         if burst_siblings_moved > 0:
             console.print(f"  [green]• Fotos irmãs de rajada unificadas na subpasta da espécie:[/green] [bold cyan]{burst_siblings_moved}[/bold cyan]")

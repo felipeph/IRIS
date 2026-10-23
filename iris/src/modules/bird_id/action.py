@@ -7,6 +7,7 @@ Executa as ações de alta certeza:
 4. Sincronização atômica do estado no SQLite do projeto
 """
 
+import unicodedata
 import os
 import re
 import shutil
@@ -20,11 +21,19 @@ from src.core.cleanup import clean_empty_parent_dirs
 
 
 def sanitize_bird_token(name: str) -> str:
-    """Higieniza um token de nome de ave para uso seguro em arquivos e pastas no Windows/Linux."""
+    """
+    Higieniza um token de nome de ave para uso seguro em pastas e arquivos em qualquer SO:
+    - Remove acentos e diacríticos (ASCII limpo: ex: Sabiá -> Sabia)
+    - Substitui caracteres inválidos e pontuações por hífen
+    - Converte espaços em hífens
+    - Remove múltiplos hífens ou traços consecutivos
+    """
     if not name:
         return ""
+    # Remove acentuação mantendo os caracteres base
+    clean = unicodedata.normalize("NFKD", name.strip()).encode("ascii", "ignore").decode("utf-8")
     # Substitui caracteres inválidos e pontuações por hífen
-    clean = re.sub(r'[\\/*?:"<>|.]', "-", name.strip())
+    clean = re.sub(r'[\\/*?:"<>|.,;()\[\]{}]', "-", clean)
     # Converte espaços em hífens
     clean = re.sub(r"\s+", "-", clean)
     # Remove múltiplos hífens ou traços consecutivos
@@ -34,8 +43,9 @@ def sanitize_bird_token(name: str) -> str:
 
 def build_bird_filename(current_name: str, common_pt: str, scientific: str, common_en: str = "") -> str:
     """
-    Constrói o nome de arquivo enriquecido com a taxonomia tripla da ave:
-    {Stem_Original}_[{Nome_Popular_PT}]_[{Nome_Cientifico}]_[{Nome_Popular_EN}].{ext}
+    Constrói o nome de arquivo enriquecido com taxonomia segura (apenas _ e sem acentos/espaços):
+    {Stem_Original}_{Nome_Popular_PT}_{Nome_Cientifico}.{ext}
+    Exemplo: 2026-09-06_15-10-00_SX60_IMG_1234_Beija-flor-de-fronte-violeta_Thalurania-glaucopis.JPG
     """
     p = Path(current_name)
     stem = p.stem
@@ -43,15 +53,12 @@ def build_bird_filename(current_name: str, common_pt: str, scientific: str, comm
 
     t_pt = sanitize_bird_token(common_pt)
     t_sci = sanitize_bird_token(scientific)
-    t_en = sanitize_bird_token(common_en)
 
     tokens = []
     if t_pt:
-        tokens.append(f"[{t_pt}]")
+        tokens.append(t_pt)
     if t_sci:
-        tokens.append(f"[{t_sci}]")
-    if t_en and t_en.lower() != t_pt.lower():
-        tokens.append(f"[{t_en}]")
+        tokens.append(t_sci)
 
     if not tokens:
         return current_name
@@ -121,15 +128,37 @@ def write_bird_exif_tags(
         return False
 
 
-def apply_bird_organization(
+def apply_bird_metadata(
+    file_path: Path,
+    record: Dict[str, Any]
+) -> bool:
+    """
+    Aplica metadados taxonômicos EXIF/IPTC/XMP ao arquivo indicado com base no registro.
+    """
+    if not file_path.exists():
+        return False
+
+    common_pt = record.get("species_common", "")
+    sci = record.get("species_scientific", "")
+    meta_dict = record.get("metadata_json", {}) if isinstance(record.get("metadata_json"), dict) else {}
+    common_en = record.get("species_common_en", "") or meta_dict.get("species_common_en", "") or meta_dict.get("common_en", "")
+    family = record.get("family", "") or meta_dict.get("family", "")
+    order = record.get("order", "") or meta_dict.get("order", "")
+
+    return write_bird_exif_tags(file_path, common_pt, sci, common_en, family, order)
+
+
+def apply_bird_physical_move(
     item: ProjectItem,
     project: Project,
     record: Dict[str, Any],
     bird_cfg: Dict[str, Any]
 ) -> Path:
     """
-    Aplica a tripla ação de alta certeza (Renomeação + Subpasta + EXIF) em item identificado.
-    Atualiza atomicamente o SQLite do projeto.
+    Aplica exclusivamente a movimentação física e renomeação taxonômica no disco e SQLite:
+    1. Renomeação segura: {stem}_{Nome_PT}_{Nome_Cientifico}.{ext}
+    2. Subpasta sanitizada (sem espaço e sem acento): {Nome_PT}/ ou {Nome_PT}/rajada_HH-MM-SS/
+    3. Sincronização atômica no SQLite
     """
     current_path = Path(item.organized_path or item.staging_path or item.original_path)
     if not current_path.exists():
@@ -145,14 +174,11 @@ def apply_bird_organization(
 
     rename_files = bool(bird_cfg.get("rename_files", True))
     organize_subfolder = bool(bird_cfg.get("organize_in_subfolders", True))
-    write_exif = bool(bird_cfg.get("write_exif_tags", True))
 
     common_pt = record.get("species_common", "")
     sci = record.get("species_scientific", "")
     meta_dict = record.get("metadata_json", {}) if isinstance(record.get("metadata_json"), dict) else {}
     common_en = record.get("species_common_en", "") or meta_dict.get("species_common_en", "") or meta_dict.get("common_en", "")
-    family = record.get("family", "") or meta_dict.get("family", "")
-    order = record.get("order", "") or meta_dict.get("order", "")
 
     # 1. Determina nome de arquivo
     if rename_files and (common_pt or sci):
@@ -188,7 +214,6 @@ def apply_bird_organization(
 
     # 3. Movimentação / Renomeação Física no Disco
     old_parent = current_path.parent
-    is_burst_folder = old_parent.name.lower().startswith("rajada")
 
     if target_path.resolve() != current_path.resolve():
         if target_path.exists():
@@ -201,11 +226,7 @@ def apply_bird_organization(
         if old_parent.resolve() != target_dir.resolve() and old_parent.exists():
             clean_empty_parent_dirs(old_parent, stop_at_dir=dest_root)
 
-    # 4. Injeção de Metadados EXIF/IPTC
-    if write_exif and target_path.exists():
-        write_bird_exif_tags(target_path, common_pt, sci, common_en, family, order)
-
-    # 5. Atualização Atômica no SQLite
+    # 4. Atualização Atômica no SQLite
     dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
     item.organized_path = str(target_path.resolve())
     item.target_filename = target_path.name
@@ -222,3 +243,21 @@ def apply_bird_organization(
                 project.update_bird_identification_path(str(current_path), str(target_path.resolve()))
 
     return target_path
+
+
+def apply_bird_organization(
+    item: ProjectItem,
+    project: Project,
+    record: Dict[str, Any],
+    bird_cfg: Dict[str, Any]
+) -> Path:
+    """
+    Função retrocompatível que executa a movimentação física e, opcionalmente,
+    a injeção de metadados EXIF caso 'write_exif_tags' esteja ativo no bird_cfg.
+    """
+    target_path = apply_bird_physical_move(item, project, record, bird_cfg)
+    write_exif = bool(bird_cfg.get("write_exif_tags", False))
+    if write_exif and target_path.exists():
+        apply_bird_metadata(target_path, record)
+    return target_path
+

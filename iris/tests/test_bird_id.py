@@ -24,6 +24,7 @@ def test_get_stage_and_pipeline_loading():
     from src.modules.bird_id.detect_stage import BirdDetectStage
     from src.modules.bird_id.classify_stage import BirdClassifyStage
     from src.modules.bird_id.organize_stage import BirdOrganizeStage
+    from src.modules.bird_id.tag_stage import BirdTagStage
 
     s_detect = get_stage("bird_detect", "Detecção e Recorte de Aves")
     assert isinstance(s_detect, BirdDetectStage)
@@ -36,6 +37,10 @@ def test_get_stage_and_pipeline_loading():
     s_organize = get_stage("bird_organize", "Organização Física de Aves")
     assert isinstance(s_organize, BirdOrganizeStage)
     assert s_organize.stage_id == "bird_organize"
+
+    s_tag = get_stage("bird_tag", "Injeção de Metadados de Aves")
+    assert isinstance(s_tag, BirdTagStage)
+    assert s_tag.stage_id == "bird_tag"
 
 
 def test_species_catalog_loading():
@@ -379,7 +384,9 @@ def test_bird_organize_stage_atomic_moves_and_tags(tmp_path, monkeypatch):
     species_dir = base_dir / "Bem-te-vi"
     assert species_dir.exists()
     renamed_file = next(species_dir.glob("*.JPG"))
-    assert "[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]" in renamed_file.name
+    assert "Bem-te-vi_Pitangus-sulphuratus" in renamed_file.name
+    assert "[" not in renamed_file.name
+    assert "]" not in renamed_file.name
 
     # Verifica sincronização no banco de dados do projeto
     updated_item = proj.get_item(item.original_path)
@@ -387,15 +394,17 @@ def test_bird_organize_stage_atomic_moves_and_tags(tmp_path, monkeypatch):
 
 
 def test_build_bird_filename():
-    from src.modules.bird_id.action import build_bird_filename
+    from src.modules.bird_id.action import build_bird_filename, sanitize_bird_token
     original = "2026-09-06_15-10-00_Canon-SX60_16MP_1365mm_IMG_1234.JPG"
-    new_name = build_bird_filename(original, "Bem-te-vi", "Pitangus sulphuratus", "Great Kiskadee")
-    assert "[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]" in new_name
+    new_name = build_bird_filename(original, "Beija-flor-de-fronte-violeta", "Thalurania glaucopis", "Violet-fronted Woodnymph")
+    assert "Beija-flor-de-fronte-violeta_Thalurania-glaucopis" in new_name
+    assert "[" not in new_name
+    assert "]" not in new_name
     assert new_name.endswith(".JPG")
     assert new_name.startswith("2026-09-06_15-10-00_Canon-SX60_16MP_1365mm_IMG_1234_")
 
     # Idempotência: não duplica tags se já presentes
-    double_call = build_bird_filename(new_name, "Bem-te-vi", "Pitangus sulphuratus", "Great Kiskadee")
+    double_call = build_bird_filename(new_name, "Beija-flor-de-fronte-violeta", "Thalurania glaucopis")
     assert double_call == new_name
 
 
@@ -478,8 +487,10 @@ def test_apply_bird_organization_high_and_low_certainty(tmp_path):
     assert not photo_file.exists()
     # Verifica que foi movido para subpasta com nome popular
     assert path_high.parent.name == "Bem-te-vi"
-    # Verifica renomeação tripla
-    assert "[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]" in path_high.name
+    # Verifica renomeação segura
+    assert "Bem-te-vi_Pitangus-sulphuratus" in path_high.name
+    assert "[" not in path_high.name
+    assert "]" not in path_high.name
     # Verifica atualização no SQLite
     updated_item = proj.get_item(item.original_path)
     assert updated_item is not None
@@ -939,8 +950,8 @@ def test_bird_organize_unidentified_remains_in_date_root(tmp_path, monkeypatch):
     stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
     assert stage.run(proj) is True
 
-    # 1. Apenas a espécie identificada tem pasta criada
-    species_dir = date_dir / "Sabiá-laranjeira"
+    # 1. Apenas a espécie identificada tem pasta criada (sanitizada sem acento)
+    species_dir = date_dir / "Sabia-laranjeira"
     assert species_dir.exists()
     assert (species_dir / "rajada_10-00-00").exists()
 
@@ -999,6 +1010,62 @@ def test_bird_organize_idempotency(tmp_path, monkeypatch):
     assert not (target_burst / "rajada_10-00-00").exists()
     assert not (target_burst / "Bem-te-vi").exists()
     assert first_path.exists()
+
+
+def test_sanitize_bird_token():
+    from src.modules.bird_id.action import sanitize_bird_token
+
+    assert sanitize_bird_token("Sabiá-laranjeira") == "Sabia-laranjeira"
+    assert sanitize_bird_token("João-de-barro") == "Joao-de-barro"
+    assert sanitize_bird_token("Beija-flor-de-fronte-violeta") == "Beija-flor-de-fronte-violeta"
+    assert sanitize_bird_token("Thalurania glaucopis") == "Thalurania-glaucopis"
+    assert sanitize_bird_token("  Águia-pescadora / Pandion haliaetus  ") == "Aguia-pescadora-Pandion-haliaetus"
+
+
+def test_bird_tag_stage_unit(tmp_path, monkeypatch):
+    """Testa o estágio BirdTagStage de forma isolada."""
+    from src.modules.bird_id.tag_stage import BirdTagStage
+
+    proj = create_project("test_tag_stage_proj", str(tmp_path))
+
+    photo = tmp_path / "foto_ave.jpg"
+    photo.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    item = ProjectItem(str(photo), str(photo), organized_path=str(photo), status="organized")
+    proj.save_item(item)
+
+    proj.add_bird_identification({
+        "item_path": str(photo),
+        "is_video": False,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "confidence": 0.92,
+        "needs_review": False
+    })
+
+    # 1. Caso desabilitado em config
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+    stage = BirdTagStage("bird_tag", "Injeção de Metadados de Aves")
+    assert stage.run(proj) is True
+
+    # 2. Caso ExifTool ausente: não deve quebrar
+    monkeypatch.setattr(config, "get", lambda k, d=None: True if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
+    monkeypatch.setenv("IRIS_EXIFTOOL_PATH", "")
+    assert stage.run(proj) is True
+
+    # 3. Caso normal com ExifTool simulado
+    mock_apply_meta = MagicMock(return_value=True)
+    monkeypatch.setattr("src.modules.bird_id.tag_stage.apply_bird_metadata", mock_apply_meta)
+    monkeypatch.setattr("shutil.which", lambda cmd: "C:\\exiftool.exe")
+
+    assert stage.run(proj) is True
+    assert mock_apply_meta.call_count == 1
+    call_args = mock_apply_meta.call_args[0]
+    assert call_args[0] == photo
+    assert call_args[1]["species_common"] == "Bem-te-vi"
 
 
 

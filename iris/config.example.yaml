@@ -66,7 +66,7 @@ modules:
     yolo_model: "yolov8s.pt"
     yolo_confidence: 0.25
     min_species_confidence: 0.70          # Limiar de alta certeza para renomeação, subpasta e tags EXIF
-    rename_files: true                   # Renomeação tripla com [Nome_PT]_[Nome_Cientifico]_[Nome_EN]
+    rename_files: true                   # Renomeação com {stem}_{Nome_PT}_{Nome_Cientifico} (apenas sublinhados, sem colchetes)
     organize_in_subfolders: true         # Organiza em subpasta com nome popular da ave dentro da categoria
     write_exif_tags: true                # Injeta palavras-chave IPTC/EXIF/XMP via ExifTool
     video_target_frames: 15              # Alvo de frames amostrados proporcionalmente à duração do vídeo
@@ -182,7 +182,11 @@ pipeline:
   - enabled: true
     id: bird_organize
     module: src.modules.bird_id.organize_stage
-    name: Organização Física de Aves (Subpastas + EXIF)
+    name: Organização Física de Aves (Subpastas e Nomes)
+  - enabled: true
+    id: bird_tag
+    module: src.modules.bird_id.tag_stage
+    name: Injeção de Metadados de Aves (EXIF/IPTC)
   - enabled: true
     id: astro_stack
     module: src.modules.astro_stack.stage

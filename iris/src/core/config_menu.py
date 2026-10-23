@@ -871,7 +871,7 @@ def _menu_bird_id(console: Console):
         table.add_row("3", "Limiar de Confiança para Ações", "modules.bird_id.min_species_confidence", f"{float(min_conf)*100:.0f}%")
         
         rename_val = config.get("modules.bird_id.rename_files", True)
-        table.add_row("4", "Renomeação Tripla (PT + Científico + EN)", "modules.bird_id.rename_files", "[green]Sim[/green]" if rename_val else "[red]Não[/red]")
+        table.add_row("4", "Renomeação Segura (_Nome-PT_Nome-Cientifico)", "modules.bird_id.rename_files", "[green]Sim[/green]" if rename_val else "[red]Não[/red]")
         
         subfolder_val = config.get("modules.bird_id.organize_in_subfolders", True)
         table.add_row("5", "Organizar em Subpasta por Nome Popular", "modules.bird_id.organize_in_subfolders", "[green]Sim[/green]" if subfolder_val else "[red]Não[/red]")
@@ -954,7 +954,7 @@ def _menu_bird_id(console: Console):
             time.sleep(1)
         elif choice == "4":
             curr = config.get("modules.bird_id.rename_files", True)
-            new_val = Confirm.ask("Renomear arquivos incluindo [Nome_PT]_[Cientifico]_[Nome_EN]?", default=curr)
+            new_val = Confirm.ask("Renomear arquivos incluindo _{Nome_PT}_{Cientifico}?", default=curr)
             config.set("modules.bird_id.rename_files", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)

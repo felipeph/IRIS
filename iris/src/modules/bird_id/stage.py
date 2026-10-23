@@ -4,6 +4,7 @@ Fachada de compatibilidade retroativa para os estágios atômicos:
 - detect_stage.py (BirdDetectStage)
 - classify_stage.py (BirdClassifyStage)
 - organize_stage.py (BirdOrganizeStage)
+- tag_stage.py (BirdTagStage)
 """
 
 from typing import Optional
@@ -15,6 +16,7 @@ from src.core.project import Project
 from .detect_stage import BirdDetectStage
 from .classify_stage import BirdClassifyStage
 from .organize_stage import BirdOrganizeStage
+from .tag_stage import BirdTagStage
 
 console = Console()
 
@@ -29,7 +31,8 @@ class BirdIdStage(PipelineStage):
         super().__init__(stage_id, name)
         self.detect_stage = BirdDetectStage("bird_detect", "Detecção e Recorte de Aves (YOLOv8)")
         self.classify_stage = BirdClassifyStage(stage_id, name)
-        self.organize_stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves (Subpastas + EXIF)")
+        self.organize_stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves (Subpastas e Nomes)")
+        self.tag_stage = BirdTagStage("bird_tag", "Injeção de Metadados de Aves (EXIF/IPTC)")
 
     def run(self, project: Project, **kwargs) -> bool:
         # Se ainda não houver recortes registrados no banco, executa a detecção prévia
@@ -51,6 +54,9 @@ def get_stage(stage_id: str, name: str) -> PipelineStage:
         return BirdDetectStage(stage_id, name)
     elif stage_id == "bird_organize":
         return BirdOrganizeStage(stage_id, name)
+    elif stage_id in ["bird_tag", "bird_exif", "bird_metadata"]:
+        return BirdTagStage(stage_id, name)
     elif stage_id in ["bird_id", "bird_classify"]:
         return BirdClassifyStage(stage_id, name)
     return BirdIdStage(stage_id, name)
+
