@@ -402,11 +402,28 @@ def test_build_bird_filename():
     assert "[" not in new_name
     assert "]" not in new_name
     assert new_name.endswith(".JPG")
-    assert new_name.startswith("2026-09-06_15-10-00_Canon-SX60_16MP_1365mm_IMG_1234_")
+    # Novo formato: {data}_{hora}_{Nome_PT}_{Nome_Cientifico}_{info_tecnica}.ext
+    assert new_name.startswith("2026-09-06_15-10-00_Beija-flor-de-fronte-violeta_Thalurania-glaucopis_")
+    assert new_name == "2026-09-06_15-10-00_Beija-flor-de-fronte-violeta_Thalurania-glaucopis_Canon-SX60_16MP_1365mm_IMG_1234.JPG"
 
-    # Idempotência: não duplica tags se já presentes
+    # Idempotência: não duplica tags se já presentes no local correto
     double_call = build_bird_filename(new_name, "Beija-flor-de-fronte-violeta", "Thalurania glaucopis")
     assert double_call == new_name
+
+    # Migração do formato antigo (com tag no final do arquivo): reposiciona para logo após data/hora
+    old_suffix_format = "2026-09-06_15-10-00_Canon-SX60_16MP_1365mm_IMG_1234_Beija-flor-de-fronte-violeta_Thalurania-glaucopis.JPG"
+    migrated = build_bird_filename(old_suffix_format, "Beija-flor-de-fronte-violeta", "Thalurania glaucopis")
+    assert migrated == new_name
+
+    # Caso sem data/hora: insere a tag no início antes do stem original
+    raw_file = "IMG_1234.JPG"
+    raw_renamed = build_bird_filename(raw_file, "Bem-te-vi", "Pitangus sulphuratus")
+    assert raw_renamed == "Bem-te-vi_Pitangus-sulphuratus_IMG_1234.JPG"
+
+    # Caso com prefixo apenas de data (sem hora)
+    date_only = "2026-09-06_IMG_1234.JPG"
+    date_renamed = build_bird_filename(date_only, "Bem-te-vi", "Pitangus sulphuratus")
+    assert date_renamed == "2026-09-06_Bem-te-vi_Pitangus-sulphuratus_IMG_1234.JPG"
 
 
 @patch("rawpy.imread")
@@ -1079,10 +1096,11 @@ def test_bird_organize_stage_burst_siblings_unification(tmp_path, monkeypatch):
     assert target_burst_dir.exists()
 
     target_photo1 = next(target_burst_dir.glob("*BURST_001*"))
-    target_photo2 = target_burst_dir / "BURST_002.JPG"
+    target_photo2 = next(target_burst_dir.glob("*BURST_002*"))
 
     assert target_photo1.exists()
     assert target_photo2.exists()
+    assert "Bem-te-vi_Pitangus-sulphuratus" in target_photo2.name
 
     # A pasta original da rajada na raiz da data ficou vazia e deve ter sido removida
     assert not burst_dir.exists()
@@ -1409,6 +1427,103 @@ def test_bird_tag_stage_approach_b_early_exit_allows_low_conf(tmp_path, monkeypa
     assert stage.run(proj) is True
     assert mock_apply_meta.call_count == 1
     assert mock_apply_meta.call_args[0][0] == photo
+
+
+def test_write_bird_exif_tags_utf8_argfile(tmp_path):
+    """
+    Valida que write_bird_exif_tags grava tags EXIF, IPTC e XMP via argfile UTF-8,
+    preservando caracteres acentuados (á, ã, é) e espaços para o Google Fotos e outros visualizadores.
+    """
+    import subprocess
+    import json
+    from PIL import Image
+    from src.modules.bird_id.action import write_bird_exif_tags
+
+    img_file = tmp_path / "foto_sabia.jpg"
+    Image.new("RGB", (50, 50), color="blue").save(img_file)
+
+    common_pt = "Sabiá-laranjeira"
+    scientific = "Turdus rufiventris"
+    common_en = "Rufous-bellied Thrush"
+    family = "Turdidae"
+    order = "Passeriformes"
+
+    ok = write_bird_exif_tags(img_file, common_pt, scientific, common_en, family, order)
+    assert ok is True
+
+    # Valida leitura dos metadados com ExifTool
+    res = subprocess.run(["exiftool", "-j", "-G", "-charset", "UTF8", str(img_file)], capture_output=True)
+    assert res.returncode == 0
+    data = json.loads(res.stdout.decode("utf-8"))[0]
+
+    # Verifica acentuação preservada no bloco EXIF, IPTC e XMP
+    assert "Sabiá-laranjeira" in data.get("XMP:Description", "")
+    assert "Sabiá-laranjeira" in data.get("IPTC:Caption-Abstract", "")
+    assert "Sabiá-laranjeira" in data.get("EXIF:ImageDescription", "")
+    assert data.get("IPTC:CodedCharacterSet") == "UTF8"
+
+    # Verifica palavras-chave com acentuação e espaços
+    assert "Sabiá-laranjeira" in data.get("IPTC:Keywords", [])
+    assert "Sabiá-laranjeira" in data.get("XMP:Subject", [])
+
+
+def test_bird_organize_stage_burst_siblings_renamed(tmp_path, monkeypatch):
+    """
+    Garante que todas as fotos irmãs da mesma rajada recebam a mesma taxonomia e renomeação
+    {data}_{hora}_{Nome_PT}_{Nome_Cientifico}_{info}.JPG ao serem organizadas.
+    """
+    from src.modules.bird_id.organize_stage import BirdOrganizeStage
+
+    proj = create_project("test_burst_siblings_rename_proj", str(tmp_path))
+
+    date_dir = tmp_path / "2_AlbunsDatas" / "2026" / "10" / "23"
+    burst_dir = date_dir / "rajada_14-30-00"
+    burst_dir.mkdir(parents=True, exist_ok=True)
+
+    photo1 = burst_dir / "2026-10-23_14-30-00_SX60_IMG_0001.JPG"
+    photo2 = burst_dir / "2026-10-23_14-30-00_SX60_IMG_0002.JPG"
+    photo1.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+    photo2.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    burst_id = "rajada_2026-10-23_14-30-00"
+    it1 = ProjectItem(str(photo1), str(photo1), organized_path=str(photo1), category="rajada", burst_id=burst_id, status="organized")
+    it2 = ProjectItem(str(photo2), str(photo2), organized_path=str(photo2), category="rajada", burst_id=burst_id, status="organized")
+    proj.save_item(it1)
+    proj.save_item(it2)
+
+    # Apenas photo1 possui identificação no banco (foto avaliada pelo detector/classificador)
+    proj.add_bird_identification({
+        "item_path": str(photo1),
+        "is_video": False,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "confidence": 0.95,
+        "needs_review": False,
+        "crop_saved_path": str(photo1),
+        "metadata_json": {"burst_id": burst_id}
+    })
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
+    assert stage.run(proj) is True
+
+    # Verifica se ambas as fotos da rajada foram para a pasta da espécie
+    target_burst = date_dir / "Bem-te-vi" / "rajada_14-30-00"
+    assert target_burst.exists()
+
+    expected_file1 = target_burst / "2026-10-23_14-30-00_Bem-te-vi_Pitangus-sulphuratus_SX60_IMG_0001.JPG"
+    expected_file2 = target_burst / "2026-10-23_14-30-00_Bem-te-vi_Pitangus-sulphuratus_SX60_IMG_0002.JPG"
+
+    assert expected_file1.exists()
+    assert expected_file2.exists()
+
+    # Verifica sincronização atômica no banco de dados para a foto irmã
+    updated_it2 = proj.get_item(it2.original_path)
+    assert updated_it2.organized_path == str(expected_file2.resolve())
+    assert updated_it2.target_filename == expected_file2.name
 
 
 

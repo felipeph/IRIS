@@ -38,9 +38,9 @@ flowchart TD
 
     subgraph E3["Estágio 3: Organização Física (bird_organize / BirdOrganizeStage)"]
         CheckGate{"Confiança >= min_species_confidence?"}
-        Rename["1. Renomeação Tripla:\n_[Nome_PT]_[Nome_Cientifico]_[Nome_EN]"]
+        Rename["1. Renomeação Segura:\n{data}_{hora}_{Nome_PT}_{Nome_Cientifico}_{info}.ext"]
         Subfolder["2. Movimentação para Subpasta:\n2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/"]
-        EXIF["3. Injeção de Tags EXIF/IPTC via ExifTool"]
+        EXIF["3. Injeção UTF-8 EXIF/IPTC/XMP via ExifTool\n(Compatível com Google Fotos)"]
         DB3["4. Sincronização Atômica SQLite\n(organized_path e status final)"]
         
         CSV --> CheckGate
@@ -91,10 +91,12 @@ flowchart TD
     `2_AlbunsDatas/YYYY/MM/DD/rajada_16-00-00/` (rajada não identificada)
     `2_AlbunsDatas/YYYY/MM/DD/IMG_5678.JPG` (foto avulsa não identificada)
 - **Ações Físicas**:
-  1. **Renomeação Tripla**: Preserva todos os metadados técnicos de disparo e anexa os nomes populares e científicos higienizados:
-     `..._[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]_IMG_1234.JPG`
+  1. **Renomeação Taxonômica Segura**: Posiciona o nome popular em português e o científico logo após a data e hora do disparo e antes das informações técnicas e nome original:
+     `{data}_{hora}_{Nome_PT}_{Nome_Cientifico}_{camera}_{resolucao}_{lente}_{exposicao}_{ISO}_{original}.{ext}`
+     *Exemplo:* `2026-09-06_15-10-00_Bem-te-vi_Pitangus-sulphuratus_Canon-SX60_16MP_4608x3456_247mm_f-6.5_1-250s_ISO400_IMG_1234.JPG`
+     (As fotos irmãs da mesma rajada também são renomeadas de forma consistente).
   2. **Subpasta por Espécie**: Move a mídia para a subpasta com o nome em português dentro da sua categoria cronológica (`2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/` ou `3_Videos/.../{Nome_PT}/`).
-  3. **Tags EXIF/IPTC**: Injeta tags taxonômicas (HierarchicalSubject, Keywords, Caption) sem recodificação de pixels via `exiftool`.
+  3. **Tags EXIF/IPTC/XMP UTF-8**: Injeta metadados taxonômicos (Description, Caption, Keywords, Subject, HierarchicalSubject, Title, XPTitle, XPComment, XPKeywords) via *argfile* UTF-8 do `exiftool`, preservando 100% dos acentos e espaços sem corrupção no Google Fotos, Apple Fotos, Windows Explorer e Lightroom.
   4. **Sincronização SQLite**: Atualiza `items.organized_path` e o caminho correspondente em `bird_identifications` atomicamente.
 
 ---

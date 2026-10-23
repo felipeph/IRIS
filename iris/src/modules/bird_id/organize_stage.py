@@ -20,7 +20,7 @@ from src.core.pipeline import PipelineStage
 from src.core.project import Project, init_central_db
 from src.core.cleanup import clean_empty_parent_dirs, clean_empty_directories
 from src.core.ui import ProgressTracker, PipelineUI
-from .action import apply_bird_physical_move
+from .action import apply_bird_physical_move, build_bird_filename
 
 console = Console()
 
@@ -61,7 +61,7 @@ class BirdOrganizeStage(PipelineStage):
         organized_count = 0
         skipped_review_count = 0
         missing_file_count = 0
-        organized_bursts: dict[str, Path] = {}
+        organized_bursts: dict[str, tuple[Path, dict]] = {}
 
         total_records = len(records)
         tracker = ProgressTracker(total_records, mode="items")
@@ -123,7 +123,7 @@ class BirdOrganizeStage(PipelineStage):
 
                     b_id = getattr(item, "burst_id", "") or ""
                     if b_id and new_path.exists():
-                        organized_bursts[b_id] = new_path.parent
+                        organized_bursts[b_id] = (new_path.parent, rec)
 
                     organized_count += 1
                 except Exception as e:
@@ -131,31 +131,47 @@ class BirdOrganizeStage(PipelineStage):
                 finally:
                     tracker.update(1)
 
-            # Mover fotos irmãs da mesma rajada (sem recorte individual) para a mesma subpasta da espécie
+            # Mover e renomear fotos irmãs da mesma rajada (sem recorte individual) para a mesma subpasta da espécie
             burst_siblings_moved = 0
             dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
             old_burst_dirs_to_clean: set[Path] = set()
+            rename_files = bool(module_cfg.get("rename_files", True))
 
             if organized_bursts:
                 live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_records, 0.0, "Rajadas", "Unificando fotos irmãs de rajada..."))
-                for b_id, target_subfolder in organized_bursts.items():
+                for b_id, (target_subfolder, burst_rec) in organized_bursts.items():
+                    c_pt = burst_rec.get("species_common", "")
+                    sci = burst_rec.get("species_scientific", "")
+                    meta_dict = burst_rec.get("metadata_json", {}) if isinstance(burst_rec.get("metadata_json"), dict) else {}
+                    c_en = burst_rec.get("species_common_en", "") or meta_dict.get("species_common_en", "") or meta_dict.get("common_en", "")
+
                     siblings = project.get_items(burst_id=b_id)
                     for sib in siblings:
                         sib_p = Path(sib.organized_path or sib.staging_path or sib.original_path)
-                        if sib_p.exists() and sib_p.parent.resolve() != target_subfolder.resolve():
+                        if not sib_p.exists():
+                            continue
+
+                        if rename_files and (c_pt or sci):
+                            new_sib_name = build_bird_filename(sib_p.name, c_pt, sci, c_en)
+                        else:
+                            new_sib_name = sib_p.name
+
+                        dest_sib = target_subfolder / new_sib_name
+                        if dest_sib.resolve() != sib_p.resolve():
                             old_sib_dir = sib_p.parent
-                            dest_sib = target_subfolder / sib_p.name
-                            if not dest_sib.exists():
-                                shutil.move(str(sib_p), str(dest_sib))
-                                sib.organized_path = str(dest_sib.resolve())
-                                sib.target_filename = dest_sib.name
-                                try:
-                                    sib.relative_dest_dir = str(dest_sib.parent.relative_to(dest_root))
-                                except Exception:
-                                    pass
-                                project.save_item(sib)
-                                items_by_path[str(dest_sib.resolve())] = sib
-                                burst_siblings_moved += 1
+                            if dest_sib.exists():
+                                dest_sib = target_subfolder / f"{dest_sib.stem}_1{dest_sib.suffix}"
+                            shutil.move(str(sib_p), str(dest_sib))
+                            sib.organized_path = str(dest_sib.resolve())
+                            sib.target_filename = dest_sib.name
+                            try:
+                                sib.relative_dest_dir = str(dest_sib.parent.relative_to(dest_root))
+                            except Exception:
+                                pass
+                            project.save_item(sib)
+                            items_by_path[str(dest_sib.resolve())] = sib
+                            burst_siblings_moved += 1
+                            if old_sib_dir.resolve() != target_subfolder.resolve():
                                 old_burst_dirs_to_clean.add(old_sib_dir)
 
             # Limpeza defensiva de pastas de rajadas originais e poda na raiz do IRIS

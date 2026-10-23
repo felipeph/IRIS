@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -43,9 +44,11 @@ def sanitize_bird_token(name: str) -> str:
 
 def build_bird_filename(current_name: str, common_pt: str, scientific: str, common_en: str = "") -> str:
     """
-    Constrói o nome de arquivo enriquecido com taxonomia segura (apenas _ e sem acentos/espaços):
-    {Stem_Original}_{Nome_Popular_PT}_{Nome_Cientifico}.{ext}
-    Exemplo: 2026-09-06_15-10-00_SX60_IMG_1234_Beija-flor-de-fronte-violeta_Thalurania-glaucopis.JPG
+    Constrói o nome de arquivo enriquecido com taxonomia segura (apenas _ e sem acentos/espaços),
+    posicionando o nome popular em português e científico logo após a data e hora e antes
+    das demais informações técnicas:
+    {Data}_{Hora}_{Nome_Popular_PT}_{Nome_Cientifico}_{Info_Tecnica}.{ext}
+    Exemplo: 2026-09-06_15-10-00_Beija-flor-de-fronte-violeta_Thalurania-glaucopis_Canon-SX60_16MP_IMG_1234.JPG
     """
     p = Path(current_name)
     stem = p.stem
@@ -54,22 +57,49 @@ def build_bird_filename(current_name: str, common_pt: str, scientific: str, comm
     t_pt = sanitize_bird_token(common_pt)
     t_sci = sanitize_bird_token(scientific)
 
-    tokens = []
-    if t_pt:
-        tokens.append(t_pt)
-    if t_sci:
-        tokens.append(t_sci)
-
+    tokens = [t for t in [t_pt, t_sci] if t]
     if not tokens:
         return current_name
 
     bird_tag = "_".join(tokens)
 
-    # Evita duplicação se o nome já contiver a tag
-    if bird_tag in stem:
-        return current_name
+    # Expressões regulares para localizar prefixo temporal (data + hora ou data)
+    dt_pattern = r"^(\d{4}[-_]?\d{2}[-_]?\d{2}[-_]\d{2}[-_]?\d{2}[-_]?\d{2})(?:_(.*))?$"
+    d_pattern = r"^(\d{4}[-_]?\d{2}[-_]?\d{2})(?:_(.*))?$"
 
-    return f"{stem}_{bird_tag}{ext}"
+    m = re.match(dt_pattern, stem) or re.match(d_pattern, stem)
+    if m:
+        prefix = m.group(1)
+        rest = m.group(2) or ""
+
+        # Se já estiver com a tag taxonômica logo após o prefixo, é idempotente
+        if rest == bird_tag or rest.startswith(f"{bird_tag}_"):
+            return current_name
+
+        # Limpar tokens taxonômicos pré-existentes de rest (migração do padrão antigo com sufixo)
+        clean_rest = rest
+        for tok in [bird_tag, t_pt, t_sci]:
+            if tok:
+                clean_rest = clean_rest.replace(tok, "")
+        clean_rest = re.sub(r"[-_]{2,}", "_", clean_rest).strip("-_")
+
+        if clean_rest:
+            new_stem = f"{prefix}_{bird_tag}_{clean_rest}"
+        else:
+            new_stem = f"{prefix}_{bird_tag}"
+        return f"{new_stem}{ext}"
+    else:
+        # Sem prefixo de data/hora: insere a tag no início do stem antes dos nomes de câmera/originais
+        if stem == bird_tag or stem.startswith(f"{bird_tag}_"):
+            return current_name
+        clean_stem = stem
+        for tok in [bird_tag, t_pt, t_sci]:
+            if tok:
+                clean_stem = clean_stem.replace(tok, "")
+        clean_stem = re.sub(r"[-_]{2,}", "_", clean_stem).strip("-_")
+        if clean_stem:
+            return f"{bird_tag}_{clean_stem}{ext}"
+        return f"{bird_tag}{ext}"
 
 
 def write_bird_exif_tags(
@@ -82,6 +112,8 @@ def write_bird_exif_tags(
 ) -> bool:
     """
     Injeta metadados taxonômicos (IPTC, XMP e EXIF) no arquivo usando ExifTool sem recodificar pixels.
+    Utiliza argfile temporário com codificação UTF-8 explícita para compatibilidade universal
+    e preservação perfeita de acentuação e espaços no Google Fotos, Apple Fotos, Lightroom e Windows.
     """
     env_exif = os.getenv("IRIS_EXIFTOOL_PATH")
     exiftool_bin = env_exif if env_exif else shutil.which("exiftool")
@@ -89,43 +121,68 @@ def write_bird_exif_tags(
         return False
 
     keywords = ["Aves"]
-    if common_pt:
-        keywords.append(common_pt)
-    if common_en and common_en.lower() != common_pt.lower():
-        keywords.append(common_en)
-    if scientific:
-        keywords.append(scientific)
-    if family:
-        keywords.append(family)
-    if order:
-        keywords.append(order)
+    for kw in [common_pt, scientific, common_en, family, order]:
+        if kw and kw not in keywords:
+            keywords.append(kw)
 
-    args = [exiftool_bin, "-overwrite_original", "-charset", "iptc=UTF8", "-charset", "filename=UTF8"]
-
-    for kw in set(keywords):
-        args.append(f"-Keywords+={kw}")
-        args.append(f"-Subject+={kw}")
-
-    if common_pt and scientific:
-        hier = f"Fauna|Aves|{family or 'Outros'}|{scientific}|{common_pt}"
-        args.append(f"-HierarchicalSubject+={hier}")
-
+    title = f"{common_pt} ({scientific})" if scientific else common_pt
     title_parts = [common_pt]
     if scientific:
         title_parts.append(f"({scientific})")
-    if common_en:
+    if common_en and common_en.lower() != common_pt.lower():
         title_parts.append(f"- {common_en}")
     caption = " ".join(title_parts)
-    args.append(f"-Caption-Abstract={caption}")
-    args.append(f"-Description={caption}")
 
-    args.append(str(file_path))
+    lines = [
+        "-overwrite_original",
+        "-charset", "UTF8",
+        "-charset", "iptc=UTF8",
+        "-charset", "filename=UTF8",
+        "-codedcharacterset=utf8",
+    ]
 
+    for kw in keywords:
+        lines.append(f"-Keywords+={kw}")
+        lines.append(f"-Subject+={kw}")
+
+    if common_pt and scientific:
+        hier = f"Fauna|Aves|{family or 'Outros'}|{scientific}|{common_pt}"
+        lines.append(f"-HierarchicalSubject+={hier}")
+
+    # Descrições e Legendas (Google Fotos, Flickr, DigiKam)
+    lines.append(f"-Caption-Abstract={caption}")
+    lines.append(f"-Description={caption}")
+    lines.append(f"-ImageDescription={caption}")
+
+    # Títulos e Nomes de Objeto
+    lines.append(f"-Title={title}")
+    lines.append(f"-ObjectName={title}")
+
+    # Tags nativas do Windows Explorer (UTF-16LE / UTF-8)
+    lines.append(f"-XPTitle={title}")
+    lines.append(f"-XPComment={caption}")
+    lines.append(f"-XPKeywords={';'.join(keywords)}")
+
+    lines.append(str(file_path.resolve()))
+
+    argfile = None
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+            for line in lines:
+                f.write(line + "\n")
+            argfile = f.name
+
+        cmd = [exiftool_bin, "-charset", "UTF8", "-@", argfile]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         return proc.returncode == 0
     except Exception:
         return False
+    finally:
+        if argfile:
+            try:
+                os.unlink(argfile)
+            except OSError:
+                pass
 
 
 def apply_bird_metadata(
