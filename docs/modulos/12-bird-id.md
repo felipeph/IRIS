@@ -74,6 +74,17 @@ flowchart TD
 
 ### 2.3. Estágio 3: `bird_organize` (`BirdOrganizeStage`)
 - **Objetivo**: Aplicar modificações estruturais no disco apenas para detecções que superem o limiar de confiança (`min_species_confidence`, padrão: 75%).
+- **Hierarquia de Pastas**:
+  - **Identificadas com Alta Certeza**: Em uma determinada data (`2_AlbunsDatas/YYYY/MM/DD/`), cria a pasta principal da espécie `{Nome_PT}/`.
+    - **Rajadas**: Todas as rajadas daquela espécie naquele dia são agrupadas dentro da pasta da espécie:
+      `2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/rajada_HH-MM-SS/`
+    - **Fotos Avulsas**: Fotos avulsas identificadas ficam diretamente na pasta da espécie:
+      `2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/IMG_1234_[Nome_PT]_[Cientifico]_[Nome_EN].JPG`
+    - **Vídeos**: Organizados em `3_Videos/YYYY/MM/DD/{Nome_PT}/video.mp4`.
+    - **Limpeza Defensiva**: Pastas de rajadas antigas na raiz da data que ficaram vazias após a movimentação são removidas com segurança.
+  - **Mídias Não Identificadas**: Casos de dúvida (`needs_review=True`), confiança abaixo do limiar ou não-aves permanecem intactos na pasta do dia, **fora da pasta da espécie**:
+    `2_AlbunsDatas/YYYY/MM/DD/rajada_16-00-00/` (rajada não identificada)
+    `2_AlbunsDatas/YYYY/MM/DD/IMG_5678.JPG` (foto avulsa não identificada)
 - **Ações Físicas**:
   1. **Renomeação Tripla**: Preserva todos os metadados técnicos de disparo e anexa os nomes populares e científicos higienizados:
      `..._[Bem-te-vi]_[Pitangus-sulphuratus]_[Great-Kiskadee]_IMG_1234.JPG`

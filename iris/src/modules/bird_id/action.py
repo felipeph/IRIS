@@ -162,11 +162,23 @@ def apply_bird_organization(
     # 2. Determina diretório de destino
     if organize_subfolder and common_pt:
         sub_dir_name = sanitize_bird_token(common_pt)
-        # Se o parent já for a subpasta da espécie, não aninha novamente
-        if current_path.parent.name.lower() == sub_dir_name.lower():
-            target_dir = current_path.parent
+        parent_name = current_path.parent.name.lower()
+
+        if parent_name.startswith("rajada"):
+            # Caso de foto em rajada: organizamos dentro da pasta da espécie daquela data:
+            # ex: 2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/rajada_HH-MM-SS/
+            if current_path.parent.parent.name.lower() == sub_dir_name.lower():
+                # Idempotência: já está dentro de {Nome_PT}/rajada_...
+                target_dir = current_path.parent
+            else:
+                date_dir = current_path.parent.parent
+                target_dir = date_dir / sub_dir_name / current_path.parent.name
         else:
-            target_dir = current_path.parent / sub_dir_name
+            # Caso de foto avulsa ou vídeo: 2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/
+            if parent_name == sub_dir_name.lower():
+                target_dir = current_path.parent
+            else:
+                target_dir = current_path.parent / sub_dir_name
     else:
         target_dir = current_path.parent
 
@@ -174,11 +186,22 @@ def apply_bird_organization(
     target_path = target_dir / new_filename
 
     # 3. Movimentação / Renomeação Física no Disco
+    old_parent = current_path.parent
+    is_burst_folder = old_parent.name.lower().startswith("rajada")
+
     if target_path.resolve() != current_path.resolve():
         if target_path.exists():
             # Se colidir com arquivo pré-existente
             target_path = target_dir / f"{target_path.stem}_1{target_path.suffix}"
         shutil.move(str(current_path), str(target_path))
+
+        # Se era pasta de rajada e ficou vazia na raiz da data, remove-a com segurança
+        if is_burst_folder and old_parent.resolve() != target_dir.resolve() and old_parent.exists():
+            try:
+                if not any(old_parent.iterdir()):
+                    old_parent.rmdir()
+            except OSError:
+                pass
 
     # 4. Injeção de Metadados EXIF/IPTC
     if write_exif and target_path.exists():

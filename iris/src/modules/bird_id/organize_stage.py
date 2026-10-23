@@ -104,18 +104,36 @@ class BirdOrganizeStage(PipelineStage):
 
         # Mover fotos irmãs da mesma rajada (sem recorte individual) para a mesma subpasta da espécie
         burst_siblings_moved = 0
+        dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
+        old_burst_dirs_to_clean: set[Path] = set()
+
         for b_id, target_subfolder in organized_bursts.items():
             siblings = project.get_items(burst_id=b_id)
             for sib in siblings:
                 sib_p = Path(sib.organized_path or sib.staging_path or sib.original_path)
-                if sib_p.exists() and sib_p.parent != target_subfolder:
+                if sib_p.exists() and sib_p.parent.resolve() != target_subfolder.resolve():
+                    old_sib_dir = sib_p.parent
                     dest_sib = target_subfolder / sib_p.name
                     if not dest_sib.exists():
                         shutil.move(str(sib_p), str(dest_sib))
                         sib.organized_path = str(dest_sib.resolve())
+                        sib.target_filename = dest_sib.name
+                        try:
+                            sib.relative_dest_dir = str(dest_sib.parent.relative_to(dest_root))
+                        except Exception:
+                            pass
                         project.save_item(sib)
                         items_by_path[str(dest_sib.resolve())] = sib
                         burst_siblings_moved += 1
+                        old_burst_dirs_to_clean.add(old_sib_dir)
+
+        # Limpeza defensiva de pastas de rajadas originais que ficaram vazias
+        for old_bdir in old_burst_dirs_to_clean:
+            try:
+                if old_bdir.exists() and not any(old_bdir.iterdir()):
+                    old_bdir.rmdir()
+            except OSError:
+                pass
 
         console.print(f"[bold green]OK: Organização de aves concluída![/bold green]")
         console.print(f"  [green]• Arquivos organizados com alta certeza:[/green] [bold cyan]{organized_count}[/bold cyan]")

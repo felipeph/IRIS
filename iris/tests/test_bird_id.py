@@ -799,19 +799,207 @@ def test_bird_organize_stage_burst_siblings_unification(tmp_path, monkeypatch):
     success = stage.run(proj)
     assert success is True
 
-    # Ambas as fotos devem ter sido movidas para burst_dir / "Bem-te-vi"
-    species_dir = burst_dir / "Bem-te-vi"
-    assert species_dir.exists()
+    # Ambas as fotos devem ter sido movidas para a subpasta da espécie e dentro dela a pasta da rajada:
+    # 2_AlbunsDatas/2026/10/22/Bem-te-vi/rajada_10-00-00/
+    date_dir = tmp_path / "2_AlbunsDatas" / "2026" / "10" / "22"
+    species_dir = date_dir / "Bem-te-vi"
+    target_burst_dir = species_dir / "rajada_10-00-00"
 
-    target_photo1 = next(species_dir.glob("*BURST_001*"))
-    target_photo2 = species_dir / "BURST_002.JPG"
+    assert species_dir.exists()
+    assert target_burst_dir.exists()
+
+    target_photo1 = next(target_burst_dir.glob("*BURST_001*"))
+    target_photo2 = target_burst_dir / "BURST_002.JPG"
 
     assert target_photo1.exists()
     assert target_photo2.exists()
 
-    # O item 2 sem recorte teve seu organized_path atualizado
+    # A pasta original da rajada na raiz da data ficou vazia e deve ter sido removida
+    assert not burst_dir.exists()
+
+    # O item 2 sem recorte teve seu organized_path atualizado para a pasta da rajada dentro da espécie
     item2_updated = proj.get_item(str(photo_without_crop))
-    assert Path(item2_updated.organized_path).parent == species_dir
+    assert Path(item2_updated.organized_path).parent == target_burst_dir
+
+
+def test_bird_organize_multiple_bursts_and_singles_same_day(tmp_path, monkeypatch):
+    """Garante que em uma data determinada, a pasta da espécie contenha múltiplas rajadas e avulsas."""
+    from src.modules.bird_id.organize_stage import BirdOrganizeStage
+
+    proj = create_project("test_multi_bursts_proj", str(tmp_path))
+
+    date_dir = tmp_path / "2_AlbunsDatas" / "2026" / "10" / "22"
+    burst1_dir = date_dir / "rajada_10-00-00"
+    burst2_dir = date_dir / "rajada_14-30-00"
+    burst1_dir.mkdir(parents=True, exist_ok=True)
+    burst2_dir.mkdir(parents=True, exist_ok=True)
+
+    b1_f1 = burst1_dir / "B1_001.JPG"
+    b1_f2 = burst1_dir / "B1_002.JPG"
+    b2_f1 = burst2_dir / "B2_001.JPG"
+    avulsa = date_dir / "2026-10-22_12-00-00_IMG_9999.JPG"
+
+    for f in [b1_f1, b1_f2, b2_f1, avulsa]:
+        f.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    item_b1_1 = ProjectItem(str(b1_f1), str(b1_f1), organized_path=str(b1_f1), category="rajada", burst_id="rajada_2026-10-22_10-00-00", status="organized")
+    item_b1_2 = ProjectItem(str(b1_f2), str(b1_f2), organized_path=str(b1_f2), category="rajada", burst_id="rajada_2026-10-22_10-00-00", status="organized")
+    item_b2_1 = ProjectItem(str(b2_f1), str(b2_f1), organized_path=str(b2_f1), category="rajada", burst_id="rajada_2026-10-22_14-30-00", status="organized")
+    item_avulsa = ProjectItem(str(avulsa), str(avulsa), organized_path=str(avulsa), category="avulsa", status="organized")
+    proj.save_items_batch([item_b1_1, item_b1_2, item_b2_1, item_avulsa])
+
+    for f in [b1_f1, b1_f2, b2_f1, avulsa]:
+        proj.add_bird_identification({
+            "item_path": str(f),
+            "is_video": False,
+            "species_common": "Bem-te-vi",
+            "species_scientific": "Pitangus sulphuratus",
+            "species_common_en": "Great Kiskadee",
+            "confidence": 0.92,
+            "needs_review": False,
+            "crop_saved_path": str(f)
+        })
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
+    assert stage.run(proj) is True
+
+    species_dir = date_dir / "Bem-te-vi"
+    assert species_dir.exists()
+
+    # 1. As rajadas devem estar como subpastas de Bem-te-vi
+    target_burst1 = species_dir / "rajada_10-00-00"
+    target_burst2 = species_dir / "rajada_14-30-00"
+    assert target_burst1.exists()
+    assert target_burst2.exists()
+    assert len(list(target_burst1.glob("*.JPG"))) == 2
+    assert len(list(target_burst2.glob("*.JPG"))) == 1
+
+    # 2. A foto avulsa deve estar diretamente na pasta da espécie
+    avulsa_matches = list(species_dir.glob("*IMG_9999*"))
+    assert len(avulsa_matches) == 1
+    assert avulsa_matches[0].parent == species_dir
+
+    # 3. As pastas originais de rajada vazias foram removidas
+    assert not burst1_dir.exists()
+    assert not burst2_dir.exists()
+
+
+def test_bird_organize_unidentified_remains_in_date_root(tmp_path, monkeypatch):
+    """Garante que fotos e rajadas não identificadas (ou em revisão) permaneçam na data, fora da pasta de espécie."""
+    from src.modules.bird_id.organize_stage import BirdOrganizeStage
+
+    proj = create_project("test_unidentified_proj", str(tmp_path))
+
+    date_dir = tmp_path / "2_AlbunsDatas" / "2026" / "10" / "22"
+    burst_ident_dir = date_dir / "rajada_10-00-00"
+    burst_unident_dir = date_dir / "rajada_16-00-00"
+    burst_ident_dir.mkdir(parents=True, exist_ok=True)
+    burst_unident_dir.mkdir(parents=True, exist_ok=True)
+
+    ident_f = burst_ident_dir / "IDENT_001.JPG"
+    unident_f = burst_unident_dir / "UNIDENT_001.JPG"
+    unident_avulsa = date_dir / "UNIDENT_AVULSA.JPG"
+
+    for f in [ident_f, unident_f, unident_avulsa]:
+        f.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    it_ident = ProjectItem(str(ident_f), str(ident_f), organized_path=str(ident_f), category="rajada", burst_id="rajada_2026-10-22_10-00-00", status="organized")
+    it_unident = ProjectItem(str(unident_f), str(unident_f), organized_path=str(unident_f), category="rajada", burst_id="rajada_2026-10-22_16-00-00", status="organized")
+    it_unident_avulsa = ProjectItem(str(unident_avulsa), str(unident_avulsa), organized_path=str(unident_avulsa), category="avulsa", status="organized")
+    proj.save_items_batch([it_ident, it_unident, it_unident_avulsa])
+
+    # Apenas ident_f tem alta certeza
+    proj.add_bird_identification({
+        "item_path": str(ident_f),
+        "is_video": False,
+        "species_common": "Sabiá-laranjeira",
+        "species_scientific": "Turdus rufiventris",
+        "species_common_en": "Rufous-bellied Thrush",
+        "confidence": 0.89,
+        "needs_review": False,
+        "crop_saved_path": str(ident_f)
+    })
+    # unident_f tem baixa confiança e needs_review
+    proj.add_bird_identification({
+        "item_path": str(unident_f),
+        "is_video": False,
+        "species_common": "Pássaro Desconhecido",
+        "confidence": 0.35,
+        "needs_review": True,
+        "crop_saved_path": str(unident_f)
+    })
+    # unident_avulsa sequer possui registro de identificação
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
+    assert stage.run(proj) is True
+
+    # 1. Apenas a espécie identificada tem pasta criada
+    species_dir = date_dir / "Sabiá-laranjeira"
+    assert species_dir.exists()
+    assert (species_dir / "rajada_10-00-00").exists()
+
+    # 2. A rajada não identificada permanece na raiz da data, fora de qualquer espécie
+    assert burst_unident_dir.exists()
+    assert unident_f.exists()
+
+    # 3. A avulsa não identificada permanece na raiz da data, fora de qualquer espécie
+    assert unident_avulsa.exists()
+    assert unident_avulsa.parent == date_dir
+
+
+def test_bird_organize_idempotency(tmp_path, monkeypatch):
+    """Garante que rodar a organização repetidamente não altere a estrutura nem crie aninhamentos indevidos."""
+    from src.modules.bird_id.organize_stage import BirdOrganizeStage
+
+    proj = create_project("test_idempotency_proj", str(tmp_path))
+
+    date_dir = tmp_path / "2_AlbunsDatas" / "2026" / "10" / "22"
+    burst_dir = date_dir / "rajada_10-00-00"
+    burst_dir.mkdir(parents=True, exist_ok=True)
+    photo = burst_dir / "BURST_001.JPG"
+    photo.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    item = ProjectItem(str(photo), str(photo), organized_path=str(photo), category="rajada", burst_id="rajada_2026-10-22_10-00-00", status="organized")
+    proj.save_item(item)
+
+    proj.add_bird_identification({
+        "item_path": str(photo),
+        "is_video": False,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "confidence": 0.95,
+        "needs_review": False,
+        "crop_saved_path": str(photo)
+    })
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
+
+    # Primeira execução
+    assert stage.run(proj) is True
+    target_burst = date_dir / "Bem-te-vi" / "rajada_10-00-00"
+    assert target_burst.exists()
+    organized_files = list(target_burst.glob("*.JPG"))
+    assert len(organized_files) == 1
+    first_path = organized_files[0]
+
+    # Segunda execução (idempotência)
+    assert stage.run(proj) is True
+    assert target_burst.exists()
+    # Não deve aninhar rajada_10-00-00/rajada_10-00-00 nem Bem-te-vi/Bem-te-vi
+    assert not (target_burst / "rajada_10-00-00").exists()
+    assert not (target_burst / "Bem-te-vi").exists()
+    assert first_path.exists()
+
 
 
 
