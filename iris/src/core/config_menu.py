@@ -32,6 +32,7 @@ def _menu_storage_ingestion(console: Console):
         
         allow_perm_val = config.get("modules.cleanup.allow_permanent_sd_clean", False)
         table.add_row("7", "Exclusão Permanente SD s/ Lixeira", "modules.cleanup.allow_permanent_sd_clean", "[green]Permitida[/green]" if allow_perm_val else "[yellow]Bloqueada (Segura)[/yellow]")
+        table.add_row("8", "🧹 Limpar Pastas Vazias no IRIS", "Ação Imediata", "[cyan]Executar varredura agora[/cyan]")
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
@@ -92,6 +93,17 @@ def _menu_storage_ingestion(console: Console):
             config.set("modules.cleanup.allow_permanent_sd_clean", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
+        elif choice == "8":
+            from pathlib import Path
+            from src.core.cleanup import clean_empty_directories
+            dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
+            console.print(f"\n[cyan]Varrendo pastas vazias em {dest_root}...[/cyan]")
+            removed = clean_empty_directories(dest_root, preserve_root=True)
+            if removed > 0:
+                console.print(f"[bold green]✔ {removed} pasta(s) vazia(s) removida(s) com sucesso![/bold green]")
+            else:
+                console.print("[yellow]Nenhuma pasta vazia encontrada na raiz do IRIS.[/yellow]")
+            time.sleep(2)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)

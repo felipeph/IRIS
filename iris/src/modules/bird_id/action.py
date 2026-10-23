@@ -16,6 +16,7 @@ from typing import Optional, Dict, Any
 
 from src.core.config import config
 from src.core.project import Project, ProjectItem
+from src.core.cleanup import clean_empty_parent_dirs
 
 
 def sanitize_bird_token(name: str) -> str:
@@ -195,13 +196,10 @@ def apply_bird_organization(
             target_path = target_dir / f"{target_path.stem}_1{target_path.suffix}"
         shutil.move(str(current_path), str(target_path))
 
-        # Se era pasta de rajada e ficou vazia na raiz da data, remove-a com segurança
-        if is_burst_folder and old_parent.resolve() != target_dir.resolve() and old_parent.exists():
-            try:
-                if not any(old_parent.iterdir()):
-                    old_parent.rmdir()
-            except OSError:
-                pass
+        # Se a pasta de origem ficou vazia, realiza poda ascendente até a raiz do IRIS
+        dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
+        if old_parent.resolve() != target_dir.resolve() and old_parent.exists():
+            clean_empty_parent_dirs(old_parent, stop_at_dir=dest_root)
 
     # 4. Injeção de Metadados EXIF/IPTC
     if write_exif and target_path.exists():

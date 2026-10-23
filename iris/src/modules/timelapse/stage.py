@@ -14,6 +14,7 @@ from src.modules.timelapse.namer import generate_timelapse_video_name, resolve_p
 from src.modules.timelapse.sequence import prepare_numbered_sequence, clean_sequence_dir
 from src.modules.timelapse.renderer import render_timelapse_video
 from src.modules.timelapse.notifier import notify_timelapse_render_done
+from src.core.cleanup import clean_empty_directories, clean_empty_parent_dirs
 
 console = Console()
 
@@ -206,6 +207,7 @@ class TimelapseStage(PipelineStage):
             # Limpar sequência temporária
             if tl_config.get("auto_clean_sequence", True):
                 clean_sequence_dir(temp_seq_dir)
+                clean_empty_parent_dirs(temp_seq_dir, stop_at_dir=dest_root)
 
             if render_ok:
                 total_frames = len(sorted_photos) * fpi
@@ -302,6 +304,7 @@ class TimelapseStage(PipelineStage):
             console.print(f"[yellow]Etapa 5 finalizada com {error_count} erro(s) e {success_count} sucesso(s).[/yellow]")
             return False
 
+        clean_empty_directories(dest_root, preserve_root=True)
         console.print(f"[bold green]Etapa 5 concluída com sucesso! ({success_count} timelapse(s) gerado(s)).[/bold green]")
         return True
 

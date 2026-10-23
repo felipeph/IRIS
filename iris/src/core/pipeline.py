@@ -1,8 +1,10 @@
 import importlib
 import inspect
 from abc import ABC, abstractmethod
+from pathlib import Path
 from src.core.project import Project
 from src.core.config import config
+from src.core.cleanup import clean_empty_directories
 from rich.console import Console
 
 console = Console()
@@ -73,6 +75,13 @@ class PipelineRunner:
                 
         return stages
 
+    def _sweep_empty_directories(self):
+        """Varre e remove pastas vazias na raiz de destino do IRIS."""
+        dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
+        removed = clean_empty_directories(dest_root, preserve_root=True)
+        if removed > 0:
+            console.print(f"[dim]🧹 Limpeza: {removed} pasta(s) vazia(s) removida(s) na raiz do IRIS ({dest_root}).[/dim]")
+
     def run_stage(self, project: Project, target_stage_id: str, **kwargs) -> bool:
         """Executa apenas uma etapa específica pelo seu ID."""
         kwargs.setdefault("interactive", True)
@@ -86,6 +95,7 @@ class PipelineRunner:
                     if success:
                         project.current_stage_id = stage.stage_id
                         project.save()
+                        self._sweep_empty_directories()
                         console.print(f"[green]OK: Etapa '{stage.name}' concluída com sucesso.[/green]")
                         return True
                     else:
@@ -136,6 +146,7 @@ class PipelineRunner:
                 if success:
                     project.current_stage_id = stage.stage_id
                     project.save()
+                    self._sweep_empty_directories()
                     console.print(f"[green]OK: Etapa '{stage.name}' concluída com sucesso.[/green]")
                 else:
                     console.print(f"[red]ERRO: Etapa '{stage.name}' falhou. Interrompendo pipeline.[/red]")
@@ -147,4 +158,5 @@ class PipelineRunner:
                 console.print(f"[red]ERRO: Erro inesperado na etapa '{stage.name}': {e}[/red]")
                 break
         
+        self._sweep_empty_directories()
         console.print(f"\n[bold blue]=== Fim do Pipeline ===[/bold blue]")

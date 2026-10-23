@@ -97,34 +97,7 @@ def delete_local_rendered_video(
 
     return False, 0, last_err
 
-def clean_empty_parent_dirs(file_path: Path, stop_at_dir: Path) -> int:
-    """
-    Remove pastas de data vazias (ex: YYYY/MM/DD) de baixo para cima,
-    parando imediatamente ao encontrar qualquer pasta com conteúdo ou a raiz delimitadora.
-    """
-    removed_count = 0
-    current = file_path.parent
-    try:
-        stop_resolved = stop_at_dir.resolve()
-    except Exception:
-        stop_resolved = stop_at_dir
-
-    while current and current != stop_resolved and current.exists():
-        try:
-            current_resolved = current.resolve()
-            if current_resolved == stop_resolved:
-                break
-            # Se diretório estiver completamente vazio
-            if not any(current.iterdir()):
-                current.rmdir()
-                removed_count += 1
-                current = current.parent
-            else:
-                break
-        except Exception:
-            break
-
-    return removed_count
+from src.core.cleanup import clean_empty_parent_dirs
 
 def execute_post_upload_cleanup(
     project: Project,
@@ -208,10 +181,9 @@ def execute_post_upload_cleanup(
     else:
         project.mark_edited_video_local_deleted(str(video_path.resolve()))
 
-    # 5. Remoção de pastas de data vazias residuais
+    # 5. Remoção de pastas de data vazias residuais e da categoria até a raiz do IRIS
     dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
-    root_category_dir = dest_root / ("6_Produzidos" if job_type == "timelapse" else "7_Video_Editado_4K")
-    clean_empty_parent_dirs(video_path, root_category_dir)
+    clean_empty_parent_dirs(video_path, dest_root)
 
     dest_desc = "Lixeira do Windows" if to_trash else "Exclusão Definitiva"
     c.print(f"[bold green]✔ Limpeza concluída: {file_gb:.2f} GB liberados no SSD ({dest_desc})![/bold green]")

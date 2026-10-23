@@ -49,17 +49,8 @@ def is_same_volume(path_a: Path, path_b: Path) -> bool:
     except Exception:
         return True
 
-def clean_empty_directories(root_dir: Path):
-    """Remove pastas vazias recursivamente de baixo para cima."""
-    if not root_dir.exists():
-        return
-    for dirpath, _, _ in os.walk(str(root_dir), topdown=False):
-        p = Path(dirpath)
-        try:
-            if p.exists() and not any(p.iterdir()):
-                p.rmdir()
-        except Exception:
-            pass
+from src.core.cleanup import clean_empty_directories, clean_empty_parent_dirs
+
 
 class OrganizeStage(PipelineStage):
     def run(self, project: Project, interactive: bool = True, reporter: Optional[ProgressReporter] = None) -> bool:
@@ -228,15 +219,12 @@ class OrganizeStage(PipelineStage):
 
             live.update(PipelineUI.generate_renderable(tracker, "ETAPA 4: ORGANIZAÇÃO FÍSICA (SSD)", start_str, total_files, total_gb, "Concluído", "Finalizando"))
 
-        # Limpeza de pastas vazias do staging do projeto caso não haja erros críticos
+        # Limpeza de pastas vazias do staging do projeto e poda na raiz do IRIS caso não haja erros críticos
         if errors == 0:
             staging_project_root = Path(dest_root) / "1_Entrada" / project.name
-            clean_empty_directories(staging_project_root)
-            if staging_project_root.exists() and not any(staging_project_root.iterdir()):
-                try:
-                    staging_project_root.rmdir()
-                except Exception:
-                    pass
+            clean_empty_directories(staging_project_root, preserve_root=False)
+            clean_empty_parent_dirs(staging_project_root, stop_at_dir=Path(dest_root))
+            clean_empty_directories(Path(dest_root), preserve_root=True)
 
         if errors > 0:
             console.print(f"[yellow]Organização concluída com {errors} erros.[/yellow]")

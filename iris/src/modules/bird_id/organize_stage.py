@@ -15,6 +15,7 @@ from rich.console import Console
 from src.core.config import config
 from src.core.pipeline import PipelineStage
 from src.core.project import Project, init_central_db
+from src.core.cleanup import clean_empty_parent_dirs, clean_empty_directories
 from .action import apply_bird_organization
 
 console = Console()
@@ -127,13 +128,10 @@ class BirdOrganizeStage(PipelineStage):
                         burst_siblings_moved += 1
                         old_burst_dirs_to_clean.add(old_sib_dir)
 
-        # Limpeza defensiva de pastas de rajadas originais que ficaram vazias
+        # Limpeza defensiva de pastas de rajadas originais e poda na raiz do IRIS
         for old_bdir in old_burst_dirs_to_clean:
-            try:
-                if old_bdir.exists() and not any(old_bdir.iterdir()):
-                    old_bdir.rmdir()
-            except OSError:
-                pass
+            clean_empty_parent_dirs(old_bdir, stop_at_dir=dest_root)
+        clean_empty_directories(dest_root, preserve_root=True)
 
         console.print(f"[bold green]OK: Organização de aves concluída![/bold green]")
         console.print(f"  [green]• Arquivos organizados com alta certeza:[/green] [bold cyan]{organized_count}[/bold cyan]")
