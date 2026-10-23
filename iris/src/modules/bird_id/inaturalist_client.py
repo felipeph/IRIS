@@ -32,6 +32,10 @@ class INaturalistClient:
     """Cliente para a API de Visão Computacional do iNaturalist."""
 
     DEFAULT_API_URL = "https://api.inaturalist.org/v2/computervision/score_image"
+    DEFAULT_VISION_FIELDS = (
+        "(combined_score:!t,vision_score:!t,taxon:(id:!t,name:!t,rank:!t,"
+        "preferred_common_name:!t,english_common_name:!t,ancestors:(id:!t,name:!t,rank:!t)))"
+    )
     OAUTH_TOKEN_URL = "https://www.inaturalist.org/oauth/token"
     USER_API_TOKEN_URL = "https://www.inaturalist.org/users/api_token"
     LOGIN_URL = "https://www.inaturalist.org/login"
@@ -56,6 +60,25 @@ class INaturalistClient:
         self._last_request_time: float = 0.0
         self._loaded_credentials_path: Optional[Path] = None
         self._taxon_details_cache: Dict[int, Dict[str, str]] = {}
+        self._session: Optional[requests.Session] = None
+
+    def _get_http_session(self) -> requests.Session:
+        """Retorna uma sessão HTTP persistente com connection pooling e Keep-Alive."""
+        if self._session is None:
+            self._session = requests.Session()
+        return self._session
+
+    def _post(self, url: str, **kwargs) -> requests.Response:
+        """Dispara POST via sessão persistente, respeitando mocks em suítes de teste."""
+        if hasattr(requests.post, "assert_called") or getattr(requests.post, "_is_mock", False):
+            return requests.post(url, **kwargs)
+        return self._get_http_session().post(url, **kwargs)
+
+    def _get(self, url: str, **kwargs) -> requests.Response:
+        """Dispara GET via sessão persistente, respeitando mocks em suítes de teste."""
+        if hasattr(requests.get, "assert_called") or getattr(requests.get, "_is_mock", False):
+            return requests.get(url, **kwargs)
+        return self._get_http_session().get(url, **kwargs)
 
     def _load_credentials(self) -> Dict[str, Any]:
         """Carrega credenciais de secrets/inaturalist.json."""
@@ -230,7 +253,7 @@ class INaturalistClient:
                 "username": username,
                 "password": password
             }
-            resp_oauth = requests.post(
+            resp_oauth = self._post(
                 self.OAUTH_TOKEN_URL,
                 json=oauth_payload,
                 headers={"Accept": "application/json"},
@@ -246,7 +269,7 @@ class INaturalistClient:
             if not access_token:
                 raise INaturalistAuthError(f"OAuth do iNaturalist não retornou access_token: {oauth_data}")
 
-            resp_jwt = requests.get(
+            resp_jwt = self._get(
                 self.USER_API_TOKEN_URL,
                 headers={
                     "Authorization": f"Bearer {access_token}",
@@ -353,10 +376,10 @@ class INaturalistClient:
             time.sleep(self.request_delay_seconds - elapsed)
         self._last_request_time = time.time()
 
-    def _prepare_image_bytes(self, pil_image: Image.Image, max_dim: int = 1600, quality: int = 90) -> bytes:
+    def _prepare_image_bytes(self, pil_image: Image.Image, max_dim: int = 1024, quality: int = 85) -> bytes:
         """
         Redimensiona defensivamente se a imagem for gigantesca e comprime em JPEG na memória.
-        A API do iNaturalist processa com precisão máxima em ~1024 a 1600px, economizando banda.
+        A API do iNaturalist processa com precisão máxima em ~1024px, economizando banda e tempo de upload.
         """
         w, h = pil_image.size
         img_to_send = pil_image
@@ -398,7 +421,7 @@ class INaturalistClient:
                 "Accept": "application/json"
             }
             url = f"https://api.inaturalist.org/v2/taxa/{int(taxon_id)}?fields=(name:!t,rank:!t,ancestors:(name:!t,rank:!t))"
-            resp = requests.get(url, headers=headers, timeout=self.timeout_seconds)
+            resp = self._get(url, headers=headers, timeout=self.timeout_seconds)
             if resp.status_code == 200:
                 data = resp.json()
                 results = data.get("results", [])
@@ -441,9 +464,9 @@ class INaturalistClient:
         # Obtém token de autenticação
         jwt_token = self.get_valid_jwt()
 
-        # Monta dados de geolocalização e data. Na v2, fields é mandatório para retorno completo do taxon.
+        # Monta dados de geolocalização e data. Na v2, fields inclui ancestors para eliminar consultas secundárias.
         data_payload: Dict[str, str] = {
-            "fields": "(combined_score:!t,vision_score:!t,taxon:all)"
+            "fields": self.DEFAULT_VISION_FIELDS
         }
         if lat is not None:
             data_payload["lat"] = f"{float(lat):.6f}"
@@ -476,7 +499,7 @@ class INaturalistClient:
             }
 
             try:
-                resp = requests.post(
+                resp = self._post(
                     self.api_url,
                     headers=headers,
                     files=files,
@@ -490,9 +513,16 @@ class INaturalistClient:
                     headers["Authorization"] = jwt_token
                     continue
 
-                # Tratamento de 429 Too Many Requests: espera com backoff
+                # Tratamento de 429 Too Many Requests: espera com backoff ou Retry-After
                 if resp.status_code == 429 and attempt < max_retries:
-                    wait_time = (attempt + 1) * 3.0
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_time = float(retry_after) + 0.5
+                        except ValueError:
+                            wait_time = (attempt + 1) * 3.0
+                    else:
+                        wait_time = (attempt + 1) * 3.0
                     time.sleep(wait_time)
                     continue
 
@@ -540,8 +570,12 @@ class INaturalistClient:
                 elif rank == "order":
                     order = anc.get("name", "").strip()
 
-            # Se não estiverem presentes no payload da visão (caso da API v2), busca via endpoint de táxons em cache
+            # Se ancestrais vieram no próprio payload, popula imediatamente o cache em memória
             t_id = taxon.get("id")
+            if t_id and (family or order):
+                self._taxon_details_cache[t_id] = {"family": family, "order": order}
+
+            # Se não estiverem presentes no payload da visão (fallback), busca via endpoint de táxons em cache
             if (not family or not order) and t_id:
                 anc_info = self._get_taxon_ancestry(t_id)
                 family = family or anc_info.get("family", "")

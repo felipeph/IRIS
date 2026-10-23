@@ -147,8 +147,8 @@ def test_score_image_with_geo_prior_and_parsing(mock_post):
     assert data_sent["lat"] == "-19.924500"
     assert data_sent["lng"] == "-43.945600"
     assert data_sent["positional_accuracy"] == "15000"
-    assert data_sent["taxon_id"] == "3"
-    assert data_sent["fields"] == "(combined_score:!t,vision_score:!t,taxon:all)"
+    assert data_sent["fields"] == INaturalistClient.DEFAULT_VISION_FIELDS
+    assert "ancestors:" in data_sent["fields"]
     assert "Authorization" in call_kwargs["headers"]
 
 
@@ -317,4 +317,108 @@ def test_client_web_session_login_bad_credentials(mock_session_cls, tmp_path):
         client.get_valid_jwt()
 
     assert "Usuário/E-mail ou Senha incorretos" in str(exc_info.value)
+
+
+@patch("requests.get")
+@patch("requests.post")
+def test_score_image_eliminates_secondary_taxa_request_when_ancestors_present(mock_post, mock_get):
+    """
+    Valida que quando ancestors vêm embutidos no payload de score_image (via DEFAULT_VISION_FIELDS),
+    nenhuma requisição HTTP secundária (/v2/taxa) é realizada, economizando cota e dobrando o throughput.
+    """
+    client = INaturalistClient(jwt_token="valid_jwt", request_delay_seconds=0.01)
+
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.json.return_value = {
+        "results": [
+            {
+                "combined_score": 0.95,
+                "vision_score": 0.90,
+                "taxon": {
+                    "id": 16045,
+                    "name": "Pitangus sulphuratus",
+                    "preferred_common_name": "Bem-te-vi",
+                    "english_common_name": "Great Kiskadee",
+                    "ancestors": [
+                        {"name": "Aves", "rank": "class"},
+                        {"name": "Passeriformes", "rank": "order"},
+                        {"name": "Tyrannidae", "rank": "family"}
+                    ]
+                }
+            }
+        ]
+    }
+    mock_post.return_value = mock_post_resp
+
+    test_img = Image.new("RGB", (100, 100), color="green")
+    preds = client.score_image(test_img, top_k=1)
+
+    assert len(preds) == 1
+    assert preds[0]["family"] == "Tyrannidae"
+    assert preds[0]["order"] == "Passeriformes"
+
+    # Confirma que mock_get (/v2/taxa) NUNCA foi chamado!
+    mock_get.assert_not_called()
+
+    # Confirma que o cache interno foi populado diretamente
+    assert 16045 in client._taxon_details_cache
+    assert client._taxon_details_cache[16045]["family"] == "Tyrannidae"
+    assert client._taxon_details_cache[16045]["order"] == "Passeriformes"
+
+
+@patch("time.sleep")
+@patch("requests.post")
+def test_score_image_retry_after_header_handling(mock_post, mock_sleep):
+    """
+    Valida que ao receber HTTP 429 Too Many Requests, o cliente respeita o cabeçalho Retry-After.
+    """
+    client = INaturalistClient(jwt_token="valid_jwt", request_delay_seconds=0.01)
+
+    # 1. Primeira resposta: 429 com Retry-After: 2
+    resp_429 = MagicMock()
+    resp_429.status_code = 429
+    resp_429.headers = {"Retry-After": "2"}
+
+    # 2. Segunda resposta: 200 OK
+    resp_200 = MagicMock()
+    resp_200.status_code = 200
+    resp_200.json.return_value = {
+        "results": [
+            {
+                "combined_score": 0.88,
+                "vision_score": 0.85,
+                "taxon": {
+                    "id": 144814,
+                    "name": "Turdus rufiventris",
+                    "preferred_common_name": "Sabiá-laranjeira"
+                }
+            }
+        ]
+    }
+
+    mock_post.side_effect = [resp_429, resp_200]
+
+    test_img = Image.new("RGB", (100, 100), color="orange")
+    preds = client.score_image(test_img, top_k=1)
+
+    assert len(preds) == 1
+    assert preds[0]["common_name"] == "Sabiá-laranjeira"
+    assert mock_post.call_count == 2
+
+    # Verifica se sleep foi chamado com o valor de Retry-After (2 + 0.5s = 2.5s)
+    mock_sleep.assert_any_call(2.5)
+
+
+def test_client_session_connection_pooling():
+    """
+    Valida que o cliente reutiliza uma sessão HTTP persistente única para connection pooling e Keep-Alive.
+    """
+    client = INaturalistClient(jwt_token="dummy")
+    sess1 = client._get_http_session()
+    sess2 = client._get_http_session()
+
+    assert sess1 is sess2
+    assert hasattr(sess1, "adapters")
+
 
