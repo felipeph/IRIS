@@ -17,7 +17,7 @@ def calculate_crop_quality_score(rec: Dict[str, Any]) -> float:
     """
     meta = rec.get("metadata_json", {})
     sharpness = meta.get("sharpness")
-    if sharpness is None:
+    if sharpness is None or sharpness == 0.0:
         crop_path = rec.get("crop_saved_path", "")
         if crop_path:
             p = Path(crop_path)
@@ -38,9 +38,9 @@ def calculate_crop_quality_score(rec: Dict[str, Any]) -> float:
         else:
             sharpness = 0.0
 
-    yolo_conf = float(meta.get("yolo_conf", 1.0))
+    yolo_conf = float(meta.get("yolo_conf", 0.5))
     # Score composto: nitidez modulada pela confiança YOLO
-    return float(sharpness) * (yolo_conf if yolo_conf > 0 else 0.5)
+    return float(sharpness) * (yolo_conf if yolo_conf > 0 else 0.1)
 
 
 def rank_burst_crops(crops_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -55,16 +55,16 @@ def check_burst_early_exit(
     evaluated_predictions: List[Dict[str, Any]],
     required_confirmations: int,
     min_species_confidence: float = 0.70
-) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]], int]:
     """
     Verifica se alguma espécie já alcançou o número mínimo configurado de fotos
     com alta confiança dentro da rajada.
 
     Retorna:
-    - (is_early_exit, winning_scientific_name, winner_top1_dict)
+    - (is_early_exit, leading_scientific_name, leading_sample_meta, leading_confirmations_count)
     """
     if not evaluated_predictions or required_confirmations <= 0:
-        return False, None, None
+        return False, None, None, 0
 
     species_confirmations = Counter()
     species_samples: Dict[str, Dict[str, Any]] = {}
@@ -83,9 +83,13 @@ def check_burst_early_exit(
                 species_samples[sci] = top1
 
             if species_confirmations[sci] >= required_confirmations:
-                return True, sci, species_samples[sci]
+                return True, sci, species_samples[sci], species_confirmations[sci]
 
-    return False, None, None
+    if species_confirmations:
+        top_sci, top_count = species_confirmations.most_common(1)[0]
+        return False, top_sci, species_samples.get(top_sci), top_count
+
+    return False, None, None, 0
 
 
 def aggregate_burst_species(
@@ -161,9 +165,6 @@ def aggregate_burst_species(
     winner_sci, winner_comm = sorted_votes[0][0]
     meta_winner = species_meta.get((winner_sci, winner_comm), {})
 
-    # Métrica de confiança consolidada: Soft Voting normalizado
-    consensus_confidence = (sorted_votes[0][1] / total_weight) if total_weight > 0 else 0.0
-
     # Contagem de recortes onde a espécie vencedora foi top-1
     crops_supporting_winner = top1_vote_counts[(winner_sci, winner_comm)]
     agreement_ratio = (crops_supporting_winner / valid_crops_count) if valid_crops_count > 0 else 0.0
@@ -173,7 +174,15 @@ def aggregate_burst_species(
         it["top1_confidence"] for it in individual_top1_list
         if it["top1_scientific"] == winner_sci and it["top1_common"] == winner_comm
     ]
-    mean_individual_confidence = (sum(winner_confs) / len(winner_confs)) if winner_confs else consensus_confidence
+    mean_individual_confidence = (sum(winner_confs) / len(winner_confs)) if winner_confs else 0.0
+
+    # Métrica de confiança consolidada:
+    # A confiança da espécie vencedora não deve ser diluída pela soma de votos alternativos Top-2/Top-3.
+    # Reflete a média das confianças individuais onde foi Top-1.
+    if winner_confs:
+        consensus_confidence = mean_individual_confidence
+    else:
+        consensus_confidence = (sorted_votes[0][1] / total_weight) if total_weight > 0 else 0.0
 
     # Top 2 e Top 3 consensuais
     top2_sci, top2_comm, top2_conf = "", "", 0.0

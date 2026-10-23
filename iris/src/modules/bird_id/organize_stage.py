@@ -93,8 +93,17 @@ class BirdOrganizeStage(PipelineStage):
                 conf = float(rec.get("confidence", 0.0))
                 needs_review = bool(rec.get("needs_review", False))
                 has_species = bool(rec.get("species_common") or rec.get("species_scientific"))
+                is_early_exit = bool(rec.get("metadata_json", {}).get("burst_early_exit", False))
 
-                if not has_species or conf < min_confidence or needs_review:
+                # Permite organizar se houver espécie identificada e:
+                # 1) conf >= min_confidence e não necessita revisão; OU
+                # 2) Foi validado com sucesso por Early Exit de rajada (Abordagem B) com needs_review == False
+                if not has_species or needs_review:
+                    skipped_review_count += 1
+                    tracker.update(1)
+                    continue
+
+                if conf < min_confidence and not is_early_exit:
                     skipped_review_count += 1
                     tracker.update(1)
                     continue

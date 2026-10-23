@@ -900,10 +900,10 @@ def test_bird_classify_stage_burst_early_exit_disabled(tmp_path, monkeypatch):
         assert mock_clf.classify_crop.call_count == 4
 
 
-def test_bird_classify_stage_burst_early_exit_small_burst_adapts(tmp_path, monkeypatch):
-    """Garante que rajadas menores que o quorum configurado adaptem o quorum para o tamanho da rajada."""
+def test_bird_classify_stage_burst_small_burst_evaluates_all_without_early_exit(tmp_path, monkeypatch):
+    """Garante que rajadas com menos de 3 fotos avaliem todas as fotos e NÃO disparem Early Exit (Regra A2)."""
     from src.modules.bird_id.classify_stage import BirdClassifyStage
-    proj = create_project("test_burst_ee_small_proj", str(tmp_path))
+    proj = create_project("test_burst_small_proj", str(tmp_path))
 
     photos = [tmp_path / "BURST_001.JPG", tmp_path / "BURST_002.JPG"]
     crops = [tmp_path / "crop_BURST_001.jpg", tmp_path / "crop_BURST_002.jpg"]
@@ -948,13 +948,85 @@ def test_bird_classify_stage_burst_early_exit_small_burst_adapts(tmp_path, monke
         success = stage.run(proj)
         assert success is True
 
-        # Como len(rec_list) == 2, quorum adaptado = min(3, 2) = 2 chamadas
+        # Como len(rec_list) == 2 (< 3), avalia todas as fotos sem acionar early exit
         assert mock_clf.classify_crop.call_count == 2
         for p in photos:
             rec = proj.get_bird_identification(str(p))
             assert rec["species_common"] == "Bem-te-vi"
             assert rec["needs_review"] is False
-            assert rec["metadata_json"]["burst_early_exit"] is True
+            assert rec["metadata_json"]["burst_early_exit"] is False
+
+
+def test_bird_classify_stage_evaluates_one_by_one_until_three_confirmations(tmp_path, monkeypatch):
+    """
+    Garante que a rajada avalie foto a foto sequencialmente até acumular 3 confirmações
+    de alta confiança, mesmo quando fotos intermediárias tiverem baixa confiança.
+    """
+    from src.modules.bird_id.classify_stage import BirdClassifyStage
+    proj = create_project("test_burst_one_by_one_proj", str(tmp_path))
+
+    photos = [tmp_path / f"BURST_{i:03d}.JPG" for i in range(1, 6)]
+    crops = [tmp_path / f"crop_BURST_{i:03d}.jpg" for i in range(1, 6)]
+    for p in photos:
+        p.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+    for c in crops:
+        cv2.imwrite(str(c), np.zeros((40, 40, 3), dtype=np.uint8))
+
+    burst_id = "rajada_2026-10-22_15-00-00"
+    items = [
+        ProjectItem(str(p), str(p), category="rajada", burst_id=burst_id, status="copied", verified=True)
+        for p in photos
+    ]
+    proj.save_items_batch(items)
+
+    for i in range(5):
+        proj.save_bird_detection({
+            "item_path": str(photos[i]),
+            "is_video": False,
+            "crop_saved_path": str(crops[i]),
+            "metadata_json": {"sharpness": float(100 - i * 10), "yolo_conf": 0.9}
+        })
+
+    orig_get = config.get
+    monkeypatch.setattr(
+        config, "get",
+        lambda k, d=None: (
+            True if k == "modules.bird_id.enable_burst_early_exit" else
+            3 if k == "modules.bird_id.burst_early_exit_confirmations" else
+            0.70 if k == "modules.bird_id.min_species_confidence" else
+            orig_get(k, d)
+        )
+    )
+
+    with patch("src.modules.bird_id.classify_stage.BirdClassifier") as mock_clf_cls:
+        mock_clf = MagicMock()
+        mock_clf_cls.return_value = mock_clf
+
+        # Foto 1: Bem-te-vi (0.90) -> Confirmação 1
+        # Foto 2: Bem-te-vi (0.50, < 0.70) -> Não pontua confirmação
+        # Foto 3: Bem-te-vi (0.92) -> Confirmação 2
+        # Foto 4: Bem-te-vi (0.88) -> Confirmação 3 -> EARLY EXIT DISPARA AQUI!
+        # Foto 5: Não deve ser chamada!
+        responses = [
+            [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.90}],
+            [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.50}],
+            [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.92}],
+            [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.88}],
+            [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.95}],
+        ]
+        mock_clf.classify_crop.side_effect = responses
+
+        stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+        success = stage.run(proj)
+        assert success is True
+
+        # Exatamente 4 chamadas (parou na foto 4 ao atingir a 3ª confirmação)
+        assert mock_clf.classify_crop.call_count == 4
+
+        # Foto 5 foi dispensada pelo early exit
+        rec5 = proj.get_bird_identification(str(photos[4]))
+        assert rec5["metadata_json"]["skipped_by_early_exit"] is True
+        assert rec5["species_common"] == "Bem-te-vi"
 
 
 
@@ -1253,6 +1325,91 @@ def test_bird_tag_stage_unit(tmp_path, monkeypatch):
     call_args = mock_apply_meta.call_args[0]
     assert call_args[0] == photo
     assert call_args[1]["species_common"] == "Bem-te-vi"
+
+
+def test_bird_organize_stage_approach_b_early_exit_allows_low_conf(tmp_path, monkeypatch):
+    """
+    Garante que a Abordagem B permita organizar fisicamente rajadas confirmadas por Early Exit
+    mesmo se a confiança numérica estivesse abaixo do limiar (ex: 0.55 < 0.70).
+    """
+    from src.modules.bird_id.organize_stage import BirdOrganizeStage
+
+    proj = create_project("test_approach_b_org_proj", str(tmp_path))
+
+    date_dir = tmp_path / "2_AlbunsDatas" / "2026" / "10" / "22"
+    burst_dir = date_dir / "rajada_10-00-00"
+    burst_dir.mkdir(parents=True, exist_ok=True)
+    photo = burst_dir / "BURST_001.JPG"
+    photo.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    item = ProjectItem(str(photo), str(photo), organized_path=str(photo), category="rajada", burst_id="rajada_2026-10-22_10-00-00", status="organized")
+    proj.save_item(item)
+
+    proj.add_bird_identification({
+        "item_path": str(photo),
+        "is_video": False,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "confidence": 0.55,  # Abaixo do limiar padrão de 0.70
+        "needs_review": False,
+        "crop_saved_path": str(photo),
+        "metadata_json": {
+            "burst_early_exit": True,
+            "burst_id": "rajada_2026-10-22_10-00-00"
+        }
+    })
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: False if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    stage = BirdOrganizeStage("bird_organize", "Organização Física de Aves")
+    assert stage.run(proj) is True
+
+    # Pela Abordagem B, a rajada com Early Exit é validada e movida para a pasta da espécie
+    target_burst = date_dir / "Bem-te-vi" / "rajada_10-00-00"
+    assert target_burst.exists()
+    assert len(list(target_burst.glob("*BURST_001*"))) == 1
+
+
+def test_bird_tag_stage_approach_b_early_exit_allows_low_conf(tmp_path, monkeypatch):
+    """
+    Garante que a Abordagem B permita injetar metadados em rajadas confirmadas por Early Exit
+    mesmo se a confiança numérica estivesse abaixo do limiar (ex: 0.55 < 0.70).
+    """
+    from src.modules.bird_id.tag_stage import BirdTagStage
+
+    proj = create_project("test_approach_b_tag_proj", str(tmp_path))
+
+    photo = tmp_path / "foto_ee.jpg"
+    photo.write_bytes(b"\xFF\xD8\xFF\xE0" + b"\x00" * 20)
+
+    item = ProjectItem(str(photo), str(photo), organized_path=str(photo), status="organized")
+    proj.save_item(item)
+
+    proj.add_bird_identification({
+        "item_path": str(photo),
+        "is_video": False,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "confidence": 0.55,  # Abaixo de 0.70
+        "needs_review": False,
+        "metadata_json": {"burst_early_exit": True}
+    })
+
+    mock_apply_meta = MagicMock(return_value=True)
+    monkeypatch.setattr("src.modules.bird_id.tag_stage.apply_bird_metadata", mock_apply_meta)
+    monkeypatch.setattr("shutil.which", lambda cmd: "C:\\exiftool.exe")
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: True if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    stage = BirdTagStage("bird_tag", "Injeção de Metadados de Aves")
+    assert stage.run(proj) is True
+    assert mock_apply_meta.call_count == 1
+    assert mock_apply_meta.call_args[0][0] == photo
+
 
 
 

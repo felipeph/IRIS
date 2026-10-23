@@ -164,12 +164,17 @@ def apply_bird_physical_move(
     if not current_path.exists():
         return current_path
 
-    min_confidence = float(bird_cfg.get("min_species_confidence", 0.75))
+    min_confidence = float(bird_cfg.get("min_species_confidence", 0.70))
     confidence = float(record.get("confidence", 0.0))
     needs_review = bool(record.get("needs_review", False))
+    meta_dict = record.get("metadata_json", {}) if isinstance(record.get("metadata_json"), dict) else {}
+    is_early_exit = bool(meta_dict.get("burst_early_exit", False))
 
-    # Filtro estrito de alta certeza
-    if confidence < min_confidence or needs_review:
+    # Filtro estrito de alta certeza (Abordagem B: early exit com needs_review == False é aceito)
+    if needs_review:
+        return current_path
+
+    if confidence < min_confidence and not is_early_exit:
         return current_path
 
     rename_files = bool(bird_cfg.get("rename_files", True))

@@ -144,6 +144,13 @@ class BirdDetectStage(PipelineStage):
                             detected = True
                             yolo_c = 1.0
                             crop_path_str = str(crop_file.resolve())
+                            try:
+                                existing_bgr = safe_read_image_or_raw(crop_path_str)
+                                if existing_bgr is not None:
+                                    crop_gray = cv2.cvtColor(existing_bgr, cv2.COLOR_BGR2GRAY)
+                                    sharpness = calculate_sharpness(crop_gray)
+                            except Exception:
+                                sharpness = 0.0
                         else:
                             img_bgr = safe_read_image_or_raw(str(file_path))
                             if img_bgr is not None:

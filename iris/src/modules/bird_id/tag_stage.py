@@ -78,8 +78,12 @@ class BirdTagStage(PipelineStage):
             conf = float(rec.get("confidence", 0.0))
             needs_review = bool(rec.get("needs_review", False))
             has_species = bool(rec.get("species_common") or rec.get("species_scientific"))
+            is_early_exit = bool(rec.get("metadata_json", {}).get("burst_early_exit", False))
 
-            if not has_species or conf < min_confidence or needs_review:
+            if not has_species or needs_review:
+                continue
+
+            if conf < min_confidence and not is_early_exit:
                 continue
 
             item_path_str = rec.get("item_path", "")

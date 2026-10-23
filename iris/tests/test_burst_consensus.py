@@ -182,15 +182,17 @@ def test_check_burst_early_exit():
         {"predictions": [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.85}]},
         {"predictions": [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.92}]},
     ]
-    # Com 2 confirmações e quorum 3 -> False
-    is_ee, winner, meta = check_burst_early_exit(evals, required_confirmations=3, min_species_confidence=0.70)
+    # Com 2 confirmações e quorum 3 -> False, mas reporta 2 confirmações acumuladas
+    is_ee, winner, meta, confirms = check_burst_early_exit(evals, required_confirmations=3, min_species_confidence=0.70)
     assert is_ee is False
-    assert winner is None
+    assert confirms == 2
+    assert winner == "Pitangus sulphuratus"
 
     # Adiciona 3ª confirmação com alta confiança -> True
     evals.append({"predictions": [{"scientific_name": "Pitangus sulphuratus", "common_name": "Bem-te-vi", "confidence": 0.78}]})
-    is_ee, winner, meta = check_burst_early_exit(evals, required_confirmations=3, min_species_confidence=0.70)
+    is_ee, winner, meta, confirms = check_burst_early_exit(evals, required_confirmations=3, min_species_confidence=0.70)
     assert is_ee is True
+    assert confirms == 3
     assert winner == "Pitangus sulphuratus"
     assert meta["common_name"] == "Bem-te-vi"
 
@@ -200,6 +202,7 @@ def test_check_burst_early_exit():
         {"predictions": [{"scientific_name": "Pitangus sulphuratus", "confidence": 0.65}]},
         {"predictions": [{"scientific_name": "Pitangus sulphuratus", "confidence": 0.68}]},
     ]
-    is_ee_low, _, _ = check_burst_early_exit(evals_low, required_confirmations=3, min_species_confidence=0.70)
+    is_ee_low, _, _, confirms_low = check_burst_early_exit(evals_low, required_confirmations=3, min_species_confidence=0.70)
     assert is_ee_low is False
+    assert confirms_low == 0
 

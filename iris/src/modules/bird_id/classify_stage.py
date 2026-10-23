@@ -160,21 +160,39 @@ class BirdClassifyStage(PipelineStage):
                     if enable_burst_early_exit:
                         rec_list = rank_burst_crops(rec_list)
 
-                    required_confirmations = min(burst_early_exit_confirmations, len(rec_list))
+                    # Early Exit somente se rajada tiver >= 3 fotos e o quorum configurado for >= 3 (Regra A2)
+                    is_burst_eligible_for_early_exit = (
+                        enable_burst_early_exit and len(rec_list) >= 3 and burst_early_exit_confirmations >= 3
+                    )
+                    required_confirmations = burst_early_exit_confirmations
+
                     burst_crop_predictions = []
                     burst_eval_items = []
                     early_exit_triggered = False
                     early_exit_species = ""
                     early_exit_count = 0
                     evaluated_indices = set()
+                    leading_confirms = 0
 
                     for idx, rec in enumerate(rec_list):
                         item_path_str = rec.get("item_path", "")
                         p_item = items_by_path.get(item_path_str)
                         file_name = Path(item_path_str).name if item_path_str else "Recorte"
+                        curr_photo_idx = len(burst_eval_items) + 1
+                        total_burst_photos = len(rec_list)
+
+                        # Feedback Rich Live em 3 linhas:
+                        # 1. Identificação da rajada e foto atual
+                        # 2. Identificação da espécie e percentual de confiança
+                        # 3. Quantas confirmações já foram realizadas
+                        initial_status_msg = (
+                            f"Rajada: [bold cyan]{b_id}[/bold cyan] (Foto {curr_photo_idx}/{total_burst_photos})\n"
+                            f"Espécie: [dim]Consultando {classifier_type}...[/dim]\n"
+                            f"Confirmações: [bold yellow]{leading_confirms}/{required_confirmations}[/bold yellow] de alta certeza"
+                        )
                         live.update(PipelineUI.generate_renderable(
                             tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0,
-                            file_name, f"Rajada ({len(burst_eval_items) + 1}/{len(rec_list)} fotos)..."
+                            file_name, initial_status_msg
                         ))
 
                         exif_lat = getattr(p_item, "meta_latitude", None) if (p_item and use_exif_gps) else None
@@ -223,33 +241,55 @@ class BirdClassifyStage(PipelineStage):
                         evaluated_indices.add(idx)
 
                         tracker.update(1)
-                        live.update(PipelineUI.generate_renderable(
-                            tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0,
-                            file_name, "Progresso"
-                        ))
 
-                        # Verifica condição de parada antecipada (Early Exit)
-                        if enable_burst_early_exit and len(rec_list) > 1:
-                            is_ee, winner_sci, winner_meta = check_burst_early_exit(
-                                burst_crop_predictions,
-                                required_confirmations=required_confirmations,
-                                min_species_confidence=min_species_conf
+                        # Verifica confirmações e condição de parada antecipada (Early Exit)
+                        is_ee, leading_sci, leading_meta, leading_confirms = check_burst_early_exit(
+                            burst_crop_predictions,
+                            required_confirmations=required_confirmations,
+                            min_species_confidence=min_species_conf
+                        )
+
+                        top1 = preds[0] if preds else {}
+                        sp_name = top1.get("common_name") or top1.get("scientific_name") or "Desconhecido"
+                        sp_conf_pct = float(top1.get("confidence", 0.0)) * 100
+
+                        if is_burst_eligible_for_early_exit and is_ee and leading_sci:
+                            early_exit_triggered = True
+                            early_exit_species = leading_sci
+                            early_exit_count = leading_confirms
+                            skipped_count = len(rec_list) - len(burst_eval_items)
+
+                            result_status_msg = (
+                                f"Rajada: [bold cyan]{b_id}[/bold cyan] (Foto {curr_photo_idx}/{total_burst_photos})\n"
+                                f"Espécie: [bold green]{sp_name}[/bold green] ({sp_conf_pct:.1f}%)\n"
+                                f"Confirmações: [bold green]{leading_confirms}/{required_confirmations} - Quorum atingido! ({skipped_count} fotos dispensadas)[/bold green]"
                             )
-                            if is_ee and winner_sci:
-                                early_exit_triggered = True
-                                early_exit_species = winner_sci
-                                early_exit_count = required_confirmations
-                                skipped_count = len(rec_list) - len(burst_eval_items)
-                                log_event(
-                                    f"Early exit acionado na rajada {b_id}: {winner_sci} confirmado em "
-                                    f"{early_exit_count} fotos com alta confiança. Dispensando consulta de "
-                                    f"{skipped_count} fotos restantes da rajada."
-                                )
-                                live.update(PipelineUI.generate_renderable(
-                                    tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0,
-                                    file_name, f"Rajada ({b_id}): {winner_sci} confirmado ({skipped_count} fotos dispensadas)."
-                                ))
-                                break
+                            live.update(PipelineUI.generate_renderable(
+                                tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0,
+                                file_name, result_status_msg
+                            ))
+
+                            log_event(
+                                f"Early exit acionado na rajada {b_id}: {leading_sci} confirmado em "
+                                f"{early_exit_count} fotos com alta confiança. Dispensando consulta de "
+                                f"{skipped_count} fotos restantes da rajada."
+                            )
+                            break
+                        else:
+                            confirm_line = (
+                                f"Confirmações: [bold yellow]{leading_confirms}/{required_confirmations}[/bold yellow] de alta certeza"
+                                if is_burst_eligible_for_early_exit
+                                else "Confirmações: N/A (Rajada curta < 3 fotos)"
+                            )
+                            result_status_msg = (
+                                f"Rajada: [bold cyan]{b_id}[/bold cyan] (Foto {curr_photo_idx}/{total_burst_photos})\n"
+                                f"Espécie: [bold green]{sp_name}[/bold green] ({sp_conf_pct:.1f}%)\n"
+                                f"{confirm_line}"
+                            )
+                            live.update(PipelineUI.generate_renderable(
+                                tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0,
+                                file_name, result_status_msg
+                            ))
 
                     # Consolidar espécie consensual por Soft Voting
                     consensus = aggregate_burst_species(
