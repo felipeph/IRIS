@@ -315,3 +315,70 @@ def test_interactive_add_location_flow_cancel():
         loc = interactive_add_location_flow(mock_console)
         assert loc is None
 
+
+def test_exiftool_geo_args_accents_utf8(tmp_path):
+    import shutil
+    import subprocess
+    import json
+    import os
+    import tempfile
+    from PIL import Image
+
+    exiftool_bin = shutil.which("exiftool")
+    if not exiftool_bin:
+        pytest.skip("ExifTool não encontrado no ambiente")
+
+    test_img = tmp_path / "test_accent.jpg"
+    img = Image.new("RGB", (10, 10), color="blue")
+    img.save(test_img, "JPEG")
+
+    loc = GeoLocation(
+        id="suica",
+        label="Praça São Luiz - Nova Suíça",
+        lat=-19.9234,
+        lng=-43.9876,
+        city="Belo Horizonte",
+        state="Minas Gerais",
+        country="Brasil",
+        suburb="Nova Suíça",
+        poi="Praça São Luiz"
+    )
+
+    geo_args = build_exiftool_geo_args(loc, is_video=False, ext=".jpg")
+
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+        f.write("-MPF:all=\n")
+        f.write("-trailer:all=\n")
+        f.write("-MakerNotes:all=\n")
+        f.write("-PreviewImage=\n")
+        f.write("-overwrite_original\n")
+        f.write("-P\n")
+        for arg in geo_args:
+            f.write(f"{arg}\n")
+        f.write(f"{test_img.resolve()}\n")
+        argfile = f.name
+
+    try:
+        cmd = [exiftool_bin, "-charset", "UTF8", "-@", argfile]
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        assert proc.returncode == 0
+        assert "Malformed UTF-8" not in proc.stderr
+
+        read_cmd = [exiftool_bin, "-charset", "UTF8", "-json", "-G", str(test_img.resolve())]
+        read_proc = subprocess.run(read_cmd, capture_output=True, text=True, encoding="utf-8")
+        assert read_proc.returncode == 0
+        data = json.loads(read_proc.stdout)[0]
+
+        assert data.get("IPTC:Sub-location") == "Praça São Luiz"
+        assert data.get("XMP:Location") == "Praça São Luiz"
+        assert data.get("EXIF:XPKeywords") == "Praça São Luiz;Nova Suíça;Belo Horizonte;Minas Gerais;Brasil;Praça São Luiz - Nova Suíça"
+        keywords = data.get("IPTC:Keywords")
+        if isinstance(keywords, str):
+            keywords = [keywords]
+        assert "Nova Suíça" in keywords
+        assert "Praça São Luiz" in keywords
+    finally:
+        if os.path.exists(argfile):
+            os.unlink(argfile)
+
+

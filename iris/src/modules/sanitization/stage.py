@@ -147,19 +147,21 @@ class SanitizationStage(PipelineStage):
                 # Execução 1: JPEGs com GPS nativo (apenas limpeza de APP2/MakerNotes)
                 if items_sanitize_only_jpeg:
                     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+                        f.write("-MPF:all=\n")
+                        f.write("-trailer:all=\n")
+                        f.write("-MakerNotes:all=\n")
+                        f.write("-PreviewImage=\n")
+                        f.write("-overwrite_original\n")
+                        f.write("-P\n")
+                        f.write("-charset\nUTF8\n")
+                        f.write("-charset\nfilename=UTF8\n")
                         for it in items_sanitize_only_jpeg:
                             f.write(f"{Path(it.staging_path).resolve()}\n")
                         argfile_a = f.name
                     try:
                         cmd_a = [
                             exiftool_bin,
-                            "-MPF:all=",
-                            "-trailer:all=",
-                            "-MakerNotes:all=",
-                            "-PreviewImage=",
-                            "-overwrite_original",
-                            "-P",
-                            "-charset", "filename=utf8",
+                            "-charset", "UTF8",
                             "-@",
                             argfile_a,
                         ]
@@ -173,21 +175,23 @@ class SanitizationStage(PipelineStage):
 
                 # Execução 2: JPEGs sem GPS (limpeza de APP2/MakerNotes + injeção de GPS/IPTC em UMA ÚNICA chamada)
                 if items_write_geo_jpeg and loc:
+                    geo_args = build_exiftool_geo_args(loc, is_video=False, ext=".jpg")
                     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+                        f.write("-MPF:all=\n")
+                        f.write("-trailer:all=\n")
+                        f.write("-MakerNotes:all=\n")
+                        f.write("-PreviewImage=\n")
+                        f.write("-overwrite_original\n")
+                        f.write("-P\n")
+                        for arg in geo_args:
+                            f.write(f"{arg}\n")
                         for it in items_write_geo_jpeg:
                             f.write(f"{Path(it.staging_path).resolve()}\n")
                         argfile_b = f.name
                     try:
-                        geo_args = build_exiftool_geo_args(loc, is_video=False, ext=".jpg")
                         cmd_b = [
                             exiftool_bin,
-                            "-MPF:all=",
-                            "-trailer:all=",
-                            "-MakerNotes:all=",
-                            "-PreviewImage=",
-                            *geo_args,
-                            "-overwrite_original",
-                            "-P",
+                            "-charset", "UTF8",
                             "-@",
                             argfile_b,
                         ]
@@ -201,17 +205,19 @@ class SanitizationStage(PipelineStage):
 
                 # Execução 3: Outras imagens graváveis sem GPS (PNG/WEBP/HEIC/TIFF) -> apenas injeção de GPS/IPTC
                 if items_write_geo_other and loc:
+                    geo_args = build_exiftool_geo_args(loc, is_video=False, ext=".png")
                     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+                        f.write("-overwrite_original\n")
+                        f.write("-P\n")
+                        for arg in geo_args:
+                            f.write(f"{arg}\n")
                         for it in items_write_geo_other:
                             f.write(f"{Path(it.staging_path).resolve()}\n")
                         argfile_c = f.name
                     try:
-                        geo_args = build_exiftool_geo_args(loc, is_video=False, ext=".png")
                         cmd_c = [
                             exiftool_bin,
-                            *geo_args,
-                            "-overwrite_original",
-                            "-P",
+                            "-charset", "UTF8",
                             "-@",
                             argfile_c,
                         ]

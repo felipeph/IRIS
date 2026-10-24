@@ -194,6 +194,11 @@ def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str =
     abs_lng = abs(lng)
 
     args = [
+        "-charset", "UTF8",
+        "-charset", "iptc=UTF8",
+        "-charset", "filename=UTF8",
+        "-codedcharacterset=utf8",
+        "-IPTC:CodedCharacterSet=UTF8",
         f"-GPSLatitude={abs_lat:.6f}",
         f"-GPSLatitudeRef={lat_ref}",
         f"-GPSLongitude={abs_lng:.6f}",
@@ -224,12 +229,6 @@ def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str =
 
     if tags:
         args.append(f"-XPKeywords={';'.join(tags)}")
-
-    args.extend([
-        "-IPTC:CodedCharacterSet=UTF8",
-        "-charset", "iptc=UTF8",
-        "-charset", "filename=utf8",
-    ])
 
     return args
 
