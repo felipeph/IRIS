@@ -103,3 +103,12 @@ def test_geo_service_crud(tmp_path, monkeypatch):
     deleted = GeoService.delete_location("custom-1")
     assert deleted is True
     assert GeoService.get_location("custom-1") is None
+
+
+def test_geo_service_delete_protection():
+    orig_locs = config.get("geo.locations", [])
+    try:
+        config.set("geo.locations", [{"id": "unico", "label": "Unico", "lat": 0, "lng": 0}])
+        assert GeoService.delete_location("unico") is False
+    finally:
+        config.set("geo.locations", orig_locs)

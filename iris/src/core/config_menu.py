@@ -1319,6 +1319,36 @@ def _set_default_location_flow(console: Console, locations: List[GeoLocation]):
     time.sleep(1.5)
 
 
+def _delete_location_flow(console: Console, locations: List[GeoLocation]):
+    """Fluxo para selecionar e excluir um local predefinido diretamente."""
+    if len(locations) <= 1:
+        console.print("[red]Não é possível excluir o único local cadastrado no sistema.[/red]")
+        time.sleep(2)
+        return
+
+    console.print("\n[bold red]Excluir Geolocalização Cadastrada[/bold red]")
+    for i, loc in enumerate(locations, 1):
+        console.print(f"  [{i}] {loc.label} [dim]({loc.id})[/dim]")
+    choice = Prompt.ask("\nDigite o número do local a excluir (ou 0 para cancelar)", default="0").strip()
+    if choice == "0":
+        return
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(locations):
+            target_loc = locations[idx]
+            confirmed = Confirm.ask(f"[bold red]Tem certeza que deseja excluir o local '{target_loc.label}' ({target_loc.id})?[/bold red]", default=False)
+            if confirmed:
+                GeoService.delete_location(target_loc.id)
+                console.print(f"[bold green]✔ Local '{target_loc.label}' excluído com sucesso![/bold green]")
+                time.sleep(1.5)
+        else:
+            console.print("[red]Opção inválida![/red]")
+            time.sleep(1)
+    except ValueError:
+        console.print("[red]Opção inválida![/red]")
+        time.sleep(1)
+
+
 def _menu_geolocation(console: Console):
     """Sub-menu: Cadastro e Gerenciamento de Geolocalizações Predefinidas."""
     while True:
@@ -1369,6 +1399,7 @@ def _menu_geolocation(console: Console):
         console.print("\n[bold]Ações disponíveis:[/bold]")
         console.print(f"  [cyan][1-{len(locations)}][/cyan] Ver / Editar detalhes do local")
         console.print("  [cyan]+ ou A[/cyan]  :heavy_plus_sign: Cadastrar novo local")
+        console.print("  [cyan]- ou X[/cyan]  :wastebasket: Excluir um local cadastrado")
         console.print("  [cyan]D[/cyan]       :star: Definir local padrão global")
         console.print("  [cyan]T[/cyan]       :camera: Alternar gravação de tags GPS em fotos")
         console.print("  [cyan]F[/cyan]       :label: Alternar token GPS no nome dos arquivos")
@@ -1379,6 +1410,8 @@ def _menu_geolocation(console: Console):
             break
         elif choice in ["+", "A"]:
             _add_location_flow(console)
+        elif choice in ["-", "X"]:
+            _delete_location_flow(console, locations)
         elif choice == "D":
             _set_default_location_flow(console, locations)
         elif choice == "T":

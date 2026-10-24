@@ -296,6 +296,8 @@ class GeoService:
     @classmethod
     def delete_location(cls, loc_id: str) -> bool:
         locs = cls.get_locations()
+        if len(locs) <= 1:
+            return False
         new_list = [l.to_dict() for l in locs if l.id != loc_id]
         if len(new_list) == len(locs):
             return False

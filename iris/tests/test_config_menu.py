@@ -355,3 +355,27 @@ def test_geolocation_menu_toggles(mock_console):
         config.set("geo.filename_token", orig_tok)
 
 
+def test_geolocation_menu_direct_delete(mock_console):
+    """Testa exclusão direta no menu de geolocalizações via atalho '-'."""
+    from src.core.geo import GeoService, GeoLocation
+    temp_loc = GeoLocation(
+        id="loc-menu-delete-test",
+        label="Local Teste Menu Delete",
+        lat=-20.00,
+        lng=-44.00,
+        city="Teste",
+        state="Minas Gerais"
+    )
+    GeoService.add_location(temp_loc)
+    locs = GeoService.get_locations()
+    target_idx = next(i for i, l in enumerate(locs, 1) if l.id == temp_loc.id)
+
+    with patch("src.core.config_menu.Prompt.ask", side_effect=["-", str(target_idx), "0"]), \
+         patch("src.core.config_menu.Confirm.ask", return_value=True), \
+         patch("src.core.config_menu.time.sleep"):
+        _menu_geolocation(mock_console)
+
+    remaining_ids = [l.id for l in GeoService.get_locations()]
+    assert temp_loc.id not in remaining_ids
+
+

@@ -45,3 +45,38 @@ def test_select_location_dialog_add_quick(mock_console):
 
     # Cleanup
     GeoService.delete_location(loc.id)
+
+
+def test_select_location_dialog_delete(mock_console):
+    """Testa exclusão interativa com atalho '-' no diálogo de seleção."""
+    temp_loc = GeoLocation(
+        id="sitio-exclusao-teste",
+        label="Sítio Para Excluir - Sabará - MG",
+        lat=-19.88,
+        lng=-43.80,
+        city="Sabará",
+        state="Minas Gerais"
+    )
+    GeoService.add_location(temp_loc)
+    locs = GeoService.get_locations()
+    target_idx = next(i for i, l in enumerate(locs, 1) if l.id == temp_loc.id)
+
+    # Escolhe '-' para excluir, fornece target_idx, confirma com True, depois escolhe '1'
+    with patch("main.Prompt.ask", side_effect=["-", str(target_idx), "1"]), \
+         patch("main.Confirm.ask", return_value=True), \
+         patch("main.time.sleep"):
+        loc = select_location_dialog(mock_console)
+        assert loc is not None
+
+    remaining_ids = [l.id for l in GeoService.get_locations()]
+    assert temp_loc.id not in remaining_ids
+
+
+def test_select_location_dialog_delete_cancel(mock_console):
+    """Testa cancelamento de exclusão (0) no diálogo de seleção."""
+    before_count = len(GeoService.get_locations())
+    with patch("main.Prompt.ask", side_effect=["-", "0", "1"]), \
+         patch("main.time.sleep"):
+        loc = select_location_dialog(mock_console)
+        assert loc is not None
+    assert len(GeoService.get_locations()) == before_count

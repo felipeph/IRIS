@@ -35,64 +35,101 @@ import re
 
 
 def select_location_dialog(console: Console, default_id: str = None) -> GeoLocation:
-    """Apresenta um menu interativo para seleção ou cadastro de geolocalização para o projeto."""
-    locations = GeoService.get_locations()
-    if not locations:
-        GeoService.ensure_defaults()
+    """Apresenta um menu interativo para seleção, cadastro ou exclusão de geolocalização para o projeto."""
+    while True:
         locations = GeoService.get_locations()
+        if not locations:
+            GeoService.ensure_defaults()
+            locations = GeoService.get_locations()
 
-    if not default_id:
-        default_id = GeoService.get_default_location_id()
+        if not default_id or not GeoService.get_location(default_id):
+            default_id = GeoService.get_default_location_id()
 
-    default_idx = 1
-    table = Table(title="Localizações Geográficas Predefinidas", border_style="cyan")
-    table.add_column("Opção", style="cyan", justify="center")
-    table.add_column("Rótulo", style="bold white")
-    table.add_column("Coordenadas", style="green")
-    table.add_column("Raio", style="magenta")
-    table.add_column("Cidade / UF", style="white")
-    table.add_column("Status", style="bold yellow")
+        default_idx = 1
+        table = Table(title="Localizações Geográficas Predefinidas", border_style="cyan")
+        table.add_column("Opção", style="cyan", justify="center")
+        table.add_column("Rótulo", style="bold white")
+        table.add_column("Coordenadas", style="green")
+        table.add_column("Raio", style="magenta")
+        table.add_column("Cidade / UF", style="white")
+        table.add_column("Status", style="bold yellow")
 
-    for i, loc in enumerate(locations, 1):
-        if loc.id == default_id:
-            default_idx = i
-            def_str = "[bold green]★ SELECIONADO[/bold green]"
-        else:
-            def_str = ""
-        c_str = f"{loc.lat:.6f}, {loc.lng:.6f}"
-        tok = format_gps_token(loc.lat, loc.lng)
-        r_str = f"{int(loc.accuracy_m):,}m"
-        city_uf = f"{loc.city} - {loc.state}" if loc.city or loc.state else "-"
-        table.add_row(str(i), loc.label, f"{c_str} [dim]({tok})[/dim]", r_str, city_uf, def_str)
+        for i, loc in enumerate(locations, 1):
+            if loc.id == default_id:
+                default_idx = i
+                def_str = "[bold green]★ SELECIONADO[/bold green]"
+            else:
+                def_str = ""
+            c_str = f"{loc.lat:.6f}, {loc.lng:.6f}"
+            tok = format_gps_token(loc.lat, loc.lng)
+            r_str = f"{int(loc.accuracy_m):,}m"
+            city_uf = f"{loc.city} - {loc.state}" if loc.city or loc.state else "-"
+            table.add_row(str(i), loc.label, f"{c_str} [dim]({tok})[/dim]", r_str, city_uf, def_str)
 
-    console.print(table)
-    console.print("  [cyan]+[/cyan] Cadastrar novo local rapidamente")
+        console.print(table)
+        console.print("  [cyan]+[/cyan] Cadastrar novo local rapidamente")
+        console.print("  [cyan]- ou X[/cyan] [red]Excluir um local cadastrado[/red]")
 
-    choice = Prompt.ask("\nSelecione a localização para o projeto", default=str(default_idx)).strip()
-    if choice == "+":
-        coords_input = Prompt.ask("Coordenadas (ex: -20.456887, -45.438307)")
+        choice = Prompt.ask("\nSelecione a localização para o projeto", default=str(default_idx)).strip()
+        if choice == "+":
+            coords_input = Prompt.ask("Coordenadas (ex: -20.456887, -45.438307)")
+            try:
+                lat, lng = parse_coords(coords_input)
+                label = Prompt.ask("Rótulo amigável (ex: Bairro Belvedere - Belo Horizonte - MG)").strip()
+                if not label:
+                    console.print("[red]Rótulo não pode ser vazio.[/red]")
+                    time.sleep(1.5)
+                    continue
+                city = Prompt.ask("Cidade", default="").strip()
+                state = Prompt.ask("Estado por extenso", default="Minas Gerais").strip()
+                slug = re.sub(r'[^a-zA-Z0-9]+', '-', label.lower()).strip('-') or f"loc-{int(abs(lat))}"
+                new_loc = GeoLocation(id=slug, label=label, lat=lat, lng=lng, city=city, state=state, country="Brasil")
+                GeoService.add_location(new_loc)
+                console.print(f"[bold green]✔ Local '{label}' cadastrado com sucesso![/bold green]")
+                time.sleep(1.2)
+                return new_loc
+            except Exception as e:
+                console.print(f"[red]Erro ao cadastrar: {e}[/red]")
+                time.sleep(1.5)
+                continue
+
+        if choice.upper() in ["-", "X"]:
+            if len(locations) <= 1:
+                console.print("[red]Não é possível excluir o único local cadastrado no sistema.[/red]")
+                time.sleep(2)
+                continue
+            del_choice = Prompt.ask("Digite o número do local que deseja excluir (ou 0 para cancelar)", default="0").strip()
+            if del_choice == "0":
+                continue
+            try:
+                del_idx = int(del_choice) - 1
+                if 0 <= del_idx < len(locations):
+                    target_loc = locations[del_idx]
+                    confirmed = Confirm.ask(f"[bold red]Tem certeza que deseja excluir o local '{target_loc.label}' ({target_loc.id})?[/bold red]", default=False)
+                    if confirmed:
+                        GeoService.delete_location(target_loc.id)
+                        console.print(f"[green]Local '{target_loc.label}' excluído com sucesso![/green]")
+                        if default_id == target_loc.id:
+                            default_id = GeoService.get_default_location_id()
+                        time.sleep(1.5)
+                else:
+                    console.print("[red]Número inválido.[/red]")
+                    time.sleep(1)
+            except ValueError:
+                console.print("[red]Entrada inválida.[/red]")
+                time.sleep(1)
+            continue
+
         try:
-            lat, lng = parse_coords(coords_input)
-            label = Prompt.ask("Rótulo amigável (ex: Bairro Belvedere - Belo Horizonte - MG)").strip()
-            city = Prompt.ask("Cidade", default="").strip()
-            state = Prompt.ask("Estado por extenso", default="Minas Gerais").strip()
-            slug = re.sub(r'[^a-zA-Z0-9]+', '-', label.lower()).strip('-') or f"loc-{int(abs(lat))}"
-            new_loc = GeoLocation(id=slug, label=label, lat=lat, lng=lng, city=city, state=state, country="Brasil")
-            GeoService.add_location(new_loc)
-            return new_loc
-        except Exception as e:
-            console.print(f"[red]Erro ao cadastrar: {e}[/red]")
-            time.sleep(1.5)
-            return GeoService.get_location(default_id) or locations[0]
-
-    try:
-        idx = int(choice) - 1
-        if 0 <= idx < len(locations):
-            return locations[idx]
-    except ValueError:
-        pass
-
-    return GeoService.get_location(default_id) or locations[0]
+            idx = int(choice) - 1
+            if 0 <= idx < len(locations):
+                return locations[idx]
+            else:
+                console.print("[red]Opção inválida.[/red]")
+                time.sleep(1)
+        except ValueError:
+            console.print("[red]Opção inválida.[/red]")
+            time.sleep(1)
 
 def get_free_space_gb(folder: str) -> float:
     try:
