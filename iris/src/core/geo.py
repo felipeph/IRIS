@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any, Tuple
+from rich.panel import Panel
 from src.core.config import config
 
 # Extensões com suporte seguro a gravação de metadados sem perigo de corrupção ou overhead massivo
@@ -122,6 +123,29 @@ def format_gps_token(lat: float, lng: float) -> str:
 def maps_url(lat: float, lng: float) -> str:
     """Retorna URL de visualização no Google Maps."""
     return f"https://www.google.com/maps?q={lat:.6f},{lng:.6f}"
+
+
+def build_location_panel(
+    loc: GeoLocation,
+    title: str = "📍 \\[LOCALIZAÇÃO ATIVA DO PROJETO\\]",
+    border_style: str = "yellow"
+) -> Panel:
+    """Gera um painel vertical padronizado com as informações detalhadas da localização (uma por linha)."""
+    gps_token = format_gps_token(loc.lat, loc.lng)
+    gmaps = maps_url(loc.lat, loc.lng)
+    reg_parts = [p for p in [loc.city, loc.state, loc.country] if p]
+    reg_str = ", ".join(reg_parts) if reg_parts else "Brasil"
+
+    clean_title = title.replace("[", "\\[") if "\\[" not in title else title
+    loc_text = (
+        f"[bold yellow]{clean_title}[/bold yellow]\n"
+        f"  [dim]• Rótulo:[/dim]       [bold white]{loc.label}[/bold white]\n"
+        f"  [dim]• Região:[/dim]       {reg_str}\n"
+        f"  [dim]• Coordenadas:[/dim]  {loc.lat:.6f}, {loc.lng:.6f} [dim](Token: {gps_token})[/dim]\n"
+        f"  [dim]• Precisão:[/dim]     Raio de {int(loc.accuracy_m):,}m [dim](Usado no iNaturalist)[/dim]\n"
+        f"  [dim]• Google Maps:[/dim]  [link={gmaps}]{gmaps}[/link]"
+    )
+    return Panel(loc_text, expand=False, border_style=border_style)
 
 
 def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str = "") -> List[str]:

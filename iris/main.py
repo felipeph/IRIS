@@ -24,7 +24,7 @@ from src.core.project import list_open_projects, get_project, create_project, ge
 from src.core.lock import ProjectLock, ProjectLockedError
 from src.core.pipeline import PipelineRunner
 from src.core.metadata import MEDIA_EXTENSIONS
-from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url
+from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url, build_location_panel
 
 console = Console()
 
@@ -49,9 +49,6 @@ def select_location_dialog(console: Console, default_id: str = None) -> GeoLocat
         table = Table(title="Localizações Geográficas Predefinidas", border_style="cyan")
         table.add_column("Opção", style="cyan", justify="center")
         table.add_column("Rótulo", style="bold white")
-        table.add_column("Coordenadas", style="green")
-        table.add_column("Raio", style="magenta")
-        table.add_column("Cidade / UF", style="white")
         table.add_column("Status", style="bold yellow")
 
         for i, loc in enumerate(locations, 1):
@@ -60,17 +57,33 @@ def select_location_dialog(console: Console, default_id: str = None) -> GeoLocat
                 def_str = "[bold green]★ SELECIONADO[/bold green]"
             else:
                 def_str = ""
-            c_str = f"{loc.lat:.6f}, {loc.lng:.6f}"
-            tok = format_gps_token(loc.lat, loc.lng)
-            r_str = f"{int(loc.accuracy_m):,}m"
-            city_uf = f"{loc.city} - {loc.state}" if loc.city or loc.state else "-"
-            table.add_row(str(i), loc.label, f"{c_str} [dim]({tok})[/dim]", r_str, city_uf, def_str)
+            table.add_row(str(i), loc.label, def_str)
 
         console.print(table)
         console.print("  [cyan]+[/cyan] Cadastrar novo local rapidamente")
+        console.print("  [cyan]? ou V[/cyan] Ver detalhes de um local")
         console.print("  [cyan]- ou X[/cyan] [red]Excluir um local cadastrado[/red]")
 
         choice = Prompt.ask("\nSelecione a localização para o projeto", default=str(default_idx)).strip()
+        if choice.upper() in ["?", "V"] or choice.upper().startswith("V ") or choice.upper().startswith("? "):
+            parts = choice.split()
+            if len(parts) > 1 and parts[1].isdigit():
+                v_idx = int(parts[1]) - 1
+            else:
+                v_choice = Prompt.ask("Digite o número do local para ver detalhes", default=str(default_idx)).strip()
+                try:
+                    v_idx = int(v_choice) - 1
+                except ValueError:
+                    v_idx = -1
+            if 0 <= v_idx < len(locations):
+                target_loc = locations[v_idx]
+                console.print()
+                console.print(build_location_panel(target_loc, title=f"📍 \\[DETALHES DA CONFIGURAÇÃO: {target_loc.label}\\]", border_style="yellow"))
+                Prompt.ask("\n[dim]Pressione ENTER para voltar à seleção...[/dim]")
+            else:
+                console.print("[red]Opção inválida.[/red]")
+                time.sleep(1)
+            continue
         if choice == "+":
             coords_input = Prompt.ask("Coordenadas (ex: -20.456887, -45.438307)")
             try:
@@ -193,19 +206,7 @@ def run_pipeline_for_project(active_project):
                     active_project.save()
 
             if loc:
-                gps_token = format_gps_token(loc.lat, loc.lng)
-                gmaps = maps_url(loc.lat, loc.lng)
-                reg_parts = [p for p in [loc.city, loc.state, loc.country] if p]
-                reg_str = ", ".join(reg_parts) if reg_parts else "Brasil"
-                loc_text = (
-                    "[bold yellow]📍 \\[LOCALIZAÇÃO ATIVA DO PROJETO][/bold yellow]\n"
-                    f"  [dim]• Rótulo:[/dim]       [bold white]{loc.label}[/bold white]\n"
-                    f"  [dim]• Região:[/dim]       {reg_str}\n"
-                    f"  [dim]• Coordenadas:[/dim]  {loc.lat:.6f}, {loc.lng:.6f} [dim](Token: {gps_token})[/dim]\n"
-                    f"  [dim]• Precisão:[/dim]     Raio de {int(loc.accuracy_m):,}m [dim](Usado no iNaturalist)[/dim]\n"
-                    f"  [dim]• Google Maps:[/dim]  [link={gmaps}]{gmaps}[/link]"
-                )
-                console.print(Panel(loc_text, expand=False, border_style="yellow"))
+                console.print(build_location_panel(loc, title="📍 \\[LOCALIZAÇÃO ATIVA DO PROJETO\\]", border_style="yellow"))
             
             # Status do Ambiente
             dest_root = config.get("general.destination_root", "C:\\IRIS")

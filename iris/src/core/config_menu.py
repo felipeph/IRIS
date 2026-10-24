@@ -6,7 +6,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from src.core.config import config
-from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url
+from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url, build_location_panel
 
 
 def _menu_storage_ingestion(console: Console):
@@ -1215,18 +1215,7 @@ def _edit_location_flow(console: Console, loc: GeoLocation):
     """Fluxo interativo para editar ou excluir um local predefinido."""
     while True:
         console.clear()
-        tok = format_gps_token(loc.lat, loc.lng)
-        gurl = maps_url(loc.lat, loc.lng)
-        info = (
-            f"[bold cyan]Editar Localização:[/bold cyan] [bold white]{loc.label}[/bold white] [dim]({loc.id})[/dim]\n\n"
-            f"  [dim]• Coordenadas:[/dim] {loc.lat:.6f}, {loc.lng:.6f} [dim](Token: {tok})[/dim]\n"
-            f"  [dim]• Cidade:[/dim]      {loc.city}\n"
-            f"  [dim]• Estado:[/dim]      {loc.state}\n"
-            f"  [dim]• País:[/dim]        {loc.country}\n"
-            f"  [dim]• Precisão:[/dim]    Raio de {int(loc.accuracy_m):,}m\n"
-            f"  [dim]• Maps:[/dim]        {gurl}"
-        )
-        console.print(Panel(info, expand=False, border_style="cyan"))
+        console.print(build_location_panel(loc, title=f"📍 \\[CONFIGURAÇÃO: {loc.label}\\]", border_style="yellow"))
 
         console.print("  [cyan]1.[/cyan] Alterar Coordenadas (Latitude, Longitude)")
         console.print("  [cyan]2.[/cyan] Alterar Rótulo")
@@ -1305,7 +1294,7 @@ def _set_default_location_flow(console: Console, locations: List[GeoLocation]):
     """Fluxo para definir rapidamente o local padrão global."""
     console.print("\n[bold cyan]Selecione o novo local padrão global:[/bold cyan]")
     for i, loc in enumerate(locations, 1):
-        console.print(f"  [{i}] {loc.label} ({loc.lat:.4f}, {loc.lng:.4f})")
+        console.print(f"  [{i}] {loc.label}")
     choice = Prompt.ask("\nNúmero do local", default="1")
     try:
         idx = int(choice) - 1
@@ -1365,21 +1354,14 @@ def _menu_geolocation(console: Console):
         tag_media = config.get("geo.tag_media", True)
         filename_token = config.get("geo.filename_token", True)
 
-        table = Table(title="Locais Predefinidos Cadastrados")
+        table = Table(title="Locais Predefinidos Cadastrados", border_style="cyan")
         table.add_column("Opção", style="cyan", justify="center")
         table.add_column("Rótulo", style="bold white")
-        table.add_column("Coordenadas", style="green")
-        table.add_column("Raio", style="magenta")
-        table.add_column("Cidade / UF", style="white")
         table.add_column("Status", style="bold yellow")
 
         for i, loc in enumerate(locations, 1):
             is_def = "[bold green]★ PADRÃO[/bold green]" if loc.id == default_id else ""
-            c_str = f"{loc.lat:.6f}, {loc.lng:.6f}"
-            tok = format_gps_token(loc.lat, loc.lng)
-            r_str = f"{int(loc.accuracy_m):,}m"
-            city_uf = f"{loc.city} - {loc.state}" if loc.city or loc.state else "-"
-            table.add_row(str(i), loc.label, f"{c_str} [dim]({tok})[/dim]", r_str, city_uf, is_def)
+            table.add_row(str(i), loc.label, is_def)
 
         console.print(table)
 

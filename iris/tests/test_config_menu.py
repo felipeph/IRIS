@@ -379,3 +379,15 @@ def test_geolocation_menu_direct_delete(mock_console):
     assert temp_loc.id not in remaining_ids
 
 
+def test_geolocation_edit_location_flow(mock_console):
+    """Testa que _edit_location_flow exibe o painel vertical padronizado e processa navegação '0'."""
+    from src.core.geo import GeoService
+    from src.core.config_menu import _edit_location_flow
+    locs = GeoService.get_locations()
+    assert len(locs) >= 1
+    with patch("src.core.config_menu.Prompt.ask", return_value="0"), \
+         patch("src.core.config_menu.time.sleep"):
+        _edit_location_flow(mock_console, locs[0])
+
+
+

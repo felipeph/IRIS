@@ -80,3 +80,34 @@ def test_select_location_dialog_delete_cancel(mock_console):
         loc = select_location_dialog(mock_console)
         assert loc is not None
     assert len(GeoService.get_locations()) == before_count
+
+
+def test_select_location_dialog_view_details(mock_console):
+    """Testa visualização detalhada de um local com o atalho 'V' ou '?' antes de selecionar."""
+    with patch("main.Prompt.ask", side_effect=["V", "1", "", "1"]), \
+         patch("main.time.sleep"):
+        loc = select_location_dialog(mock_console)
+        assert loc is not None
+
+
+def test_build_location_panel():
+    """Garante que build_location_panel gera painel vertical completo com todas as 5 linhas estruturadas."""
+    from src.core.geo import build_location_panel
+    loc = GeoLocation(
+        id="painel-teste",
+        label="Sítio Teste do Painel",
+        lat=-20.123456,
+        lng=-44.654321,
+        accuracy_m=15000.0,
+        city="Belo Horizonte",
+        state="Minas Gerais",
+        country="Brasil"
+    )
+    panel = build_location_panel(loc, title="📍 [TESTE DE PAINEL]", border_style="yellow")
+    assert panel.border_style == "yellow"
+    text = str(panel.renderable)
+    assert "Sítio Teste do Painel" in text
+    assert "Belo Horizonte, Minas Gerais, Brasil" in text
+    assert "-20.123456, -44.654321" in text
+    assert "15,000m" in text
+    assert "google.com/maps" in text
