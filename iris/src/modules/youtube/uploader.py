@@ -106,44 +106,74 @@ def reverse_geocode_coordinates(lat: float, lon: float, timeout: float = 4.0) ->
         pass
     return {"city": "", "state": "", "country": "", "formatted_address": ""}
 
+_PLAYLIST_CACHE: Dict[str, Tuple[str, str]] = {}
+
+def clear_playlist_cache():
+    """Limpa o cache de IDs de playlists em memória."""
+    global _PLAYLIST_CACHE
+    _PLAYLIST_CACHE.clear()
+
 def add_video_to_playlist(youtube, video_id: str, playlist_name_or_id: str, privacy: str = "unlisted") -> Tuple[bool, Optional[str], Optional[str]]:
     """Adiciona o vídeo à playlist do canal (cria a playlist automaticamente se não existir)."""
     if not youtube or not video_id or not playlist_name_or_id:
         return False, None, None
 
     playlist_target = str(playlist_name_or_id).strip()
+    if not playlist_target:
+        return False, None, None
+
     playlist_id = None
     playlist_title = playlist_target
 
     try:
         if playlist_target.startswith("PL") and len(playlist_target) >= 16:
             playlist_id = playlist_target
+        elif playlist_target.lower() in _PLAYLIST_CACHE:
+            playlist_id, playlist_title = _PLAYLIST_CACHE[playlist_target.lower()]
         else:
             next_page = None
+            visited_tokens = set()
             while True:
                 req = youtube.playlists().list(part="snippet", mine=True, maxResults=50, pageToken=next_page)
                 resp = req.execute()
-                for item in resp.get("items", []):
+                if not isinstance(resp, dict):
+                    break
+                items = resp.get("items", [])
+                if not isinstance(items, list):
+                    break
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
                     item_title = item.get("snippet", {}).get("title", "")
+                    t_id = item.get("id")
+                    if t_id and item_title:
+                        _PLAYLIST_CACHE[item_title.strip().lower()] = (t_id, item_title)
                     if item_title.strip().lower() == playlist_target.lower():
-                        playlist_id = item["id"]
+                        playlist_id = t_id
                         playlist_title = item_title
                         break
-                if playlist_id or not resp.get("nextPageToken"):
+                next_token = resp.get("nextPageToken")
+                if playlist_id or not next_token or not isinstance(next_token, str) or next_token in visited_tokens:
                     break
-                next_page = resp.get("nextPageToken")
+                visited_tokens.add(next_token)
+                next_page = next_token
 
             if not playlist_id:
                 create_privacy = privacy.lower() if privacy in ["public", "unlisted", "private"] else "unlisted"
                 new_pl = youtube.playlists().insert(
                     part="snippet,status",
                     body={
-                        "snippet": {"title": playlist_target, "description": "Timelapses 4K UHD gerados pelo IRIS."},
+                        "snippet": {"title": playlist_target, "description": f"Vídeos de {playlist_target} gerados pelo IRIS."},
                         "status": {"privacyStatus": create_privacy}
                     }
                 ).execute()
                 playlist_id = new_pl.get("id")
                 playlist_title = new_pl.get("snippet", {}).get("title", playlist_target)
+                if playlist_id and playlist_title:
+                    _PLAYLIST_CACHE[playlist_title.strip().lower()] = (playlist_id, playlist_title)
+
+        if not playlist_id:
+            return False, None, None
 
         youtube.playlistItems().insert(
             part="snippet",
@@ -159,10 +189,33 @@ def add_video_to_playlist(youtube, video_id: str, playlist_name_or_id: str, priv
     except Exception:
         return False, None, None
 
+
+def add_video_to_playlists(
+    youtube,
+    video_id: str,
+    playlist_names_or_ids: List[str],
+    privacy: str = "unlisted"
+) -> List[Tuple[bool, Optional[str], Optional[str]]]:
+    """Adiciona o vídeo a múltiplas playlists em sequência, criando-as se necessário."""
+    results = []
+    seen = set()
+    for pl in playlist_names_or_ids:
+        pl_clean = str(pl).strip()
+        if not pl_clean or pl_clean.lower() in seen:
+            continue
+        seen.add(pl_clean.lower())
+        res = add_video_to_playlist(youtube, video_id, pl_clean, privacy=privacy)
+        results.append(res)
+    return results
+
+
 from src.modules.youtube.describer import (
     build_rich_youtube_description,
     build_youtube_title,
     build_youtube_tags,
+    resolve_bird_identification,
+    build_bird_youtube_title,
+    resolve_bird_target_playlists,
 )
 
 def build_timelapse_youtube_metadata(
@@ -183,7 +236,6 @@ def build_timelapse_youtube_metadata(
     if not isinstance(meta, dict) or not meta:
         meta = {}
         # Tenta extrair dados do nome do arquivo
-        # Ex: 2016-05-14_22h15m-22h28m_Canon_4608x3456_4K_60fps_1fpi_50x_00m10s_timelapse.mp4
         parts = video_path.name.split('_')
         if len(parts) > 0:
             meta["date_str"] = parts[0]
@@ -223,14 +275,44 @@ def build_timelapse_youtube_metadata(
     if video_path.exists() and "video_size_bytes" not in record_copy["metadata_json"]:
         record_copy["metadata_json"]["video_size_bytes"] = video_path.stat().st_size
 
-    title = build_youtube_title(video_path, record_copy)
-    description = build_rich_youtube_description(record_copy, project_name=project_name)
+    bird_info = resolve_bird_identification(record_copy, project=project)
+    if bird_info:
+        title = build_bird_youtube_title(video_path, record_copy, bird_info)
+        target_playlists = resolve_bird_target_playlists(bird_info, yt_config)
+    else:
+        title = build_youtube_title(video_path, record_copy)
+        seq_dir = str(record_copy.get("sequence_dir", ""))
+        out_vid = str(record_copy.get("output_video_path", ""))
+        is_le = "4_Timelapses_LongaExposicao" in seq_dir or "longa_exposicao" in out_vid
+        tl_playlist = (
+            yt_config.get("timelapse_long_exposure_playlist", "Timelapses Longa Exposição")
+            if is_le else yt_config.get("playlist", "Timelapses")
+        )
+        target_playlists = [tl_playlist]
+
+    description = build_rich_youtube_description(record_copy, project_name=project_name, bird_info=bird_info)
     tags = build_youtube_tags(record_copy)
+    if bird_info:
+        for b_cand in [
+            bird_info.get("species_common"),
+            bird_info.get("species_scientific"),
+            bird_info.get("species_common_en"),
+            bird_info.get("family"),
+            bird_info.get("order"),
+            "Aves", "Birdwatching", "Observação de Aves", "Ornitologia", "Passarinhada", "Fauna Silvestre"
+        ]:
+            if b_cand and b_cand.strip() and b_cand.strip() not in tags:
+                tags.append(b_cand.strip())
 
     return {
         "title": title[:100],
         "description": description[:5000],
         "tags": tags,
         "category_id": category_id,
-        "privacy_status": privacy
+        "privacy_status": privacy,
+        "playlist": target_playlists[0] if target_playlists else yt_config.get("playlist", "Timelapses"),
+        "playlists": target_playlists,
+        "bird_info": bird_info
     }
+
+

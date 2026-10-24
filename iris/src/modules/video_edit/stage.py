@@ -285,7 +285,30 @@ class VideoEditStage(PipelineStage):
                     "render_stats": render_stats
                 }
 
+                # Detecta se algum clipe de origem possui identificação de ave confirmada no projeto
+                bird_ident = None
+                if hasattr(project, "get_bird_identification"):
+                    for cp in clip_paths:
+                        b_rec = project.get_bird_identification(str(cp.resolve())) or project.get_bird_identification(str(cp))
+                        if b_rec and (b_rec.get("species_common") or b_rec.get("species_scientific")):
+                            b_meta = b_rec.get("metadata_json") if isinstance(b_rec.get("metadata_json"), dict) else {}
+                            bird_ident = {
+                                "species_common": b_rec.get("species_common", ""),
+                                "species_scientific": b_rec.get("species_scientific", ""),
+                                "species_common_en": b_rec.get("species_common_en", "") or b_meta.get("species_common_en", "") or b_meta.get("common_en", ""),
+                                "family": b_rec.get("family", "") or b_meta.get("family", ""),
+                                "order": b_rec.get("order", "") or b_meta.get("order", ""),
+                                "confidence": float(b_rec.get("confidence", 0.0)),
+                                "taxon_id": b_meta.get("taxon_id"),
+                                "needs_review": b_rec.get("needs_review", False)
+                            }
+                            break
+
+                if bird_ident:
+                    rich_meta["bird_identification"] = bird_ident
+
                 # Salva no banco de dados SQLite local e central
+
                 record = {
                     "project_name": project.name,
                     "source_video_paths": [str(p.resolve()) for p in clip_paths],

@@ -142,7 +142,15 @@ modules:
     category_id: "22"
     playlist: "Timelapses"
     timelapse_long_exposure_playlist: "Timelapses Longa Exposição"
+    video_playlist: "Natureza 4K UHD"
+    bird_playlist: "Birds 4K"           # Playlist agregadora geral de aves
+    bird_playlists:
+      general: true                     # Adiciona à playlist geral (ex: 'Birds 4K')
+      scientific_name: true             # Cria/adiciona playlist da espécie pelo nome científico (ex: 'Pitangus sulphuratus')
+      common_name_pt: true              # Cria/adiciona playlist da espécie pelo nome comum em PT (ex: 'Bem-te-vi')
+      common_name_en: true              # Cria/adiciona playlist da espécie pelo nome comum em EN (ex: 'Great Kiskadee')
     secrets_dir: "secrets"
+
     stage_interval_seconds: 180
     ntfy_topic: "timelapse-studio-2026"
     windows_toast: true

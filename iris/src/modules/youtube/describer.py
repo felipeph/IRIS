@@ -3,9 +3,11 @@
 import re
 import math
 import json
+import unicodedata
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
+
 
 
 def format_duration_human(seconds: float) -> str:
@@ -225,10 +227,15 @@ def build_youtube_tags(record: Dict[str, Any], extra_tags: Optional[List[str]] =
     return tags[:25]
 
 
-def build_rich_youtube_description(record: Dict[str, Any], project_name: str = "") -> str:
+def build_rich_youtube_description(
+    record: Dict[str, Any],
+    project_name: str = "",
+    bird_info: Optional[Dict[str, Any]] = None
+) -> str:
     """
     Compila uma descrição técnica completa e rica para o YouTube com:
-    - Gancho inicial resumido
+    - Gancho inicial resumido (com menção à espécie se bird_info fornecido)
+    - 🐦 IDENTIFICAÇÃO TAXONÔMICA (AVES) (se bird_info fornecido)
     - ⏱️ TEMPO E CAPTURA (início, fim, duração real, fotos, intervalo, ritmo de quadros)
     - 📷 EQUIPAMENTO E ARQUIVOS ORIGINAIS (câmera, lente, abertura, obturador, ISO, resolução, armazenamento)
     - 🎞️ PROCESSAMENTO E ENGENHARIA DE VÍDEO (IRIS) (4K UHD 60fps, Lanczos, Deband 16-bit, encoder, compressão)
@@ -393,10 +400,27 @@ def build_rich_youtube_description(record: Dict[str, Any], project_name: str = "
 
     formatted_photo_count = f"{photo_count:,}".replace(",", ".")
 
-    # Montagem da Descrição
-    description = f"""Vídeo Timelapse renderizado em alta definição 4K UHD ({res}) a {fps} FPS.
-Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IRIS (Imaging Resources and Integration System).
+    # Gancho inicial e bloco de ave se presente
+    if bird_info:
+        c_pt = bird_info.get("species_common", "")
+        sci = bird_info.get("species_scientific", "")
+        c_en = bird_info.get("species_common_en", "")
+        intro_hook = f"Registro em altíssima definição de {c_pt} ({sci})"
+        if c_en and c_en.lower() != c_pt.lower():
+            intro_hook += f", conhecido em inglês como {c_en}.\n"
+        else:
+            intro_hook += ".\n"
+        bird_section = f"\n\n{format_bird_taxonomy_block(bird_info)}\n"
+        bird_hts_list = build_bird_hashtags(bird_info)
+        bird_hts_str = " ".join(bird_hts_list) + " " if bird_hts_list else ""
+    else:
+        intro_hook = ""
+        bird_section = ""
+        bird_hts_str = ""
 
+    # Montagem da Descrição
+    description = f"""{intro_hook}Vídeo Timelapse renderizado em alta definição 4K UHD ({res}) a {fps} FPS.
+Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IRIS (Imaging Resources and Integration System).{bird_section}
 ⏱️ TEMPO E CAPTURA:
 {period_line}
 • Duração Real da Cena: {real_duration_human} ({int(round(real_sec))}s)
@@ -430,23 +454,15 @@ Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IR
 • Arquivo Gerado: {out_video_name}
 • Sequência: {seq_display}
 
-#timelapse #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
+{bird_hts_str}#timelapse #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
 """.replace("\r\n", "\n")
 
     return description[:5000]
 
 
-from datetime import datetime, timedelta
 
-
-def build_edited_video_youtube_title(video_path: Path, record: Dict[str, Any]) -> str:
-    """
-    Gera título padronizado para o YouTube no formato oficial igual ao dos timelapses:
-    Exemplos:
-      - Com intervalo de horas: '2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD'
-      - Clipe único com duração > 1 min: '2026-10-09 (16:22 - 16:25) - Vídeo 4K UHD'
-      - Clipe único curto (mesmo minuto): '2026-10-09 (16:22) - Vídeo 4K UHD'
-    """
+def _extract_temporal_context(video_path: Path, record: Dict[str, Any]) -> Tuple[str, str]:
+    """Extrai contexto temporal (data_str e time_str) a partir do nome do arquivo ou metadados."""
     meta = record.get("metadata_json") or {}
     name = video_path.name
     parts = name.split('_')
@@ -475,7 +491,6 @@ def build_edited_video_youtube_title(video_path: Path, record: Dict[str, Any]) -
     elif time_part and ("h" in time_part or "m" in time_part):
         # Tempo único no nome (ex: 14h30m)
         t_clean = time_part.replace('h', ':').replace('m', '')
-        # Se dur_sec >= 60 e temos date_part, calcular horário de término
         if dur_sec >= 60.0 and date_part and re.match(r'^\d{1,2}:\d{2}$', t_clean):
             try:
                 dt_start = datetime.strptime(f"{date_part} {t_clean}", "%Y-%m-%d %H:%M")
@@ -506,7 +521,6 @@ def build_edited_video_youtube_title(video_path: Path, record: Dict[str, Any]) -
                 pass
 
         if not first_dt and meta.get("first_dt_formatted"):
-            # Ex: "17/08/2026 às 14:30:22"
             try:
                 f_parts = meta["first_dt_formatted"].split(" às ")
                 dt_str = f"{f_parts[0]} {f_parts[1]}"
@@ -535,6 +549,18 @@ def build_edited_video_youtube_title(video_path: Path, record: Dict[str, Any]) -
     if not date_part:
         date_part = datetime.now().strftime("%Y-%m-%d")
 
+    return date_part, time_str
+
+
+def build_edited_video_youtube_title(video_path: Path, record: Dict[str, Any]) -> str:
+    """
+    Gera título padronizado para vídeos convencionais sem aves identificadas:
+    Exemplos:
+      - Com intervalo de horas: '2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD'
+      - Clipe único curto: '2026-10-09 (16:22) - Vídeo 4K UHD'
+    """
+    date_part, time_str = _extract_temporal_context(video_path, record)
+
     title_elements = [date_part]
     if time_str:
         title_elements.append(time_str)
@@ -546,6 +572,273 @@ def build_edited_video_youtube_title(video_path: Path, record: Dict[str, Any]) -
     return title
 
 
+def sanitize_hashtag(text: str) -> str:
+    """Converte um termo ou nome em hashtag limpa (PascalCase, sem acentos, sem espaços ou pontuação)."""
+    if not text:
+        return ""
+    normalized = unicodedata.normalize('NFKD', str(text)).encode('ASCII', 'ignore').decode('utf-8')
+    clean = re.sub(r'[^a-zA-Z0-9]+', ' ', normalized).strip()
+    if not clean:
+        return ""
+    words = [w.capitalize() for w in clean.split() if w]
+    return "".join(words)
+
+
+def _normalize_bird_record(b: Dict[str, Any]) -> Dict[str, Any]:
+    """Normaliza o dicionário de identificação de ave garantindo acesso aos campos fundamentais."""
+    d = dict(b)
+    meta = d.get("metadata_json") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+
+    c_pt = (d.get("species_common") or meta.get("species_common") or "").strip()
+    sci = (d.get("species_scientific") or meta.get("species_scientific") or "").strip()
+    c_en = (d.get("species_common_en") or meta.get("species_common_en") or meta.get("common_en") or "").strip()
+    fam = (d.get("family") or meta.get("family") or "").strip()
+    order = (d.get("order") or meta.get("order") or "").strip()
+    conf = float(d.get("confidence") or meta.get("confidence") or 0.0)
+    taxon_id = d.get("taxon_id") or meta.get("taxon_id")
+
+    return {
+        "species_common": c_pt,
+        "species_scientific": sci,
+        "species_common_en": c_en,
+        "family": fam,
+        "order": order,
+        "confidence": conf,
+        "taxon_id": taxon_id,
+        "metadata_json": meta
+    }
+
+
+def resolve_bird_identification(record: Dict[str, Any], project: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+    """
+    Localiza o registro consolidado de identificação de ave para o vídeo (ou timelapse):
+    1. No próprio record["metadata_json"]["bird_identification"]
+    2. Consultando project.get_bird_identification(...) para cada caminho de origem
+    3. Casamento por itens do projeto ou nome de arquivo na tabela bird_identifications
+    Retorna dicionário normalizado ou None se não houver espécie de ave identificada.
+    """
+    meta = record.get("metadata_json") or {}
+    if isinstance(meta, dict) and meta.get("bird_identification"):
+        b_info = dict(meta["bird_identification"])
+        if b_info.get("species_common") or b_info.get("species_scientific"):
+            return _normalize_bird_record(b_info)
+
+    if not project:
+        return None
+
+    # Tenta obter caminhos de origem
+    raw_paths = record.get("source_video_paths") or record.get("source_files") or []
+    if isinstance(raw_paths, str):
+        try:
+            src_paths = json.loads(raw_paths)
+        except Exception:
+            src_paths = [raw_paths] if raw_paths else []
+    elif isinstance(raw_paths, (list, tuple)):
+        src_paths = list(raw_paths)
+    else:
+        src_paths = []
+
+    if record.get("output_video_path"):
+        src_paths.append(record["output_video_path"])
+    if record.get("sequence_dir"):
+        src_paths.append(record["sequence_dir"])
+    if record.get("item_path"):
+        src_paths.append(record["item_path"])
+
+    # 1. Consulta direta por item_path no banco
+    if hasattr(project, "get_bird_identification"):
+        for p in src_paths:
+            if not p:
+                continue
+            rec_id = project.get_bird_identification(str(p))
+            if not rec_id:
+                try:
+                    rec_id = project.get_bird_identification(str(Path(p).resolve()))
+                except Exception:
+                    pass
+            if rec_id and (rec_id.get("species_common") or rec_id.get("species_scientific")):
+                return _normalize_bird_record(rec_id)
+
+    # 2. Varredura em list_bird_identifications()
+    if hasattr(project, "list_bird_identifications"):
+        all_birds = project.list_bird_identifications()
+        if all_birds:
+            src_names = {Path(p).name.lower() for p in src_paths if p}
+            for b in all_birds:
+                b_path_str = b.get("item_path", "")
+                b_name = Path(b_path_str).name.lower()
+                if b_name and b_name in src_names:
+                    return _normalize_bird_record(b)
+
+            seq_dir = record.get("sequence_dir")
+            if seq_dir:
+                seq_p = Path(seq_dir).resolve()
+                for b in all_birds:
+                    b_p = Path(b.get("item_path", "")).resolve()
+                    if b_p.parent == seq_p:
+                        return _normalize_bird_record(b)
+
+    return None
+
+
+def build_bird_youtube_title(
+    video_path: Path,
+    record: Dict[str, Any],
+    bird_info: Dict[str, Any]
+) -> str:
+    """
+    Gera título específico para vídeos de aves no YouTube:
+    {Nome_PT} ({Nome_Cientifico}) - {Nome_EN} | {Data} ({Hora})
+    - NUNCA inclui 'Vídeo 4K UHD' no título.
+    - Adapta progressivamente para nunca ultrapassar o limite estrito de 100 caracteres.
+    """
+    c_pt = bird_info.get("species_common", "").strip()
+    sci = bird_info.get("species_scientific", "").strip()
+    c_en = bird_info.get("species_common_en", "").strip()
+
+    if sci and c_pt:
+        bird_taxon = f"{c_pt} ({sci})"
+    elif c_pt:
+        bird_taxon = c_pt
+    else:
+        bird_taxon = sci or "Aves da Natureza"
+
+    if c_en and c_en.lower() != c_pt.lower() and c_en.lower() != sci.lower():
+        bird_header = f"{bird_taxon} - {c_en}"
+    else:
+        bird_header = bird_taxon
+
+    date_part, time_str = _extract_temporal_context(video_path, record)
+
+    # 1. Formato completo: Nome | Data (Hora)
+    temporal_full = f"{date_part} {time_str}".strip()
+    candidate = f"{bird_header} | {temporal_full}" if temporal_full else bird_header
+    if len(candidate) <= 100:
+        return candidate
+
+    # 2. Formato condensado: Nome | Data
+    if date_part:
+        candidate_date_only = f"{bird_header} | {date_part}"
+        if len(candidate_date_only) <= 100:
+            return candidate_date_only
+
+    # 3. Apenas cabeçalho completo da ave (PT + Científico + EN)
+    if len(bird_header) <= 100:
+        return bird_header
+
+    # 4. Apenas Nome PT (Científico)
+    if len(bird_taxon) <= 100:
+        return bird_taxon
+
+    # 5. Truncamento seguro
+    return bird_header[:97] + "..."
+
+
+def format_bird_taxonomy_block(bird_info: Dict[str, Any]) -> str:
+    """Gera bloco de texto dedicado com a ficha taxonômica completa da ave."""
+    c_pt = bird_info.get("species_common", "").strip() or "Espécie não informada"
+    c_en = bird_info.get("species_common_en", "").strip()
+    sci = bird_info.get("species_scientific", "").strip() or "Indeterminado"
+    fam = bird_info.get("family", "").strip() or "Não informada"
+    order = bird_info.get("order", "").strip() or "Não informada"
+    conf = float(bird_info.get("confidence", 0.0))
+    conf_pct = f"{conf * 100:.1f}%" if conf > 0.0 else "Classificação confirmada"
+    taxon_id = bird_info.get("taxon_id")
+
+    lines = [
+        "🐦 IDENTIFICAÇÃO TAXONÔMICA (AVES):",
+        f"• Espécie (Nome Popular): {c_pt}",
+    ]
+    if c_en and c_en.lower() != c_pt.lower():
+        lines.append(f"• Nome em Inglês: {c_en}")
+    lines.append(f"• Nome Científico: {sci}")
+    lines.append(f"• Família: {fam}")
+    lines.append(f"• Ordem: {order}")
+    lines.append("• Classe: Aves")
+    lines.append("• Reino: Animalia")
+    lines.append(f"• Grau de Certeza: {conf_pct} (Visão Computacional iNaturalist)")
+    if taxon_id:
+        lines.append(f"• Ficha da Espécie no iNaturalist: https://www.inaturalist.org/taxa/{taxon_id}")
+
+    return "\n".join(lines)
+
+
+def build_bird_hashtags(bird_info: Dict[str, Any]) -> List[str]:
+    """Gera lista de hashtags limpas para a ave (sem acentos, sem espaços, PascalCase)."""
+    hashtags = []
+
+    c_pt = sanitize_hashtag(bird_info.get("species_common", ""))
+    sci = sanitize_hashtag(bird_info.get("species_scientific", ""))
+    c_en = sanitize_hashtag(bird_info.get("species_common_en", ""))
+    fam = sanitize_hashtag(bird_info.get("family", ""))
+    order = sanitize_hashtag(bird_info.get("order", ""))
+
+    for tag in [c_pt, sci, c_en, fam, order]:
+        if tag and f"#{tag}" not in hashtags:
+            hashtags.append(f"#{tag}")
+
+    default_bird_tags = [
+        "#Aves", "#Birdwatching", "#ObservacaoDeAves",
+        "#Ornitologia", "#Passarinhada", "#FaunaSilvestre"
+    ]
+    for d in default_bird_tags:
+        if d not in hashtags:
+            hashtags.append(d)
+
+    return hashtags
+
+
+def resolve_bird_target_playlists(bird_info: Dict[str, Any], yt_config: Dict[str, Any]) -> List[str]:
+    """
+    Determina todas as playlists do YouTube onde o vídeo da ave deve ser publicado.
+    Suporta multi-playlists simultâneas:
+    1. Playlist geral de aves (ex: 'Birds 4K')
+    2. Playlist do Nome Científico (ex: 'Pitangus sulphuratus')
+    3. Playlist do Nome Popular em PT (ex: 'Bem-te-vi')
+    4. Playlist do Nome Popular em EN (ex: 'Great Kiskadee')
+    """
+    bp_cfg = yt_config.get("bird_playlists") or {}
+    general_pl = yt_config.get("bird_playlist", "Birds 4K")
+    include_general = bp_cfg.get("general", True)
+    include_sci = bp_cfg.get("scientific_name", True)
+    include_pt = bp_cfg.get("common_name_pt", True)
+    include_en = bp_cfg.get("common_name_en", True)
+
+    targets: List[str] = []
+    seen = set()
+
+    def _add(pl_name: str):
+        clean = pl_name.strip()
+        if clean and clean.lower() not in seen:
+            seen.add(clean.lower())
+            targets.append(clean)
+
+    if include_general and general_pl:
+        _add(general_pl)
+
+    if include_sci:
+        sci = bird_info.get("species_scientific", "").strip()
+        if sci:
+            _add(sci)
+
+    if include_pt:
+        c_pt = bird_info.get("species_common", "").strip()
+        if c_pt:
+            _add(c_pt)
+
+    if include_en:
+        c_en = bird_info.get("species_common_en", "").strip()
+        if c_en:
+            _add(c_en)
+
+    if not targets:
+        _add(yt_config.get("video_playlist", "Natureza 4K UHD"))
+
+    return targets
+
+
 def build_edited_video_youtube_metadata(
     video_path: Path,
     record: Dict[str, Any],
@@ -554,17 +847,24 @@ def build_edited_video_youtube_metadata(
 ) -> Dict[str, Any]:
     """
     Compila os metadados oficiais e a ficha técnica completa para vídeos editados/upscalados no YouTube.
+    Suporta tratamento ornitológico diferenciado caso o vídeo contenha ave identificada.
     """
     meta = record.get("metadata_json") or {}
-    
-    # 1. Título padronizado igual ao dos timelapses (YYYY-MM-DD (HH:MM - HH:MM) - Vídeo 4K UHD)
-    title = build_edited_video_youtube_title(video_path, record)
+
+    # Verifica se há ave identificada para este vídeo
+    bird_info = resolve_bird_identification(record, project=project)
+
+    if bird_info:
+        title = build_bird_youtube_title(video_path, record, bird_info)
+        target_playlists = resolve_bird_target_playlists(bird_info, yt_config)
+    else:
+        title = build_edited_video_youtube_title(video_path, record)
+        target_playlists = [yt_config.get("video_playlist", "Natureza 4K UHD")]
 
     # Data de captura para a descrição técnica
     first_dt_str = meta.get("first_dt_formatted")
     dt_prefix = ""
     if first_dt_str:
-        # Ex: "17/08/2026 às 14:30:22" -> "17/08/2026 14:30"
         parts = first_dt_str.split(" às ")
         if len(parts) == 2:
             time_part = ":".join(parts[1].split(":")[:2])
@@ -583,7 +883,7 @@ def build_edited_video_youtube_metadata(
     else:
         camera_name = cam_model or cam_make or "Câmera"
 
-    # 2. Informações Técnicas
+    # Informações Técnicas
     orig_w = meta.get("orig_width") or record.get("orig_resolution", "1920x1080").split("x")[0]
     orig_h = meta.get("orig_height") or record.get("orig_resolution", "1920x1080").split("x")[-1]
     target_res = record.get("target_resolution", "3840x2160")
@@ -629,9 +929,8 @@ def build_edited_video_youtube_metadata(
         p_name = Path(src_paths[0]).name if src_paths[0] else "Desconhecido"
         trace_source = f"• Arquivo Original: {p_name}"
     elif len(src_paths) > 1:
-        # Modo joined / múltiplos clipes: lista com nome completo de cada arquivo de origem
         items_lines = []
-        max_items = 50  # salvaguarda contra limite estrito de 5.000 chars do YouTube
+        max_items = 50
         for idx, p in enumerate(src_paths):
             if idx >= max_items:
                 remaining = len(src_paths) - max_items
@@ -665,9 +964,25 @@ def build_edited_video_youtube_metadata(
         filter_desc = "Unsharp Mask 5x5 + Deband 16-bit com micro-dither em 1080p Nativo Pré-Upscale"
         profile_tag = "Lanczos"
 
-    description = f"""Vídeo capturado e masterizado em altíssima definição 4K UHD ({target_res}) a {target_fps} FPS.
-Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Imaging Resources and Integration System).
+    if bird_info:
+        c_pt = bird_info.get("species_common", "")
+        sci = bird_info.get("species_scientific", "")
+        c_en = bird_info.get("species_common_en", "")
+        intro_hook = f"Registro em altíssima definição de {c_pt} ({sci})"
+        if c_en and c_en.lower() != c_pt.lower():
+            intro_hook += f", conhecido em inglês como {c_en}.\n"
+        else:
+            intro_hook += ".\n"
+        bird_section = f"\n\n{format_bird_taxonomy_block(bird_info)}\n"
+        bird_hts_list = build_bird_hashtags(bird_info)
+        bird_hts_str = " ".join(bird_hts_list) + " " if bird_hts_list else ""
+    else:
+        intro_hook = ""
+        bird_section = ""
+        bird_hts_str = ""
 
+    description = f"""{intro_hook}Vídeo capturado e masterizado em altíssima definição 4K UHD ({target_res}) a {target_fps} FPS.
+Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Imaging Resources and Integration System).{bird_section}
 ⏱️ TEMPO, CAPTURA E VELOCIDADE:
 • Data e Hora de Captura: {dt_prefix}
 • Duração Original da Gravação: {format_duration_human(orig_dur)} ({orig_dur:.1f}s)
@@ -695,19 +1010,35 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
 {trace_source}
 • Pipeline: IRIS v2.0 - Video Mastering Stage
 
-#natureza #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
+{bird_hts_str}#natureza #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
 """.replace("\r\n", "\n")
 
     tags = [
         "4K UHD", "Natureza", "Vídeo 4K", "60 FPS", profile_tag,
         camera_name, cam_make or "Câmera", "IRIS", "Nature"
     ]
+    if bird_info:
+        for b_cand in [
+            bird_info.get("species_common"),
+            bird_info.get("species_scientific"),
+            bird_info.get("species_common_en"),
+            bird_info.get("family"),
+            bird_info.get("order"),
+            "Aves", "Birdwatching", "Observação de Aves", "Ornitologia", "Passarinhada", "Fauna Silvestre", "Wildlife"
+        ]:
+            if b_cand and b_cand.strip() and b_cand.strip() not in tags:
+                tags.append(b_cand.strip())
 
     return {
         "title": title,
         "description": description[:5000],
         "tags": [t for t in tags if t],
         "category_id": yt_config.get("category_id", "22"),
-        "privacy_status": record.get("youtube_privacy") or yt_config.get("privacy_status", "unlisted")
+        "privacy_status": record.get("youtube_privacy") or yt_config.get("privacy_status", "unlisted"),
+        "playlist": target_playlists[0] if target_playlists else yt_config.get("video_playlist", "Natureza 4K UHD"),
+        "playlists": target_playlists,
+        "bird_info": bird_info
     }
+
+
 

@@ -20,7 +20,8 @@ from src.modules.timelapse.notifier import send_windows_toast, send_ntfy_notific
 from src.modules.youtube.uploader import (
     get_authenticated_service,
     build_timelapse_youtube_metadata,
-    add_video_to_playlist
+    add_video_to_playlist,
+    add_video_to_playlists
 )
 from src.modules.youtube.describer import build_edited_video_youtube_metadata
 from src.modules.youtube.cleaner import execute_post_upload_cleanup
@@ -226,14 +227,29 @@ class YouTubeUploadStage(PipelineStage):
             file_size = video_path.stat().st_size
             file_mb = file_size / (1024**2)
 
+            target_playlists = metadata.get("playlists") or [target_playlist]
+            pl_desc = ", ".join(target_playlists)
+
+            bird_info = metadata.get("bird_info")
+            bird_line = ""
+            if bird_info:
+                c_pt = bird_info.get("species_common") or ""
+                sci = bird_info.get("species_scientific") or ""
+                c_en = bird_info.get("species_common_en") or ""
+                conf = float(bird_info.get("confidence") or 0.0)
+                conf_str = f" ({conf*100:.1f}%)" if conf > 0 else ""
+                en_str = f" / {c_en}" if c_en and c_en.lower() != c_pt.lower() else ""
+                bird_line = f"[bold cyan]Ave Identificada:[/bold cyan] {c_pt} ({sci}){en_str}{conf_str}\n"
+
             # Exibir Card de Metadados
             card_info = (
                 f"[bold cyan]Arquivo:[/bold cyan]     {video_path.name} ({file_mb:.1f} MB)\n"
                 f"[bold cyan]Tipo:[/bold cyan]        {'Timelapse 4K UHD' if job_type == 'timelapse' else 'Vídeo Editado 4K UHD'}\n"
+                f"{bird_line}"
                 f"[bold cyan]Título:[/bold cyan]      {metadata['title']}\n"
                 f"[bold cyan]Ficha Técnica:[/bold cyan]{tech_sheet}\n"
                 f"[bold cyan]Privacidade:[/bold cyan] {metadata['privacy_status'].upper()}\n"
-                f"[bold cyan]Playlist:[/bold cyan]    {target_playlist}"
+                f"[bold cyan]Playlists ({len(target_playlists)}):[/bold cyan]   {pl_desc}"
             )
             console.print(Panel(card_info, title=f"Upload [{idx}/{len(pending_jobs)}]", border_style="red"))
 
@@ -362,8 +378,9 @@ class YouTubeUploadStage(PipelineStage):
                 video_id = response["id"]
                 video_url = f"https://youtu.be/{video_id}"
 
-                # Adicionar à playlist configurada
-                add_video_to_playlist(youtube, video_id, target_playlist, privacy=metadata["privacy_status"])
+                # Adicionar às playlists configuradas
+                for pl_target in target_playlists:
+                    add_video_to_playlist(youtube, video_id, pl_target, privacy=metadata["privacy_status"])
 
                 # Atualizar banco do projeto e banco central
                 if job_type == "timelapse":
