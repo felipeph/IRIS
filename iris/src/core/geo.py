@@ -127,7 +127,7 @@ def maps_url(lat: float, lng: float) -> str:
 
 def build_location_panel(
     loc: GeoLocation,
-    title: str = "📍 \\[LOCALIZAÇÃO ATIVA DO PROJETO\\]",
+    title: str = "📍 [LOCALIZAÇÃO ATIVA DO PROJETO]",
     border_style: str = "yellow"
 ) -> Panel:
     """Gera um painel vertical padronizado com as informações detalhadas da localização (uma por linha)."""
@@ -136,7 +136,7 @@ def build_location_panel(
     reg_parts = [p for p in [loc.city, loc.state, loc.country] if p]
     reg_str = ", ".join(reg_parts) if reg_parts else "Brasil"
 
-    clean_title = title.replace("[", "\\[") if "\\[" not in title else title
+    clean_title = title.replace("\\[", "[").replace("\\]", "]").replace("[", "\\[")
     loc_text = (
         f"[bold yellow]{clean_title}[/bold yellow]\n"
         f"  [dim]• Rótulo:[/dim]       [bold white]{loc.label}[/bold white]\n"

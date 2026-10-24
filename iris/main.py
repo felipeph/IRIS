@@ -78,7 +78,7 @@ def select_location_dialog(console: Console, default_id: str = None) -> GeoLocat
             if 0 <= v_idx < len(locations):
                 target_loc = locations[v_idx]
                 console.print()
-                console.print(build_location_panel(target_loc, title=f"📍 \\[DETALHES DA CONFIGURAÇÃO: {target_loc.label}\\]", border_style="yellow"))
+                console.print(build_location_panel(target_loc, title=f"📍 [DETALHES DA CONFIGURAÇÃO: {target_loc.label}]", border_style="yellow"))
                 Prompt.ask("\n[dim]Pressione ENTER para voltar à seleção...[/dim]")
             else:
                 console.print("[red]Opção inválida.[/red]")
@@ -206,7 +206,7 @@ def run_pipeline_for_project(active_project):
                     active_project.save()
 
             if loc:
-                console.print(build_location_panel(loc, title="📍 \\[LOCALIZAÇÃO ATIVA DO PROJETO\\]", border_style="yellow"))
+                console.print(build_location_panel(loc, title="📍 [LOCALIZAÇÃO ATIVA DO PROJETO]", border_style="yellow"))
             
             # Status do Ambiente
             dest_root = config.get("general.destination_root", "C:\\IRIS")

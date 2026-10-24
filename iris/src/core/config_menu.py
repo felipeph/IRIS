@@ -1215,7 +1215,7 @@ def _edit_location_flow(console: Console, loc: GeoLocation):
     """Fluxo interativo para editar ou excluir um local predefinido."""
     while True:
         console.clear()
-        console.print(build_location_panel(loc, title=f"📍 \\[CONFIGURAÇÃO: {loc.label}\\]", border_style="yellow"))
+        console.print(build_location_panel(loc, title=f"📍 [CONFIGURAÇÃO: {loc.label}]", border_style="yellow"))
 
         console.print("  [cyan]1.[/cyan] Alterar Coordenadas (Latitude, Longitude)")
         console.print("  [cyan]2.[/cyan] Alterar Rótulo")
