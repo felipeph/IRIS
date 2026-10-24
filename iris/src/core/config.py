@@ -59,7 +59,7 @@ class ConfigManager:
             },
             {
                 "id": "sanitization",
-                "name": "Sanitização de Metadados EXIF",
+                "name": "Sanitização de Metadados EXIF e Geotag",
                 "module": "src.modules.sanitization.stage",
                 "enabled": True
             },
@@ -283,8 +283,45 @@ class ConfigManager:
                 "stages": self._get_default_stages()
             },
             "naming": {
-                "photo_pattern": "{date}_{time}_{camera}_{resolution}_{dimensions}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}",
-                "video_pattern": "{date}_{time}_{camera}_{resolution}_{dimensions}_{fps}_{duration}_{original}.{ext}"
+                "photo_pattern": "{date}_{time}_{camera}_{resolution}_{dimensions}_{focal}_{aperture}_{shutter}_{iso}_{gps}_{original}.{ext}",
+                "video_pattern": "{date}_{time}_{camera}_{resolution}_{dimensions}_{fps}_{duration}_{gps}_{original}.{ext}"
+            },
+            "geo": {
+                "default_location": "formiga-sao-luiz",
+                "tag_media": True,
+                "filename_token": True,
+                "locations": [
+                    {
+                        "id": "formiga-sao-luiz",
+                        "label": "Bairro São Luiz - Formiga - MG",
+                        "lat": -20.456887,
+                        "lng": -45.438307,
+                        "accuracy_m": 25000.0,
+                        "city": "Formiga",
+                        "state": "Minas Gerais",
+                        "country": "Brasil"
+                    },
+                    {
+                        "id": "bh-belvedere",
+                        "label": "Bairro Belvedere - Belo Horizonte - MG",
+                        "lat": -19.9667,
+                        "lng": -43.9500,
+                        "accuracy_m": 15000.0,
+                        "city": "Belo Horizonte",
+                        "state": "Minas Gerais",
+                        "country": "Brasil"
+                    },
+                    {
+                        "id": "ouro-preto-sao-bartolomeu",
+                        "label": "São Bartolomeu - Ouro Preto - MG",
+                        "lat": -20.3167,
+                        "lng": -43.5833,
+                        "accuracy_m": 20000.0,
+                        "city": "Ouro Preto",
+                        "state": "Minas Gerais",
+                        "country": "Brasil"
+                    }
+                ]
             },
             "classification": {
                 "moon_zoom_threshold_mm": 1000.0,

@@ -80,6 +80,7 @@ class ProjectBase:
         self.total_source_files = 0
         self.total_source_size_bytes = 0
         self.auto_cleanup: bool = False
+        self.geo_location_id: str = ""
         self._db_initialized: bool = False
         self._tx_local = threading.local()
 
@@ -172,8 +173,10 @@ class ProjectBase:
 
             for col in p_mod.ITEM_FIELDS:
                 if col not in existing_cols:
-                    if col == "verified":
-                        cursor.execute("ALTER TABLE items ADD COLUMN verified INTEGER DEFAULT 0")
+                    if col in ("verified", "geo_written"):
+                        cursor.execute(f"ALTER TABLE items ADD COLUMN {col} INTEGER DEFAULT 0")
+                    elif col in ("meta_latitude", "meta_longitude", "meta_gps_accuracy"):
+                        cursor.execute(f"ALTER TABLE items ADD COLUMN {col} REAL")
                     elif col in ("meta_is_video", "meta_is_raw"):
                         cursor.execute(f"ALTER TABLE items ADD COLUMN {col} INTEGER DEFAULT 0")
                     elif col in ("file_size_bytes", "meta_duration_seconds", "meta_width", "meta_height"):
@@ -217,16 +220,17 @@ class ProjectBase:
         with p_mod.get_db_connection(p_mod.CENTRAL_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO projects (name, source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+                INSERT INTO projects (name, source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup, geo_location_id, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
                 ON CONFLICT(name) DO UPDATE SET
                     source_path=excluded.source_path,
                     current_stage_id=excluded.current_stage_id,
                     total_source_files=excluded.total_source_files,
                     total_source_size_bytes=excluded.total_source_size_bytes,
                     auto_cleanup=excluded.auto_cleanup,
+                    geo_location_id=excluded.geo_location_id,
                     updated_at=strftime('%Y-%m-%d %H:%M:%f', 'now')
-            """, (self.name, self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes, int(self.auto_cleanup)))
+            """, (self.name, self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes, int(self.auto_cleanup), str(self.geo_location_id)))
             conn.commit()
 
     def load_metadata(self) -> bool:
@@ -236,11 +240,12 @@ class ProjectBase:
             return False
         with p_mod.get_db_connection(p_mod.CENTRAL_DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup FROM projects WHERE name=?", (self.name,))
+            cursor.execute("SELECT source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup, geo_location_id FROM projects WHERE name=?", (self.name,))
             row = cursor.fetchone()
             if row:
                 self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes = row[0], row[1], row[2], row[3]
                 self.auto_cleanup = bool(row[4]) if len(row) > 4 and row[4] is not None else False
+                self.geo_location_id = str(row[5]) if len(row) > 5 and row[5] is not None else ""
                 self._init_project_db()
                 return True
             return False

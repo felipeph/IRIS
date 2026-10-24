@@ -74,6 +74,9 @@ class MediaMetadata:
     width: Optional[int] = None
     height: Optional[int] = None
     source_folder_name: str = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    gps_accuracy: Optional[float] = None
 
     @property
     def dimensions_str(self) -> str:
@@ -302,6 +305,112 @@ def format_duration(seconds: float | None) -> str:
         return f"{m:02d}m{s:02d}s"
     return f"{s:02d}s"
 
+def parse_gps_from_raw_exif(raw_exif: dict) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Converte dados brutos do ExifTool em (latitude, longitude, precisao_m)."""
+    lat = raw_exif.get("GPSLatitude")
+    lat_ref = raw_exif.get("GPSLatitudeRef")
+    lng = raw_exif.get("GPSLongitude")
+    lng_ref = raw_exif.get("GPSLongitudeRef")
+    acc = raw_exif.get("GPSHPositioningError")
+
+    # QuickTime:GPSCoordinates fallback (ex: "+37.5000-122.0000+000.000/" ou "-20.4568-045.4383/")
+    qt_coords = raw_exif.get("GPSCoordinates")
+    if (lat is None or lng is None) and qt_coords:
+        m = re.match(r"^([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)", str(qt_coords).strip())
+        if m:
+            try:
+                lat = float(m.group(1))
+                lng = float(m.group(2))
+            except ValueError:
+                pass
+
+    parsed_lat = None
+    parsed_lng = None
+    parsed_acc = None
+
+    if lat is not None:
+        try:
+            val = float(lat)
+            if lat_ref and str(lat_ref).strip().upper() == "S" and val > 0:
+                val = -val
+            parsed_lat = val
+        except (ValueError, TypeError):
+            pass
+
+    if lng is not None:
+        try:
+            val = float(lng)
+            if lng_ref and str(lng_ref).strip().upper() == "W" and val > 0:
+                val = -val
+            parsed_lng = val
+        except (ValueError, TypeError):
+            pass
+
+    if acc is not None:
+        try:
+            parsed_acc = float(acc)
+        except (ValueError, TypeError):
+            pass
+
+    return parsed_lat, parsed_lng, parsed_acc
+
+def read_gps_batch(file_paths: list[Path]) -> dict[str, tuple[Optional[float], Optional[float], Optional[float]]]:
+    """
+    Executa uma leitura rápida de metadados somente-leitura com ExifTool exclusivamente para GPS.
+    Retorna mapeamento {str(caminho_resolvido): (lat, lng, acc)}.
+    """
+    if not file_paths:
+        return {}
+
+    env_exif = os.getenv("IRIS_EXIFTOOL_PATH")
+    if env_exif and Path(env_exif).exists():
+        exiftool_bin = env_exif
+    else:
+        exiftool_bin = shutil.which("exiftool")
+
+    if not exiftool_bin:
+        return {}
+
+    results = {}
+    batch_size = 500
+    for i in range(0, len(file_paths), batch_size):
+        batch = file_paths[i:i + batch_size]
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+            for p in batch:
+                f.write(f"{p.resolve()}\n")
+            argfile = f.name
+
+        try:
+            cmd = [
+                exiftool_bin,
+                "-json",
+                "-charset", "filename=utf8",
+                "-GPSLatitude#",
+                "-GPSLatitudeRef",
+                "-GPSLongitude#",
+                "-GPSLongitudeRef",
+                "-GPSHPositioningError#",
+                "-QuickTime:GPSCoordinates",
+                "-@",
+                argfile,
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            if proc.returncode == 0 and proc.stdout:
+                parsed = json.loads(proc.stdout)
+                for item in parsed:
+                    src_file = str(Path(item.get("SourceFile", "")).resolve())
+                    lat, lng, acc = parse_gps_from_raw_exif(item)
+                    results[src_file] = (lat, lng, acc)
+        except Exception:
+            pass
+        finally:
+            try:
+                os.unlink(argfile)
+            except OSError:
+                pass
+
+    return results
+
 def extract_metadata_batch(
     file_paths: list[Path],
     progress_callback: Optional[Callable[[int, int, str], None]] = None
@@ -351,6 +460,12 @@ def extract_metadata_batch(
                     "-Duration#",
                     "-Duration",
                     "-VideoFrameRate",
+                    "-GPSLatitude#",
+                    "-GPSLatitudeRef",
+                    "-GPSLongitude#",
+                    "-GPSLongitudeRef",
+                    "-GPSHPositioningError#",
+                    "-QuickTime:GPSCoordinates",
                     "-@",
                     argfile,
                 ]
@@ -505,6 +620,8 @@ def extract_metadata_batch(
             else:
                 res_str = ""
 
+        lat_val, lng_val, acc_val = parse_gps_from_raw_exif(raw_exif)
+
         meta = MediaMetadata(
             file_path=p,
             is_video=is_video,
@@ -526,6 +643,9 @@ def extract_metadata_batch(
             is_raw=is_raw,
             width=width,
             height=height,
+            latitude=lat_val,
+            longitude=lng_val,
+            gps_accuracy=acc_val,
         )
         results.append(meta)
 

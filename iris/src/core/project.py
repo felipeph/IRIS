@@ -155,12 +155,17 @@ def init_central_db(force: bool = False):
                 total_source_files INTEGER,
                 total_source_size_bytes INTEGER,
                 auto_cleanup INTEGER DEFAULT 0,
+                geo_location_id TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
                 updated_at TIMESTAMP DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
             )
         """)
         try:
             cursor.execute("ALTER TABLE projects ADD COLUMN auto_cleanup INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE projects ADD COLUMN geo_location_id TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
 
@@ -216,6 +221,11 @@ class ProjectItem:
     meta_is_raw: Optional[bool] = None
     meta_width: Optional[int] = None
     meta_height: Optional[int] = None
+    meta_latitude: Optional[float] = None
+    meta_longitude: Optional[float] = None
+    meta_gps_accuracy: Optional[float] = None
+    geo_source: str = ""
+    geo_written: bool = False
 
     # Organization fields
     category: str = ""
@@ -248,10 +258,12 @@ def _serialize_item(item: ProjectItem) -> tuple:
     vals = []
     for f in ITEM_FIELDS:
         v = getattr(item, f)
-        if f == "verified":
+        if f in ("verified", "geo_written"):
             vals.append(int(v))
         elif f in ("meta_is_video", "meta_is_raw") and v is not None:
             vals.append(int(v))
+        elif f in ("meta_latitude", "meta_longitude", "meta_gps_accuracy") and v is not None:
+            vals.append(float(v))
         else:
             vals.append(v)
     return tuple(vals)
@@ -260,10 +272,18 @@ def _row_to_item(row: sqlite3.Row) -> ProjectItem:
     """Deserializa uma linha SQLite em instância de ProjectItem."""
     d = dict(row)
     d['verified'] = bool(d['verified'])
+    if d.get('geo_written') is not None:
+        d['geo_written'] = bool(d['geo_written'])
     if d.get('meta_is_video') is not None:
         d['meta_is_video'] = bool(d['meta_is_video'])
     if d.get('meta_is_raw') is not None:
         d['meta_is_raw'] = bool(d['meta_is_raw'])
+    if d.get('meta_latitude') is not None:
+        d['meta_latitude'] = float(d['meta_latitude'])
+    if d.get('meta_longitude') is not None:
+        d['meta_longitude'] = float(d['meta_longitude'])
+    if d.get('meta_gps_accuracy') is not None:
+        d['meta_gps_accuracy'] = float(d['meta_gps_accuracy'])
     return ProjectItem.from_dict(d)
 
 def _build_items_filter_query(
@@ -319,13 +339,20 @@ def get_project(name: str) -> Optional[Project]:
         return p
     return None
 
-def create_project(name: str, source_path: str, auto_cleanup: Optional[bool] = None) -> Project:
+def create_project(name: str, source_path: str, auto_cleanup: Optional[bool] = None, geo_location_id: Optional[str] = None) -> Project:
     """Cria e salva um novo projeto."""
     p = Project(name, source_path)
     if auto_cleanup is None:
         p.auto_cleanup = bool(config.get("modules.cleanup.auto_clean", False))
     else:
         p.auto_cleanup = bool(auto_cleanup)
+
+    if geo_location_id is None:
+        from src.core.geo import GeoService
+        p.geo_location_id = GeoService.get_default_location_id()
+    else:
+        p.geo_location_id = str(geo_location_id)
+
     p.save_metadata()
     p._init_project_db()
     return p

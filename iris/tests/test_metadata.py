@@ -149,7 +149,61 @@ def test_extract_metadata_batch_canon_sx60_raw(tmp_path):
         assert meta.aperture_str == "f6-5"
         assert meta.iso_str == "ISO200"
 
-        # Garante que as flags 35efl# e ScaleFactor35efl# foram passadas no comando
+def test_parse_gps_from_raw_exif():
+    from src.core.metadata import parse_gps_from_raw_exif
+    # Formato EXIF tradicional com ref
+    raw1 = {
+        "GPSLatitude": 20.456887,
+        "GPSLatitudeRef": "S",
+        "GPSLongitude": 45.438307,
+        "GPSLongitudeRef": "W",
+        "GPSHPositioningError": 12.5
+    }
+    lat, lng, acc = parse_gps_from_raw_exif(raw1)
+    assert lat == -20.456887
+    assert lng == -45.438307
+    assert acc == 12.5
+
+    # Formato QuickTime video
+    raw2 = {
+        "GPSCoordinates": "-20.456887-045.438307+200.000/"
+    }
+    lat2, lng2, acc2 = parse_gps_from_raw_exif(raw2)
+    assert lat2 == -20.456887
+    assert lng2 == -45.438307
+    assert acc2 is None
+
+def test_extract_metadata_batch_with_gps(tmp_path):
+    from src.core.metadata import extract_metadata_batch
+    dummy_jpg = tmp_path / "GPS_IMG.JPG"
+    dummy_jpg.write_bytes(b"dummy_jpg")
+
+    fake_exif = [
+        {
+            "SourceFile": str(dummy_jpg.resolve()),
+            "DateTimeOriginal": "2026:10:18 12:00:00",
+            "Make": "Canon",
+            "Model": "PowerShot",
+            "GPSLatitude": 20.456887,
+            "GPSLatitudeRef": "S",
+            "GPSLongitude": 45.438307,
+            "GPSLongitudeRef": "W",
+            "GPSHPositioningError": 5.0
+        }
+    ]
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = json.dumps(fake_exif)
+
+    with patch("src.core.metadata.shutil.which", return_value="exiftool"), \
+         patch("subprocess.run", return_value=mock_proc) as mock_run:
+        results = extract_metadata_batch([dummy_jpg])
+        assert len(results) == 1
+        assert results[0].latitude == -20.456887
+        assert results[0].longitude == -45.438307
+        assert results[0].gps_accuracy == 5.0
+
         cmd = mock_run.call_args[0][0]
-        assert "-FocalLength35efl#" in cmd
-        assert "-ScaleFactor35efl#" in cmd
+        assert "-GPSLatitude#" in cmd
+        assert "-GPSLongitude#" in cmd

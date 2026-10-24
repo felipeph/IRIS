@@ -95,12 +95,19 @@ class PlanningStage(PipelineStage):
                                 item.meta_is_raw = m.is_raw
                                 item.meta_width = m.width
                                 item.meta_height = m.height
+                                if m.latitude is not None and item.meta_latitude is None:
+                                    item.meta_latitude = m.latitude
+                                    item.meta_longitude = m.longitude
+                                    item.meta_gps_accuracy = m.gps_accuracy
+                                    if not item.geo_source:
+                                        item.geo_source = "native"
                                 project.save_item(item)
                     
                 live.update(PipelineUI.generate_renderable(tracker, "ETAPA 3: EXTRAÇÃO DE METADADOS", start_str, total_files, 0.0, "Concluído", "Finalizando"))
 
         # 2. Reconstruir a lista completa de MediaMetadata a partir do Banco
         from src.core.metadata import MediaMetadata
+        from src.core.geo import GeoService
         
         console.print("[cyan]Carregando metadados do banco para classificação...[/cyan]")
         all_metadatas = []
@@ -130,7 +137,10 @@ class PlanningStage(PipelineStage):
                         extension=item.meta_extension,
                         is_raw=item.meta_is_raw,
                         width=item.meta_width,
-                        height=item.meta_height
+                        height=item.meta_height,
+                        latitude=item.meta_latitude,
+                        longitude=item.meta_longitude,
+                        gps_accuracy=item.meta_gps_accuracy,
                     )
                     all_metadatas.append(meta)
                 except Exception as e:
@@ -143,7 +153,16 @@ class PlanningStage(PipelineStage):
         item_lookup = {str(Path(item.staging_path).resolve()): item for item in all_planning_items}
 
         class_config = config.get("classification", {})
-        name_config = config.get("naming", {})
+        name_config = dict(config.get("naming", {}))
+
+        loc = None
+        if hasattr(project, "geo_location_id") and project.geo_location_id:
+            loc = GeoService.get_location(project.geo_location_id)
+        if not loc:
+            loc = GeoService.get_default_location()
+        if loc:
+            name_config["project_geo_lat"] = loc.lat
+            name_config["project_geo_lng"] = loc.lng
 
         classified_items = classify_media_batch(all_metadatas, class_config, name_config)
         

@@ -56,13 +56,26 @@ class BirdClassifyStage(PipelineStage):
         burst_early_exit_confirmations = int(config.get("modules.bird_id.burst_early_exit_confirmations", module_cfg.get("burst_early_exit_confirmations", 3)))
 
         inat_cfg = module_cfg.get("inaturalist", {})
-        default_lat = inat_cfg.get("default_lat", None)
-        default_lng = inat_cfg.get("default_lng", None)
-        default_acc = inat_cfg.get("positional_accuracy_meters", 25000)
         use_exif_gps = bool(inat_cfg.get("use_exif_gps", True))
         inat_creds = inat_cfg.get("credentials_file", "secrets/inaturalist.json")
         inat_url = inat_cfg.get("api_url", None)
         inat_delay = float(inat_cfg.get("request_delay_seconds", 1.0))
+
+        from src.core.geo import GeoService
+        project_loc = None
+        if hasattr(project, "geo_location_id") and project.geo_location_id:
+            project_loc = GeoService.get_location(project.geo_location_id)
+        if not project_loc:
+            project_loc = GeoService.get_default_location()
+
+        if project_loc:
+            default_lat = project_loc.lat
+            default_lng = project_loc.lng
+            default_acc = project_loc.accuracy_m
+        else:
+            default_lat = inat_cfg.get("default_lat", None)
+            default_lng = inat_cfg.get("default_lng", None)
+            default_acc = inat_cfg.get("positional_accuracy_meters", 25000)
 
         # 1. Recupera identificações/detecções já registradas no banco do projeto
         existing_records = project.list_bird_identifications()

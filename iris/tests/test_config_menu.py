@@ -11,7 +11,8 @@ from src.core.config_menu import (
     _menu_timelapse_long_exposure,
     _menu_video_edit,
     _menu_youtube_notifications,
-    _menu_bird_id
+    _menu_bird_id,
+    _menu_geolocation,
 )
 
 @pytest.fixture
@@ -29,6 +30,7 @@ def test_config_menu_subpages_exit(mock_console):
         _menu_video_edit(mock_console)
         _menu_youtube_notifications(mock_console)
         _menu_bird_id(mock_console)
+        _menu_geolocation(mock_console)
 
 def test_show_config_menu_hub(mock_console):
     """Testa a navegação no menu hub principal saindo com 0."""
@@ -45,6 +47,7 @@ def test_show_config_menu_routes_to_subpages(mock_console):
         ("4", "_menu_video_edit"),
         ("5", "_menu_youtube_notifications"),
         ("8", "_menu_bird_id"),
+        ("9", "_menu_geolocation"),
     ]:
         with patch("src.core.config_menu.Prompt.ask", side_effect=[opt, "0"]), \
              patch(f"src.core.config_menu.{target_func}") as mock_sub, \
@@ -329,5 +332,26 @@ def test_config_manager_auto_migrates_burst_consensus(tmp_path: Path):
         assert cm.get("modules.bird_id.burst_min_agreement_ratio") == 0.50
         assert cm.get("modules.bird_id.enable_burst_early_exit") is True
         assert cm.get("modules.bird_id.burst_early_exit_confirmations") == 3
+
+
+def test_geolocation_menu_toggles(mock_console):
+    """Testa alternância de gravação de tags e token de nome no menu de geolocalização."""
+    orig_tag = config.get("geo.tag_media", True)
+    orig_tok = config.get("geo.filename_token", True)
+    try:
+        # Alterna tag_media com 'T' e sai com '0'
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["T", "0"]), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_geolocation(mock_console)
+            assert config.get("geo.tag_media") is not orig_tag
+
+        # Alterna filename_token com 'F' e sai com '0'
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["F", "0"]), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_geolocation(mock_console)
+            assert config.get("geo.filename_token") is not orig_tok
+    finally:
+        config.set("geo.tag_media", orig_tag)
+        config.set("geo.filename_token", orig_tok)
 
 

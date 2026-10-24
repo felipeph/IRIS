@@ -43,12 +43,16 @@ def clean_original_stem(original: str, meta: MediaMetadata) -> str:
     cleaned = re.sub(r"(?<!\d)\d{4}[-_]?\d{2}[-_]?\d{2}(?!\d)", " ", cleaned)
     # Matches HH-MM-SS or HH_MM_SS (requires delimiters to avoid matching random 6 digits)
     cleaned = re.sub(r"(?<!\d)\d{2}[-_]\d{2}[-_]\d{2}(?!\d)", " ", cleaned)
+    # Regex para remover tokens GPS prévios (ex: S20-4569_W45-4383 ou N12-3456_E45-6789)
+    cleaned = re.sub(r"(?<![A-Za-z0-9])[NS]\d{2}-\d{4}_[EW]\d{2,3}-\d{4}(?![A-Za-z0-9])", " ", cleaned, flags=re.IGNORECASE)
 
     return cleaned
 
 def generate_target_filename(meta: MediaMetadata, config: dict | None = None) -> str:
     if config is None:
         config = {}
+
+    from src.core.geo import format_gps_token
 
     cleaned_stem = clean_original_stem(meta.original_stem, meta)
     original_clean = re.sub(r"[^A-Za-z0-9_-]", "", cleaned_stem)
@@ -70,8 +74,23 @@ def generate_target_filename(meta: MediaMetadata, config: dict | None = None) ->
     megapixels_str = getattr(meta, "megapixels_str", "") or (meta.resolution_str or "")
     photo_res = meta.resolution_str or megapixels_str or ""
 
+    # Determina o token GPS
+    enable_gps_token = config.get("geo_filename_token", config.get("geo.filename_token", True))
+    gps_str = ""
+    if enable_gps_token:
+        lat = getattr(meta, "latitude", None)
+        lng = getattr(meta, "longitude", None)
+        if lat is None or lng is None:
+            lat = config.get("project_geo_lat")
+            lng = config.get("project_geo_lng")
+        if lat is not None and lng is not None:
+            try:
+                gps_str = format_gps_token(float(lat), float(lng))
+            except Exception:
+                gps_str = ""
+
     if meta.is_video:
-        pattern = config.get("video_pattern", "{date}_{time}_{camera}_{resolution}_{dimensions}_{fps}_{duration}_{original}.{ext}")
+        pattern = config.get("video_pattern", "{date}_{time}_{camera}_{resolution}_{dimensions}_{fps}_{duration}_{gps}_{original}.{ext}")
         res = pattern.format(
             date=meta.date_str,
             time=meta.time_str,
@@ -88,12 +107,13 @@ def generate_target_filename(meta: MediaMetadata, config: dict | None = None) ->
             mp=megapixels_str,
             fps=meta.fps_str or "30fps",
             duration=meta.duration_str or "00s",
+            gps=gps_str,
             original=original_clean,
             ext=meta.extension.lower(),
         )
     else:
         # Photo
-        pattern = config.get("photo_pattern", "{date}_{time}_{camera}_{resolution}_{dimensions}_{focal}_{aperture}_{shutter}_{iso}_{original}.{ext}")
+        pattern = config.get("photo_pattern", "{date}_{time}_{camera}_{resolution}_{dimensions}_{focal}_{aperture}_{shutter}_{iso}_{gps}_{original}.{ext}")
         res = pattern.format(
             date=meta.date_str,
             time=meta.time_str,
@@ -112,6 +132,7 @@ def generate_target_filename(meta: MediaMetadata, config: dict | None = None) ->
             aperture=meta.aperture_str or "",
             shutter=meta.shutter_str or "",
             iso=meta.iso_str or "",
+            gps=gps_str,
             original=original_clean,
             ext=meta.extension.lower(),
         )

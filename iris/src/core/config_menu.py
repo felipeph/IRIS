@@ -1,9 +1,12 @@
 import time
+import re
+from typing import List
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from src.core.config import config
+from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url
 
 
 def _menu_storage_ingestion(console: Console):
@@ -888,10 +891,11 @@ def _menu_bird_id(console: Console):
         crops_val = config.get("modules.bird_id.video_min_confident_crops", 2)
         table.add_row("9", "Mínimo de Recortes para Validar Vídeo", "modules.bird_id.video_min_confident_crops", str(crops_val))
         
-        def_lat = config.get("modules.bird_id.inaturalist.default_lat", -19.92)
+        def_loc = GeoService.get_default_location()
+        def_lat = def_loc.lat if def_loc else config.get("modules.bird_id.inaturalist.default_lat", -19.92)
         table.add_row("10", "Latitude Padrão (Prior Geo)", "modules.bird_id.inaturalist.default_lat", f"{float(def_lat):.4f}")
         
-        def_lng = config.get("modules.bird_id.inaturalist.default_lng", -43.94)
+        def_lng = def_loc.lng if def_loc else config.get("modules.bird_id.inaturalist.default_lng", -43.94)
         table.add_row("11", "Longitude Padrão (Prior Geo)", "modules.bird_id.inaturalist.default_lng", f"{float(def_lng):.4f}")
         
         geo_acc = config.get("modules.bird_id.inaturalist.positional_accuracy_meters", 25000)
@@ -923,6 +927,7 @@ def _menu_bird_id(console: Console):
         
         ee_confirms = config.get("modules.bird_id.burst_early_exit_confirmations", 3)
         table.add_row("21", "Confirmações Mínimas p/ Early Exit", "modules.bird_id.burst_early_exit_confirmations", f"{int(ee_confirms)} fotos")
+        table.add_row("22", "Central de Geolocalizações (Locais Salvos)", "geo.locations", "[yellow]Gerenciar / Cadastrar[/yellow]")
         
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
@@ -1016,12 +1021,16 @@ def _menu_bird_id(console: Console):
                 console.print("[red]Valor deve ser um número inteiro![/red]")
             time.sleep(1)
         elif choice == "10":
-            curr = float(config.get("modules.bird_id.inaturalist.default_lat", -19.92))
+            def_loc = GeoService.get_default_location()
+            curr = def_loc.lat if def_loc else float(config.get("modules.bird_id.inaturalist.default_lat", -19.92))
             new_val = Prompt.ask("Latitude padrão para prior geográfico (-90.0 a 90.0)", default=f"{curr:.4f}")
             try:
                 lat_f = float(new_val)
                 if -90.0 <= lat_f <= 90.0:
                     config.set("modules.bird_id.inaturalist.default_lat", lat_f)
+                    if def_loc:
+                        def_loc.lat = lat_f
+                        GeoService.update_location(def_loc)
                     console.print("[green]Salvo![/green]")
                 else:
                     console.print("[red]Latitude deve estar entre -90.0 e 90.0![/red]")
@@ -1029,12 +1038,16 @@ def _menu_bird_id(console: Console):
                 console.print("[red]Valor deve ser um número decimal![/red]")
             time.sleep(1)
         elif choice == "11":
-            curr = float(config.get("modules.bird_id.inaturalist.default_lng", -43.94))
+            def_loc = GeoService.get_default_location()
+            curr = def_loc.lng if def_loc else float(config.get("modules.bird_id.inaturalist.default_lng", -43.94))
             new_val = Prompt.ask("Longitude padrão para prior geográfico (-180.0 a 180.0)", default=f"{curr:.4f}")
             try:
                 lng_f = float(new_val)
                 if -180.0 <= lng_f <= 180.0:
                     config.set("modules.bird_id.inaturalist.default_lng", lng_f)
+                    if def_loc:
+                        def_loc.lng = lng_f
+                        GeoService.update_location(def_loc)
                     console.print("[green]Salvo![/green]")
                 else:
                     console.print("[red]Longitude deve estar entre -180.0 e 180.0![/red]")
@@ -1142,9 +1155,251 @@ def _menu_bird_id(console: Console):
             except ValueError:
                 console.print("[red]Valor deve ser um número inteiro![/red]")
             time.sleep(1)
+        elif choice == "22":
+            _menu_geolocation(console)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
+
+
+def _add_location_flow(console: Console):
+    """Fluxo interativo para cadastrar um novo local predefinido."""
+    console.print("\n[bold cyan]Cadastrar Nova Geolocalização[/bold cyan]")
+    console.print("[dim]Dica: Cole as coordenadas diretamente do Google Maps (ex: -20.456887, -45.438307)[/dim]")
+    coords_input = Prompt.ask("Coordenadas (Latitude, Longitude)")
+    try:
+        lat, lng = parse_coords(coords_input)
+    except ValueError as e:
+        console.print(f"[red]Erro nas coordenadas: {e}[/red]")
+        time.sleep(2)
+        return
+
+    label = Prompt.ask("Rótulo amigável (ex: Bairro Belvedere - Belo Horizonte - MG)").strip()
+    if not label:
+        console.print("[red]O rótulo não pode ser vazio.[/red]")
+        time.sleep(2)
+        return
+
+    city = Prompt.ask("Cidade (ex: Belo Horizonte)", default="").strip()
+    state = Prompt.ask("Estado por extenso (ex: Minas Gerais)", default="Minas Gerais").strip()
+    country = Prompt.ask("País", default="Brasil").strip()
+    accuracy_m_str = Prompt.ask("Raio de precisão geográfica em metros", default="25000").strip()
+    try:
+        accuracy_m = float(accuracy_m_str)
+    except ValueError:
+        accuracy_m = 25000.0
+
+    slug = re.sub(r'[^a-zA-Z0-9]+', '-', label.lower()).strip('-')
+    if not slug:
+        slug = f"loc-{abs(lat):.2f}-{abs(lng):.2f}".replace('.', '-')
+    loc_id = Prompt.ask("Identificador único (slug)", default=slug).strip()
+
+    set_as_default = Confirm.ask("Definir este local como o padrão global do IRIS?", default=False)
+
+    loc = GeoLocation(
+        id=loc_id,
+        label=label,
+        lat=lat,
+        lng=lng,
+        accuracy_m=accuracy_m,
+        city=city,
+        state=state,
+        country=country
+    )
+    GeoService.add_location(loc, set_as_default=set_as_default)
+    console.print(f"[bold green]✔ Local '{label}' cadastrado com sucesso![/bold green]")
+    time.sleep(1.5)
+
+
+def _edit_location_flow(console: Console, loc: GeoLocation):
+    """Fluxo interativo para editar ou excluir um local predefinido."""
+    while True:
+        console.clear()
+        tok = format_gps_token(loc.lat, loc.lng)
+        gurl = maps_url(loc.lat, loc.lng)
+        info = (
+            f"[bold cyan]Editar Localização:[/bold cyan] [bold white]{loc.label}[/bold white] [dim]({loc.id})[/dim]\n\n"
+            f"  [dim]• Coordenadas:[/dim] {loc.lat:.6f}, {loc.lng:.6f} [dim](Token: {tok})[/dim]\n"
+            f"  [dim]• Cidade:[/dim]      {loc.city}\n"
+            f"  [dim]• Estado:[/dim]      {loc.state}\n"
+            f"  [dim]• País:[/dim]        {loc.country}\n"
+            f"  [dim]• Precisão:[/dim]    Raio de {int(loc.accuracy_m):,}m\n"
+            f"  [dim]• Maps:[/dim]        {gurl}"
+        )
+        console.print(Panel(info, expand=False, border_style="cyan"))
+
+        console.print("  [cyan]1.[/cyan] Alterar Coordenadas (Latitude, Longitude)")
+        console.print("  [cyan]2.[/cyan] Alterar Rótulo")
+        console.print("  [cyan]3.[/cyan] Alterar Cidade")
+        console.print("  [cyan]4.[/cyan] Alterar Estado")
+        console.print("  [cyan]5.[/cyan] Alterar País")
+        console.print("  [cyan]6.[/cyan] Alterar Raio de Precisão")
+        console.print("  [cyan]P.[/cyan] Definir como Padrão Global")
+        console.print("  [cyan]X.[/cyan] [red]Excluir este local[/red]")
+        console.print("  [cyan]0.[/cyan] Voltar")
+
+        sub_choice = Prompt.ask("\nEscolha um campo para alterar", default="0").strip().upper()
+        if sub_choice == "0":
+            break
+        elif sub_choice == "1":
+            new_c = Prompt.ask("Novas coordenadas", default=f"{loc.lat:.6f}, {loc.lng:.6f}")
+            try:
+                lat, lng = parse_coords(new_c)
+                loc.lat = lat
+                loc.lng = lng
+                GeoService.update_location(loc)
+                console.print("[green]Coordenadas atualizadas![/green]")
+            except ValueError as e:
+                console.print(f"[red]Erro: {e}[/red]")
+            time.sleep(1.2)
+        elif sub_choice == "2":
+            new_l = Prompt.ask("Novo rótulo", default=loc.label).strip()
+            if new_l:
+                loc.label = new_l
+                GeoService.update_location(loc)
+                console.print("[green]Rótulo atualizado![/green]")
+            time.sleep(1.2)
+        elif sub_choice == "3":
+            loc.city = Prompt.ask("Nova cidade", default=loc.city).strip()
+            GeoService.update_location(loc)
+            console.print("[green]Cidade atualizada![/green]")
+            time.sleep(1.2)
+        elif sub_choice == "4":
+            loc.state = Prompt.ask("Novo estado por extenso", default=loc.state).strip()
+            GeoService.update_location(loc)
+            console.print("[green]Estado atualizado![/green]")
+            time.sleep(1.2)
+        elif sub_choice == "5":
+            loc.country = Prompt.ask("Novo país", default=loc.country).strip()
+            GeoService.update_location(loc)
+            console.print("[green]País atualizado![/green]")
+            time.sleep(1.2)
+        elif sub_choice == "6":
+            acc_str = Prompt.ask("Novo raio de precisão (metros)", default=str(int(loc.accuracy_m)))
+            try:
+                loc.accuracy_m = float(acc_str)
+                GeoService.update_location(loc)
+                console.print("[green]Precisão atualizada![/green]")
+            except ValueError:
+                console.print("[red]Valor numérico inválido![/red]")
+            time.sleep(1.2)
+        elif sub_choice == "P":
+            GeoService.set_default_location_id(loc.id)
+            console.print(f"[bold green]✔ Local '{loc.label}' definido como padrão global![/bold green]")
+            time.sleep(1.5)
+        elif sub_choice == "X":
+            locs = GeoService.get_locations()
+            if len(locs) <= 1:
+                console.print("[red]Não é possível excluir o único local cadastrado no sistema.[/red]")
+                time.sleep(2)
+                continue
+            confirm = Confirm.ask(f"[bold red]Tem certeza que deseja excluir o local '{loc.label}' ({loc.id})?[/bold red]", default=False)
+            if confirm:
+                GeoService.delete_location(loc.id)
+                console.print("[green]Local excluído com sucesso![/green]")
+                time.sleep(1.5)
+                break
+
+
+def _set_default_location_flow(console: Console, locations: List[GeoLocation]):
+    """Fluxo para definir rapidamente o local padrão global."""
+    console.print("\n[bold cyan]Selecione o novo local padrão global:[/bold cyan]")
+    for i, loc in enumerate(locations, 1):
+        console.print(f"  [{i}] {loc.label} ({loc.lat:.4f}, {loc.lng:.4f})")
+    choice = Prompt.ask("\nNúmero do local", default="1")
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(locations):
+            GeoService.set_default_location_id(locations[idx].id)
+            console.print(f"[bold green]✔ Local padrão atualizado para: {locations[idx].label}[/bold green]")
+        else:
+            console.print("[red]Opção inválida![/red]")
+    except ValueError:
+        console.print("[red]Opção inválida![/red]")
+    time.sleep(1.5)
+
+
+def _menu_geolocation(console: Console):
+    """Sub-menu: Cadastro e Gerenciamento de Geolocalizações Predefinidas."""
+    while True:
+        console.clear()
+        console.print(Panel(
+            "[bold yellow]Configurações: Geolocalizações & Metadados GPS[/bold yellow]\n"
+            "[dim]Pontos predefinidos, marcação em fotos e tokens de coordenadas em nomes[/dim]",
+            expand=False,
+            border_style="yellow"
+        ))
+
+        locations = GeoService.get_locations()
+        default_id = GeoService.get_default_location_id()
+        tag_media = config.get("geo.tag_media", True)
+        filename_token = config.get("geo.filename_token", True)
+
+        table = Table(title="Locais Predefinidos Cadastrados")
+        table.add_column("Opção", style="cyan", justify="center")
+        table.add_column("Rótulo", style="bold white")
+        table.add_column("Coordenadas", style="green")
+        table.add_column("Raio", style="magenta")
+        table.add_column("Cidade / UF", style="white")
+        table.add_column("Status", style="bold yellow")
+
+        for i, loc in enumerate(locations, 1):
+            is_def = "[bold green]★ PADRÃO[/bold green]" if loc.id == default_id else ""
+            c_str = f"{loc.lat:.6f}, {loc.lng:.6f}"
+            tok = format_gps_token(loc.lat, loc.lng)
+            r_str = f"{int(loc.accuracy_m):,}m"
+            city_uf = f"{loc.city} - {loc.state}" if loc.city or loc.state else "-"
+            table.add_row(str(i), loc.label, f"{c_str} [dim]({tok})[/dim]", r_str, city_uf, is_def)
+
+        console.print(table)
+
+        conf_table = Table(title="Opções Gerais de Geotag & Metadados")
+        conf_table.add_column("Atalho", style="cyan", justify="center")
+        conf_table.add_column("Parâmetro", style="bold white")
+        conf_table.add_column("Valor Atual", style="green")
+        conf_table.add_column("Descrição", style="dim")
+
+        tag_display = "[green]Sim[/green]" if tag_media else "[red]Não[/red]"
+        token_display = "[green]Sim[/green]" if filename_token else "[red]Não[/red]"
+
+        conf_table.add_row("T", "Gravar tags GPS em fotos sem coordenadas", tag_display, "Injeta GPS em JPG/PNG/WebP/TIFF no pipeline")
+        conf_table.add_row("F", "Inserir token GPS no nome dos arquivos", token_display, "Adiciona _{gps} (ex: S20-4569_W45-4383) no nome")
+        console.print(conf_table)
+
+        console.print("\n[bold]Ações disponíveis:[/bold]")
+        console.print(f"  [cyan][1-{len(locations)}][/cyan] Ver / Editar detalhes do local")
+        console.print("  [cyan]+ ou A[/cyan]  :heavy_plus_sign: Cadastrar novo local")
+        console.print("  [cyan]D[/cyan]       :star: Definir local padrão global")
+        console.print("  [cyan]T[/cyan]       :camera: Alternar gravação de tags GPS em fotos")
+        console.print("  [cyan]F[/cyan]       :label: Alternar token GPS no nome dos arquivos")
+        console.print("  [cyan]0[/cyan]       :arrow_left: Voltar")
+
+        choice = Prompt.ask("\nEscolha uma opção", default="0").strip().upper()
+        if choice == "0":
+            break
+        elif choice in ["+", "A"]:
+            _add_location_flow(console)
+        elif choice == "D":
+            _set_default_location_flow(console, locations)
+        elif choice == "T":
+            config.set("geo.tag_media", not tag_media)
+            console.print("[green]Configuração salva![/green]")
+            time.sleep(1)
+        elif choice == "F":
+            config.set("geo.filename_token", not filename_token)
+            console.print("[green]Configuração salva![/green]")
+            time.sleep(1)
+        else:
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(locations):
+                    _edit_location_flow(console, locations[idx])
+                else:
+                    console.print("[red]Opção inválida![/red]")
+                    time.sleep(1)
+            except ValueError:
+                console.print("[red]Opção inválida![/red]")
+                time.sleep(1)
 
 
 def show_config_menu(console: Console = None):
@@ -1170,6 +1425,7 @@ def show_config_menu(console: Console = None):
         console.print("  [cyan]6.[/cyan] 🌕 Astrofotografia Lunar [dim](Empilhamento PSS, Percentuais, Wavelets, Limbo)[/dim]")
         console.print("  [cyan]7.[/cyan] 🌌 Timelapse Longa Exposição [dim](Mín Fotos, Shutter Mín, Gaps Buffer, Render)[/dim]")
         console.print("  [cyan]8.[/cyan] 🦜 Identificação de Aves [dim](YOLOv8 + iNaturalist, Geo-Prior, Vídeo)[/dim]")
+        console.print("  [cyan]9.[/cyan] 📍 Geolocalizações & Metadados GPS [dim](Pontos pré-definidos, GPS em Tags e Nomes)[/dim]")
         console.print("  [cyan]0.[/cyan] ↩ Voltar")
         
         choice = Prompt.ask("\nSelecione uma opção", default="0")
@@ -1191,6 +1447,8 @@ def show_config_menu(console: Console = None):
             _menu_timelapse_long_exposure(console)
         elif choice == "8":
             _menu_bird_id(console)
+        elif choice == "9":
+            _menu_geolocation(console)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)

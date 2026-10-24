@@ -24,12 +24,75 @@ from src.core.project import list_open_projects, get_project, create_project, ge
 from src.core.lock import ProjectLock, ProjectLockedError
 from src.core.pipeline import PipelineRunner
 from src.core.metadata import MEDIA_EXTENSIONS
+from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url
 
 console = Console()
 
 from src.core.config_menu import show_config_menu
 
 import shutil
+import re
+
+
+def select_location_dialog(console: Console, default_id: str = None) -> GeoLocation:
+    """Apresenta um menu interativo para seleção ou cadastro de geolocalização para o projeto."""
+    locations = GeoService.get_locations()
+    if not locations:
+        GeoService.ensure_defaults()
+        locations = GeoService.get_locations()
+
+    if not default_id:
+        default_id = GeoService.get_default_location_id()
+
+    default_idx = 1
+    table = Table(title="Localizações Geográficas Predefinidas", border_style="cyan")
+    table.add_column("Opção", style="cyan", justify="center")
+    table.add_column("Rótulo", style="bold white")
+    table.add_column("Coordenadas", style="green")
+    table.add_column("Raio", style="magenta")
+    table.add_column("Cidade / UF", style="white")
+    table.add_column("Status", style="bold yellow")
+
+    for i, loc in enumerate(locations, 1):
+        if loc.id == default_id:
+            default_idx = i
+            def_str = "[bold green]★ SELECIONADO[/bold green]"
+        else:
+            def_str = ""
+        c_str = f"{loc.lat:.6f}, {loc.lng:.6f}"
+        tok = format_gps_token(loc.lat, loc.lng)
+        r_str = f"{int(loc.accuracy_m):,}m"
+        city_uf = f"{loc.city} - {loc.state}" if loc.city or loc.state else "-"
+        table.add_row(str(i), loc.label, f"{c_str} [dim]({tok})[/dim]", r_str, city_uf, def_str)
+
+    console.print(table)
+    console.print("  [cyan]+[/cyan] Cadastrar novo local rapidamente")
+
+    choice = Prompt.ask("\nSelecione a localização para o projeto", default=str(default_idx)).strip()
+    if choice == "+":
+        coords_input = Prompt.ask("Coordenadas (ex: -20.456887, -45.438307)")
+        try:
+            lat, lng = parse_coords(coords_input)
+            label = Prompt.ask("Rótulo amigável (ex: Bairro Belvedere - Belo Horizonte - MG)").strip()
+            city = Prompt.ask("Cidade", default="").strip()
+            state = Prompt.ask("Estado por extenso", default="Minas Gerais").strip()
+            slug = re.sub(r'[^a-zA-Z0-9]+', '-', label.lower()).strip('-') or f"loc-{int(abs(lat))}"
+            new_loc = GeoLocation(id=slug, label=label, lat=lat, lng=lng, city=city, state=state, country="Brasil")
+            GeoService.add_location(new_loc)
+            return new_loc
+        except Exception as e:
+            console.print(f"[red]Erro ao cadastrar: {e}[/red]")
+            time.sleep(1.5)
+            return GeoService.get_location(default_id) or locations[0]
+
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(locations):
+            return locations[idx]
+    except ValueError:
+        pass
+
+    return GeoService.get_location(default_id) or locations[0]
 
 def get_free_space_gb(folder: str) -> float:
     try:
@@ -83,6 +146,29 @@ def run_pipeline_for_project(active_project):
                 f"[dim]Status:[/dim] [yellow][{status}][/yellow]"
             )
             console.print(Panel(header_text, expand=False, border_style="cyan"))
+
+            # Localização Ativa do Projeto
+            loc = GeoService.get_location(active_project.geo_location_id) if active_project.geo_location_id else None
+            if not loc:
+                loc = GeoService.get_default_location()
+                if loc and not active_project.geo_location_id:
+                    active_project.geo_location_id = loc.id
+                    active_project.save()
+
+            if loc:
+                gps_token = format_gps_token(loc.lat, loc.lng)
+                gmaps = maps_url(loc.lat, loc.lng)
+                reg_parts = [p for p in [loc.city, loc.state, loc.country] if p]
+                reg_str = ", ".join(reg_parts) if reg_parts else "Brasil"
+                loc_text = (
+                    "[bold yellow]📍 \\[LOCALIZAÇÃO ATIVA DO PROJETO][/bold yellow]\n"
+                    f"  [dim]• Rótulo:[/dim]       [bold white]{loc.label}[/bold white]\n"
+                    f"  [dim]• Região:[/dim]       {reg_str}\n"
+                    f"  [dim]• Coordenadas:[/dim]  {loc.lat:.6f}, {loc.lng:.6f} [dim](Token: {gps_token})[/dim]\n"
+                    f"  [dim]• Precisão:[/dim]     Raio de {int(loc.accuracy_m):,}m [dim](Usado no iNaturalist)[/dim]\n"
+                    f"  [dim]• Google Maps:[/dim]  [link={gmaps}]{gmaps}[/link]"
+                )
+                console.print(Panel(loc_text, expand=False, border_style="yellow"))
             
             # Status do Ambiente
             dest_root = config.get("general.destination_root", "C:\\IRIS")
@@ -135,6 +221,7 @@ def run_pipeline_for_project(active_project):
                 console.print(f"  [cyan]{i}.[/cyan] :arrow_forward: Etapa {i}: {stage.name}")
                 
             console.print("-" * 60)
+            console.print("  [cyan]G.[/cyan] :round_pushpin: Alterar Localização do Projeto")
             console.print("  [cyan]L.[/cyan] :wastebasket: Alternar Limpeza Automática")
             console.print("  [cyan]P.[/cyan] :open_file_folder: Voltar / Selecionar Projeto")
             console.print("  [cyan]C.[/cyan] :gear: Configurações")
@@ -145,6 +232,13 @@ def run_pipeline_for_project(active_project):
             if choice == "0":
                 console.print("Até logo!")
                 sys.exit(0)
+            elif choice == "G":
+                new_loc = select_location_dialog(console, default_id=active_project.geo_location_id)
+                if new_loc:
+                    active_project.geo_location_id = new_loc.id
+                    active_project.save()
+                    console.print(f"\n[bold green]✔ Localização do projeto alterada para: {new_loc.label}[/bold green]")
+                    time.sleep(1.5)
             elif choice == "L":
                 active_project.auto_cleanup = not active_project.auto_cleanup
                 active_project.save()
@@ -156,6 +250,16 @@ def run_pipeline_for_project(active_project):
             elif choice == "C":
                 show_config_menu()
             elif choice == "R" or choice == "":
+                if loc:
+                    confirmed_loc = Confirm.ask(f"\n[bold yellow]📍 Confirmar localização '{loc.label}' para o processamento?[/bold yellow]", default=True)
+                    if not confirmed_loc:
+                        new_loc = select_location_dialog(console, default_id=active_project.geo_location_id)
+                        if new_loc:
+                            active_project.geo_location_id = new_loc.id
+                            active_project.save()
+                            loc = new_loc
+                            console.print(f"[green]Localização atualizada para: {loc.label}[/green]")
+
                 last_stage_id = stages[-1].stage_id if stages else None
                 if active_project.current_stage_id and active_project.current_stage_id == last_stage_id:
                     console.print(f"\n[yellow]ℹ Este projeto já concluiu todas as etapas (Última: {active_project.current_stage_id}).[/yellow]")
@@ -211,8 +315,10 @@ def start_new_project_flow():
         time.sleep(2)
         return
         
-    active_project = create_project(proj_name, source_path)
-    console.print(f"[green]Projeto '{proj_name}' criado com sucesso.[/green]")
+    console.print("\n[bold cyan]📍 Defina a localização geográfica do projeto:[/bold cyan]")
+    loc = select_location_dialog(console)
+    active_project = create_project(proj_name, source_path, geo_location_id=loc.id if loc else None)
+    console.print(f"[green]Projeto '{proj_name}' criado com sucesso (Localização: {loc.label if loc else 'Padrão'}).[/green]")
     
     run_pipeline_for_project(active_project)
 

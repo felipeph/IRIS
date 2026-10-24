@@ -70,9 +70,22 @@ def reconcile_project(project_name: str, apply_actions: bool = False):
     module_cfg = config.get("modules.bird_id", {})
     min_species_conf = float(module_cfg.get("min_species_confidence", 0.70))
     inat_cfg = module_cfg.get("inaturalist", {})
-    default_lat = inat_cfg.get("default_lat", -19.92)
-    default_lng = inat_cfg.get("default_lng", -43.94)
-    default_acc = inat_cfg.get("positional_accuracy_meters", 25000)
+    from src.core.geo import GeoService
+    project_loc = None
+    if hasattr(project, "geo_location_id") and project.geo_location_id:
+        project_loc = GeoService.get_location(project.geo_location_id)
+    if not project_loc:
+        project_loc = GeoService.get_default_location()
+
+    if project_loc:
+        default_lat = project_loc.lat
+        default_lng = project_loc.lng
+        default_acc = project_loc.accuracy_m
+    else:
+        default_lat = inat_cfg.get("default_lat", -19.92)
+        default_lng = inat_cfg.get("default_lng", -43.94)
+        default_acc = inat_cfg.get("positional_accuracy_meters", 25000)
+
     use_exif_gps = bool(inat_cfg.get("use_exif_gps", True))
     inat_creds = inat_cfg.get("credentials_file", "secrets/inaturalist.json")
     inat_url = inat_cfg.get("api_url", None)
