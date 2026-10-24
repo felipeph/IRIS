@@ -241,11 +241,18 @@ class YouTubeUploadStage(PipelineStage):
                 en_str = f" / {c_en}" if c_en and c_en.lower() != c_pt.lower() else ""
                 bird_line = f"[bold cyan]Ave Identificada:[/bold cyan] {c_pt} ({sci}){en_str}{conf_str}\n"
 
+            geo_info = metadata.get("geo_location")
+            geo_line = ""
+            if geo_info and geo_info.get("city"):
+                st_str = f", {geo_info['state']}" if geo_info.get("state") else ""
+                geo_line = f"[bold cyan]Localização:[/bold cyan]    {geo_info['city']}{st_str} ({geo_info.get('lat', 0.0):.4f}, {geo_info.get('lng', 0.0):.4f})\n"
+
             # Exibir Card de Metadados
             card_info = (
                 f"[bold cyan]Arquivo:[/bold cyan]     {video_path.name} ({file_mb:.1f} MB)\n"
                 f"[bold cyan]Tipo:[/bold cyan]        {'Timelapse 4K UHD' if job_type == 'timelapse' else 'Vídeo Editado 4K UHD'}\n"
                 f"{bird_line}"
+                f"{geo_line}"
                 f"[bold cyan]Título:[/bold cyan]      {metadata['title']}\n"
                 f"[bold cyan]Ficha Técnica:[/bold cyan]{tech_sheet}\n"
                 f"[bold cyan]Privacidade:[/bold cyan] {metadata['privacy_status'].upper()}\n"
@@ -276,6 +283,42 @@ class YouTubeUploadStage(PipelineStage):
                     "selfDeclaredMadeForKids": False
                 }
             }
+
+            # Detalhes de gravação (Data/Hora e Coordenadas GPS Nativas no YouTube)
+            rec_details = {}
+            recording_date = None
+            first_dt_raw = meta_data.get("first_dt_iso") or record.get("first_dt_iso")
+            if first_dt_raw:
+                try:
+                    dt_val = datetime.fromisoformat(str(first_dt_raw))
+                    recording_date = dt_val.strftime("%Y-%m-%dT%H:%M:%SZ")
+                except Exception:
+                    pass
+            if not recording_date and record.get("created_at"):
+                try:
+                    dt_val = datetime.fromisoformat(str(record["created_at"]))
+                    recording_date = dt_val.strftime("%Y-%m-%dT%H:%M:%SZ")
+                except Exception:
+                    pass
+
+            if recording_date:
+                rec_details["recordingDate"] = recording_date
+
+            geo_loc = metadata.get("geo_location")
+            if isinstance(geo_loc, dict) and geo_loc.get("lat") is not None and geo_loc.get("lng") is not None:
+                try:
+                    rec_details["location"] = {
+                        "latitude": float(geo_loc["lat"]),
+                        "longitude": float(geo_loc["lng"])
+                    }
+                    loc_parts = [p for p in [geo_loc.get("city"), geo_loc.get("state"), geo_loc.get("country")] if p]
+                    if loc_parts:
+                        rec_details["locationDescription"] = ", ".join(loc_parts)
+                except Exception:
+                    pass
+
+            if rec_details:
+                body["recordingDetails"] = rec_details
 
             chunk_size = 8 * 1024 * 1024  # 8MB
             media = None

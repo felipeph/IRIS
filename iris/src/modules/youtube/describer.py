@@ -1,5 +1,3 @@
-"""Módulo de compilação de metadados e descrição rica para vídeos do YouTube no IRIS."""
-
 import re
 import math
 import json
@@ -7,6 +5,8 @@ import unicodedata
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
+
+from src.core.geo import GeoService, GeoLocation
 
 
 
@@ -227,10 +227,103 @@ def build_youtube_tags(record: Dict[str, Any], extra_tags: Optional[List[str]] =
     return tags[:25]
 
 
+def resolve_project_geolocation(record: Dict[str, Any], project: Optional[Any] = None) -> Optional[GeoLocation]:
+    """Recupera o objeto GeoLocation associado ao vídeo ou projeto."""
+    meta = record.get("metadata_json") or {}
+    if isinstance(meta, dict) and meta.get("geo_location"):
+        g_data = meta["geo_location"]
+        if isinstance(g_data, dict) and (g_data.get("city") or g_data.get("lat")):
+            return GeoLocation.from_dict(g_data)
+
+    if project:
+        if hasattr(project, "geo_location_id") and project.geo_location_id:
+            loc = GeoService.get_location(project.geo_location_id)
+            if loc:
+                return loc
+        return GeoService.get_default_location()
+
+    return GeoService.get_default_location()
+
+
+def format_location_block(loc: GeoLocation) -> str:
+    """Gera bloco de texto dedicado com informações de localização e habitat."""
+    if not loc:
+        return ""
+
+    parts = []
+    if loc.city:
+        parts.append(loc.city)
+    if loc.state:
+        parts.append(loc.state)
+    if loc.country:
+        parts.append(loc.country)
+
+    loc_name = ", ".join(parts) if parts else (loc.label or "Localização Registrada")
+
+    lines = [
+        "📍 LOCALIZAÇÃO E HABITAT:",
+        f"• Localidade: {loc_name}"
+    ]
+
+    ref = loc.poi or loc.suburb
+    if ref:
+        lines.append(f"• Ponto de Referência / Bairro: {ref}")
+
+    if loc.lat != 0.0 or loc.lng != 0.0:
+        lines.append(f"• Coordenadas Geográficas: {loc.lat:.6f}, {loc.lng:.6f}")
+        lines.append(f"• Visualização no Google Maps: https://www.google.com/maps?q={loc.lat:.6f},{loc.lng:.6f}")
+
+    return "\n".join(lines)
+
+
+BR_STATE_TO_UF = {
+    "acre": "AC", "alagoas": "AL", "amapa": "AP", "amazonas": "AM",
+    "bahia": "BA", "ceara": "CE", "distrito federal": "DF", "espirito santo": "ES",
+    "goias": "GO", "maranhao": "MA", "mato grosso": "MT", "mato grosso do sul": "MS",
+    "minas gerais": "MG", "para": "PA", "paraiba": "PB", "parana": "PR",
+    "pernambuco": "PE", "piaui": "PI", "rio de janeiro": "RJ",
+    "rio grande do norte": "RN", "rio grande do sul": "RS", "rondonia": "RO",
+    "roraima": "RR", "santa catarina": "SC", "sao paulo": "SP", "sergipe": "SE", "tocantins": "TO"
+}
+
+
+def build_geo_hashtags(loc: GeoLocation) -> List[str]:
+    """Gera lista de hashtags geográficas limpas (#PassosMG, #Passos, #MinasGerais, #Brasil)."""
+    if not loc:
+        return []
+    tags = []
+    if loc.city and loc.state:
+        # Tenta UF abreviada se for estado brasileiro por extenso
+        norm_st = unicodedata.normalize('NFKD', loc.state).encode('ASCII', 'ignore').decode('utf-8').lower().strip()
+        if norm_st in BR_STATE_TO_UF:
+            uf = BR_STATE_TO_UF[norm_st]
+            ht_uf = f"#{sanitize_hashtag(loc.city)}{uf}"
+            if ht_uf not in tags:
+                tags.append(ht_uf)
+        tags.append(f"#{sanitize_hashtag(loc.city)}{sanitize_hashtag(loc.state)}")
+    if loc.city:
+        ht_city = f"#{sanitize_hashtag(loc.city)}"
+        if ht_city not in tags:
+            tags.append(ht_city)
+    if loc.state:
+        ht_state = f"#{sanitize_hashtag(loc.state)}"
+        if ht_state not in tags:
+            tags.append(ht_state)
+    if loc.country and loc.country.lower() != "brasil":
+        ht_country = f"#{sanitize_hashtag(loc.country)}"
+        if ht_country not in tags:
+            tags.append(ht_country)
+    elif loc.country:
+        if "#Brasil" not in tags:
+            tags.append("#Brasil")
+    return [t for t in tags if t]
+
+
 def build_rich_youtube_description(
     record: Dict[str, Any],
     project_name: str = "",
-    bird_info: Optional[Dict[str, Any]] = None
+    bird_info: Optional[Dict[str, Any]] = None,
+    loc: Optional[Any] = None
 ) -> str:
     """
     Compila uma descrição técnica completa e rica para o YouTube com:
@@ -418,9 +511,22 @@ def build_rich_youtube_description(
         bird_section = ""
         bird_hts_str = ""
 
+    if not loc and meta.get("geo_location") and isinstance(meta["geo_location"], dict):
+        loc = GeoLocation.from_dict(meta["geo_location"])
+
+    loc_section = ""
+    geo_hts_str = ""
+    if loc:
+        loc_block = format_location_block(loc)
+        if loc_block:
+            loc_section = f"\n\n{loc_block}\n"
+        geo_hts = build_geo_hashtags(loc)
+        if geo_hts:
+            geo_hts_str = " ".join(geo_hts) + " "
+
     # Montagem da Descrição
     description = f"""{intro_hook}Vídeo Timelapse renderizado em alta definição 4K UHD ({res}) a {fps} FPS.
-Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IRIS (Imaging Resources and Integration System).{bird_section}
+Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IRIS (Imaging Resources and Integration System).{bird_section}{loc_section}
 ⏱️ TEMPO E CAPTURA:
 {period_line}
 • Duração Real da Cena: {real_duration_human} ({int(round(real_sec))}s)
@@ -454,7 +560,7 @@ Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IR
 • Arquivo Gerado: {out_video_name}
 • Sequência: {seq_display}
 
-{bird_hts_str}#timelapse #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
+{bird_hts_str}{geo_hts_str}#timelapse #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
 """.replace("\r\n", "\n")
 
     return description[:5000]
@@ -470,7 +576,7 @@ def _extract_temporal_context(video_path: Path, record: Dict[str, Any]) -> Tuple
     date_part = ""
     time_str = ""
 
-    # 1. Tentar extrair do nome do arquivo (ex: 2026-10-09_16h22m-18h35m_... ou 2026-10-09_16h22m_...)
+    # 1. Tentar extrair do nome do arquivo (ex: 2026-10-09_16h22m-18h35m_... ou 2026-10-23_14-30_...)
     if len(parts) > 0 and re.match(r'^\d{4}-\d{2}-\d{2}$', parts[0]):
         date_part = parts[0]
     
@@ -480,16 +586,20 @@ def _extract_temporal_context(video_path: Path, record: Dict[str, Any]) -> Tuple
     dur_sec = float(record.get("duration_seconds") or meta.get("final_duration_seconds") or meta.get("total_orig_duration_seconds") or 0.0)
 
     if "-" in time_part and not time_part.startswith("to-"):
-        # Intervalo gravado no nome (ex: 16h22m-18h35m)
-        t1, t2 = time_part.split("-", 1)
-        t1_clean = t1.replace('h', ':').replace('m', '')
-        t2_clean = t2.replace('h', ':').replace('m', '')
-        if t1_clean and t2_clean and t1_clean != t2_clean:
-            time_str = f"({t1_clean} - {t2_clean})"
-        elif t1_clean:
-            time_str = f"({t1_clean})"
+        # Novo formato HH-MM (ex: 14-30) ou intervalo gravado no nome (ex: 16h22m-18h35m)
+        if re.match(r'^\d{2}-\d{2}$', time_part):
+            t_clean = time_part.replace('-', ':')
+            time_str = f"({t_clean})"
+        else:
+            t1, t2 = time_part.split("-", 1)
+            t1_clean = t1.replace('h', ':').replace('m', '')
+            t2_clean = t2.replace('h', ':').replace('m', '')
+            if t1_clean and t2_clean and t1_clean != t2_clean:
+                time_str = f"({t1_clean} - {t2_clean})"
+            elif t1_clean:
+                time_str = f"({t1_clean})"
     elif time_part and ("h" in time_part or "m" in time_part):
-        # Tempo único no nome (ex: 14h30m)
+        # Tempo único no nome legado (ex: 14h30m)
         t_clean = time_part.replace('h', ':').replace('m', '')
         if dur_sec >= 60.0 and date_part and re.match(r'^\d{1,2}:\d{2}$', t_clean):
             try:
@@ -552,21 +662,40 @@ def _extract_temporal_context(video_path: Path, record: Dict[str, Any]) -> Tuple
     return date_part, time_str
 
 
-def build_edited_video_youtube_title(video_path: Path, record: Dict[str, Any]) -> str:
+def build_edited_video_youtube_title(
+    video_path: Path,
+    record: Dict[str, Any],
+    project: Optional[Any] = None,
+    loc: Optional[Any] = None
+) -> str:
     """
     Gera título padronizado para vídeos convencionais sem aves identificadas:
+    {Data} ({Hora}) | {Cidade}, {UF}
     Exemplos:
-      - Com intervalo de horas: '2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD'
-      - Clipe único curto: '2026-10-09 (16:22) - Vídeo 4K UHD'
+      - Com intervalo de horas: '2026-10-09 (16:22 - 18:35) | Passos, MG'
+      - Clipe único curto: '2026-10-09 (16:22) | Passos, MG'
+    NUNCA inclui 'Vídeo 4K UHD'.
     """
     date_part, time_str = _extract_temporal_context(video_path, record)
 
     title_elements = [date_part]
     if time_str:
         title_elements.append(time_str)
-    title_elements.append("- Vídeo 4K UHD")
 
-    title = " ".join(title_elements)
+    temporal_full = " ".join(title_elements).strip()
+
+    if loc is None:
+        loc = resolve_project_geolocation(record, project)
+
+    loc_str = ""
+    if loc and getattr(loc, "city", None):
+        loc_str = f"{loc.city}, {loc.state}" if getattr(loc, "state", None) else loc.city
+
+    if loc_str:
+        title = f"{temporal_full} | {loc_str}"
+    else:
+        title = temporal_full
+
     if len(title) > 100:
         title = title[:97] + "..."
     return title
@@ -686,12 +815,15 @@ def resolve_bird_identification(record: Dict[str, Any], project: Optional[Any] =
 def build_bird_youtube_title(
     video_path: Path,
     record: Dict[str, Any],
-    bird_info: Dict[str, Any]
+    bird_info: Dict[str, Any],
+    project: Optional[Any] = None,
+    loc: Optional[Any] = None
 ) -> str:
     """
     Gera título específico para vídeos de aves no YouTube:
-    {Nome_PT} ({Nome_Cientifico}) - {Nome_EN} | {Data} ({Hora})
+    {Data} ({Hora}) | {Nome_PT} ({Nome_Cientifico}) - {Nome_EN} | {Cidade}, {UF}
     - NUNCA inclui 'Vídeo 4K UHD' no título.
+    - Data e hora primeiro, seguidos da espécie e da cidade/UF.
     - Adapta progressivamente para nunca ultrapassar o limite estrito de 100 caracteres.
     """
     c_pt = bird_info.get("species_common", "").strip()
@@ -711,29 +843,44 @@ def build_bird_youtube_title(
         bird_header = bird_taxon
 
     date_part, time_str = _extract_temporal_context(video_path, record)
+    temporal_full = f"{date_part} {time_str}".strip() if time_str else date_part
 
-    # 1. Formato completo: Nome | Data (Hora)
-    temporal_full = f"{date_part} {time_str}".strip()
-    candidate = f"{bird_header} | {temporal_full}" if temporal_full else bird_header
+    if loc is None:
+        loc = resolve_project_geolocation(record, project)
+
+    loc_str = ""
+    if loc and getattr(loc, "city", None):
+        loc_str = f"{loc.city}, {loc.state}" if getattr(loc, "state", None) else loc.city
+
+    # 1. Formato completo: Data (Hora) | Nome PT (Científico) - EN | Cidade, UF
+    elements = [temporal_full, bird_header]
+    if loc_str:
+        elements.append(loc_str)
+    candidate = " | ".join(elements)
     if len(candidate) <= 100:
         return candidate
 
-    # 2. Formato condensado: Nome | Data
-    if date_part:
-        candidate_date_only = f"{bird_header} | {date_part}"
-        if len(candidate_date_only) <= 100:
-            return candidate_date_only
+    # 2. Formato condensado (sem nome em inglês): Data (Hora) | Nome PT (Científico) | Cidade, UF
+    if bird_header != bird_taxon:
+        elements_no_en = [temporal_full, bird_taxon]
+        if loc_str:
+            elements_no_en.append(loc_str)
+        cand_no_en = " | ".join(elements_no_en)
+        if len(cand_no_en) <= 100:
+            return cand_no_en
 
-    # 3. Apenas cabeçalho completo da ave (PT + Científico + EN)
-    if len(bird_header) <= 100:
-        return bird_header
+    # 3. Formato sem Cidade se exceder: Data (Hora) | Nome PT (Científico) - EN
+    cand_no_loc = f"{temporal_full} | {bird_header}"
+    if len(cand_no_loc) <= 100:
+        return cand_no_loc
 
-    # 4. Apenas Nome PT (Científico)
-    if len(bird_taxon) <= 100:
-        return bird_taxon
+    # 4. Apenas Data (Hora) | Nome PT (Científico)
+    cand_minimal = f"{temporal_full} | {bird_taxon}"
+    if len(cand_minimal) <= 100:
+        return cand_minimal
 
     # 5. Truncamento seguro
-    return bird_header[:97] + "..."
+    return candidate[:97] + "..."
 
 
 def format_bird_taxonomy_block(bird_info: Dict[str, Any]) -> str:
@@ -790,14 +937,19 @@ def build_bird_hashtags(bird_info: Dict[str, Any]) -> List[str]:
     return hashtags
 
 
-def resolve_bird_target_playlists(bird_info: Dict[str, Any], yt_config: Dict[str, Any]) -> List[str]:
+def resolve_bird_target_playlists(
+    bird_info: Dict[str, Any],
+    yt_config: Dict[str, Any],
+    loc: Optional[Any] = None
+) -> List[str]:
     """
     Determina todas as playlists do YouTube onde o vídeo da ave deve ser publicado.
     Suporta multi-playlists simultâneas:
     1. Playlist geral de aves (ex: 'Birds 4K')
-    2. Playlist do Nome Científico (ex: 'Pitangus sulphuratus')
-    3. Playlist do Nome Popular em PT (ex: 'Bem-te-vi')
-    4. Playlist do Nome Popular em EN (ex: 'Great Kiskadee')
+    2. Playlist de Pássaros da Cidade (ex: 'Pássaros de Passos - MG') se loc disponível
+    3. Playlist do Nome Científico (ex: 'Pitangus sulphuratus')
+    4. Playlist do Nome Popular em PT (ex: 'Bem-te-vi')
+    5. Playlist do Nome Popular em EN (ex: 'Great Kiskadee')
     """
     bp_cfg = yt_config.get("bird_playlists") or {}
     general_pl = yt_config.get("bird_playlist", "Birds 4K")
@@ -805,6 +957,7 @@ def resolve_bird_target_playlists(bird_info: Dict[str, Any], yt_config: Dict[str
     include_sci = bp_cfg.get("scientific_name", True)
     include_pt = bp_cfg.get("common_name_pt", True)
     include_en = bp_cfg.get("common_name_en", True)
+    include_geo = bp_cfg.get("by_city", True)
 
     targets: List[str] = []
     seen = set()
@@ -817,6 +970,14 @@ def resolve_bird_target_playlists(bird_info: Dict[str, Any], yt_config: Dict[str
 
     if include_general and general_pl:
         _add(general_pl)
+
+    # Playlist de Pássaros da Cidade quando tiver pássaros
+    if include_geo and loc and getattr(loc, "city", None):
+        city_name = loc.city.strip()
+        state_name = getattr(loc, "state", "").strip()
+        if city_name:
+            geo_pl = f"Pássaros de {city_name} - {state_name}" if state_name else f"Pássaros de {city_name}"
+            _add(geo_pl)
 
     if include_sci:
         sci = bird_info.get("species_scientific", "").strip()
@@ -847,19 +1008,31 @@ def build_edited_video_youtube_metadata(
 ) -> Dict[str, Any]:
     """
     Compila os metadados oficiais e a ficha técnica completa para vídeos editados/upscalados no YouTube.
-    Suporta tratamento ornitológico diferenciado caso o vídeo contenha ave identificada.
+    Suporta tratamento ornitológico e geográfico diferenciado.
     """
     meta = record.get("metadata_json") or {}
+
+    # Localização do projeto
+    loc = resolve_project_geolocation(record, project=project)
 
     # Verifica se há ave identificada para este vídeo
     bird_info = resolve_bird_identification(record, project=project)
 
     if bird_info:
-        title = build_bird_youtube_title(video_path, record, bird_info)
-        target_playlists = resolve_bird_target_playlists(bird_info, yt_config)
+        title = build_bird_youtube_title(video_path, record, bird_info, project=project, loc=loc)
+        target_playlists = resolve_bird_target_playlists(bird_info, yt_config, loc=loc)
     else:
-        title = build_edited_video_youtube_title(video_path, record)
-        target_playlists = [yt_config.get("video_playlist", "Natureza 4K UHD")]
+        title = build_edited_video_youtube_title(video_path, record, project=project, loc=loc)
+        target_playlists = []
+        if loc and getattr(loc, "city", None):
+            city_name = loc.city.strip()
+            state_name = getattr(loc, "state", "").strip()
+            if city_name:
+                geo_pl = f"{city_name} - {state_name}" if state_name else city_name
+                target_playlists.append(geo_pl)
+        default_pl = yt_config.get("video_playlist", "Natureza 4K UHD")
+        if default_pl and default_pl not in target_playlists:
+            target_playlists.append(default_pl)
 
     # Data de captura para a descrição técnica
     first_dt_str = meta.get("first_dt_formatted")
@@ -981,8 +1154,18 @@ def build_edited_video_youtube_metadata(
         bird_section = ""
         bird_hts_str = ""
 
+    loc_section = ""
+    geo_hts_str = ""
+    if loc:
+        loc_block = format_location_block(loc)
+        if loc_block:
+            loc_section = f"\n\n{loc_block}\n"
+        geo_hts = build_geo_hashtags(loc)
+        if geo_hts:
+            geo_hts_str = " ".join(geo_hts) + " "
+
     description = f"""{intro_hook}Vídeo capturado e masterizado em altíssima definição 4K UHD ({target_res}) a {target_fps} FPS.
-Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Imaging Resources and Integration System).{bird_section}
+Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Imaging Resources and Integration System).{bird_section}{loc_section}
 ⏱️ TEMPO, CAPTURA E VELOCIDADE:
 • Data e Hora de Captura: {dt_prefix}
 • Duração Original da Gravação: {format_duration_human(orig_dur)} ({orig_dur:.1f}s)
@@ -1010,13 +1193,18 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
 {trace_source}
 • Pipeline: IRIS v2.0 - Video Mastering Stage
 
-{bird_hts_str}#natureza #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
+{bird_hts_str}{geo_hts_str}#natureza #4k #uhd #60fps #{cam_make.lower() or 'fotografia'} #iris #automacao
 """.replace("\r\n", "\n")
 
     tags = [
         "4K UHD", "Natureza", "Vídeo 4K", "60 FPS", profile_tag,
         camera_name, cam_make or "Câmera", "IRIS", "Nature"
     ]
+    if loc:
+        for l_cand in [loc.city, loc.state, loc.country, loc.poi, loc.suburb]:
+            if l_cand and l_cand.strip() and l_cand.strip() not in tags:
+                tags.append(l_cand.strip())
+
     if bird_info:
         for b_cand in [
             bird_info.get("species_common"),
@@ -1037,7 +1225,8 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
         "privacy_status": record.get("youtube_privacy") or yt_config.get("privacy_status", "unlisted"),
         "playlist": target_playlists[0] if target_playlists else yt_config.get("video_playlist", "Natureza 4K UHD"),
         "playlists": target_playlists,
-        "bird_info": bird_info
+        "bird_info": bird_info,
+        "geo_location": loc.to_dict() if loc else None
     }
 
 

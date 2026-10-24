@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+from collections import Counter
 
 from rich.console import Console
 from rich.table import Table
@@ -11,6 +12,7 @@ from rich.prompt import Confirm, Prompt
 from src.core.pipeline import PipelineStage
 from src.core.project import Project, ProjectItem
 from src.core.config import config
+from src.core.geo import GeoService
 from src.modules.video_edit.namer import generate_edited_video_name, resolve_edited_output_path
 from src.modules.video_edit.session import group_videos_into_sessions, parse_item_datetime, parse_duration_seconds
 from src.modules.video_edit.renderer import render_edited_video, get_video_stream_info
@@ -62,6 +64,15 @@ class VideoEditStage(PipelineStage):
             ve_config["render_profile"] = str(kwargs["render_profile"]).lower().strip()
         else:
             ve_config["render_profile"] = str(ve_config.get("render_profile", "fast")).lower().strip()
+
+        # 0. Localização do Projeto
+        project_loc = None
+        if hasattr(project, "geo_location_id") and project.geo_location_id:
+            project_loc = GeoService.get_location(project.geo_location_id)
+        if not project_loc:
+            project_loc = GeoService.get_default_location()
+        lat_val = project_loc.lat if project_loc else None
+        lng_val = project_loc.lng if project_loc else None
 
         # 1. Buscar vídeos do projeto
         video_items = project.get_items(category="video")
@@ -118,11 +129,45 @@ class VideoEditStage(PipelineStage):
             dur_min, dur_sec = divmod(int(round(tot_dur)), 60)
             dur_str = f"{dur_min:02d}:{dur_sec:02d}"
 
+            # Identificação de aves nos clipes do lote (seleciona a espécie mais frequente)
+            bird_records = []
+            if hasattr(project, "get_bird_identification"):
+                for it in s_items:
+                    cand_paths = [it.organized_path, it.staging_path, it.original_path]
+                    for cp_str in cand_paths:
+                        if not cp_str:
+                            continue
+                        p_cand = Path(cp_str)
+                        b_rec = project.get_bird_identification(str(p_cand.resolve())) or project.get_bird_identification(str(p_cand))
+                        if b_rec and (b_rec.get("species_common") or b_rec.get("species_scientific")):
+                            bird_records.append(b_rec)
+                            break
+
+            bird_ident = None
+            species_pt = None
+            if bird_records:
+                species_counts = Counter(b.get("species_common") or b.get("species_scientific") for b in bird_records)
+                most_common_species = species_counts.most_common(1)[0][0]
+                chosen_b_rec = next(b for b in bird_records if (b.get("species_common") or b.get("species_scientific")) == most_common_species)
+                b_meta = chosen_b_rec.get("metadata_json") if isinstance(chosen_b_rec.get("metadata_json"), dict) else {}
+                bird_ident = {
+                    "species_common": chosen_b_rec.get("species_common", ""),
+                    "species_scientific": chosen_b_rec.get("species_scientific", ""),
+                    "species_common_en": chosen_b_rec.get("species_common_en", "") or b_meta.get("species_common_en", "") or b_meta.get("common_en", ""),
+                    "family": chosen_b_rec.get("family", "") or b_meta.get("family", ""),
+                    "order": chosen_b_rec.get("order", "") or b_meta.get("order", ""),
+                    "confidence": float(chosen_b_rec.get("confidence", 0.0)),
+                    "taxon_id": b_meta.get("taxon_id"),
+                    "needs_review": chosen_b_rec.get("needs_review", False)
+                }
+                species_pt = bird_ident["species_common"]
+
             # Nome provisório para checagem
             expected_name = generate_edited_video_name(
                 first_dt=first_dt,
                 last_dt=last_dt,
                 camera_model=cam,
+                species_pt=species_pt,
                 orig_w=w,
                 orig_h=h,
                 target_w=ve_config.get("target_width", 3840),
@@ -133,7 +178,9 @@ class VideoEditStage(PipelineStage):
                 trim_sec=ve_config.get("trim_seconds", 2.0) if ve_config.get("trim_enabled", True) else 0.0,
                 audio_stripped=bool(ve_config.get("strip_audio", False)),
                 duration_sec=tot_dur / speed_factor if speed_factor > 0 else tot_dur,
-                clip_count=len(s_items)
+                clip_count=len(s_items),
+                lat=lat_val,
+                lng=lng_val
             )
             out_cand = resolve_edited_output_path(dest_root, first_dt, expected_name)
             is_done = str(out_cand.resolve()) in existing_paths and out_cand.exists()
@@ -159,6 +206,7 @@ class VideoEditStage(PipelineStage):
                 "first_dt": first_dt,
                 "last_dt": last_dt,
                 "camera": cam,
+                "bird_ident": bird_ident,
                 "orig_w": w,
                 "orig_h": h,
                 "orig_fps": fps_val,
@@ -285,27 +333,11 @@ class VideoEditStage(PipelineStage):
                     "render_stats": render_stats
                 }
 
-                # Detecta se algum clipe de origem possui identificação de ave confirmada no projeto
-                bird_ident = None
-                if hasattr(project, "get_bird_identification"):
-                    for cp in clip_paths:
-                        b_rec = project.get_bird_identification(str(cp.resolve())) or project.get_bird_identification(str(cp))
-                        if b_rec and (b_rec.get("species_common") or b_rec.get("species_scientific")):
-                            b_meta = b_rec.get("metadata_json") if isinstance(b_rec.get("metadata_json"), dict) else {}
-                            bird_ident = {
-                                "species_common": b_rec.get("species_common", ""),
-                                "species_scientific": b_rec.get("species_scientific", ""),
-                                "species_common_en": b_rec.get("species_common_en", "") or b_meta.get("species_common_en", "") or b_meta.get("common_en", ""),
-                                "family": b_rec.get("family", "") or b_meta.get("family", ""),
-                                "order": b_rec.get("order", "") or b_meta.get("order", ""),
-                                "confidence": float(b_rec.get("confidence", 0.0)),
-                                "taxon_id": b_meta.get("taxon_id"),
-                                "needs_review": b_rec.get("needs_review", False)
-                            }
-                            break
-
+                bird_ident = sdata.get("bird_ident")
                 if bird_ident:
                     rich_meta["bird_identification"] = bird_ident
+                if project_loc:
+                    rich_meta["geo_location"] = project_loc.to_dict()
 
                 # Salva no banco de dados SQLite local e central
 

@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime
 from unittest.mock import MagicMock
 
+from src.core.geo import GeoLocation
 from src.modules.youtube.describer import (
     sanitize_hashtag,
     resolve_bird_identification,
@@ -11,7 +12,9 @@ from src.modules.youtube.describer import (
     build_bird_hashtags,
     resolve_bird_target_playlists,
     build_edited_video_youtube_metadata,
-    build_edited_video_youtube_title
+    build_edited_video_youtube_title,
+    format_location_block,
+    build_geo_hashtags,
 )
 from src.modules.youtube.uploader import (
     build_timelapse_youtube_metadata,
@@ -61,7 +64,7 @@ def test_build_bird_youtube_title_without_english():
     }
 
     title = build_bird_youtube_title(p, record, bird_info)
-    assert title.startswith("Sabiá-laranjeira (Turdus rufiventris) | 2026-10-23")
+    assert title.startswith("2026-10-23 (14:30) | Sabiá-laranjeira (Turdus rufiventris)")
     assert "Vídeo 4K UHD" not in title
     assert len(title) <= 100
 
@@ -197,13 +200,19 @@ def test_build_edited_video_youtube_metadata_with_bird(tmp_path):
     assert "Vídeo 4K UHD" not in meta["title"]
     assert "Registro em altíssima definição de Bem-te-vi" in meta["description"]
     assert "🐦 IDENTIFICAÇÃO TAXONÔMICA (AVES):" in meta["description"]
+    assert "📍 LOCALIZAÇÃO E HABITAT:" in meta["description"]
     assert "Tyrannidae" in meta["description"]
     assert "#BemTeVi" in meta["description"]
     assert "#PitangusSulphuratus" in meta["description"]
     assert "Pitangus sulphuratus" in meta["tags"]
     assert "Great Kiskadee" in meta["tags"]
-    assert meta["playlists"] == ["Birds 4K", "Pitangus sulphuratus", "Bem-te-vi", "Great Kiskadee"]
+    assert "Birds 4K" in meta["playlists"]
+    assert any(p.startswith("Pássaros de") for p in meta["playlists"])
+    assert "Pitangus sulphuratus" in meta["playlists"]
+    assert "Bem-te-vi" in meta["playlists"]
+    assert "Great Kiskadee" in meta["playlists"]
     assert meta["bird_info"] is not None
+    assert meta.get("geo_location") is not None
 
 
 def test_build_edited_video_youtube_metadata_without_bird(tmp_path):
@@ -225,9 +234,11 @@ def test_build_edited_video_youtube_metadata_without_bird(tmp_path):
     }
 
     meta = build_edited_video_youtube_metadata(vid, rec, yt_cfg)
-    assert "- Vídeo 4K UHD" in meta["title"]
+    assert "Vídeo 4K UHD" not in meta["title"]
+    assert "2026-10-23 (14:30)" in meta["title"]
     assert "🐦 IDENTIFICAÇÃO TAXONÔMICA" not in meta["description"]
-    assert meta["playlists"] == ["Natureza 4K UHD"]
+    assert "Natureza 4K UHD" in meta["playlists"]
+    assert any(p != "Natureza 4K UHD" for p in meta["playlists"])
     assert meta["bird_info"] is None
 
 
@@ -262,7 +273,12 @@ def test_build_timelapse_youtube_metadata_with_bird(tmp_path):
     assert "Vídeo 4K UHD" not in meta["title"]
     assert "🐦 IDENTIFICAÇÃO TAXONÔMICA (AVES):" in meta["description"]
     assert "#TucanoToco" in meta["description"]
-    assert meta["playlists"] == ["Birds 4K", "Ramphastos toco", "Tucano-toco", "Toco Toucan"]
+    assert "Birds 4K" in meta["playlists"]
+    assert any(p.startswith("Pássaros de") for p in meta["playlists"])
+    assert "Ramphastos toco" in meta["playlists"]
+    assert "Tucano-toco" in meta["playlists"]
+    assert "Toco Toucan" in meta["playlists"]
+    assert meta.get("geo_location") is not None
 
 
 def test_add_video_to_playlists_mocked():
@@ -291,3 +307,54 @@ def test_add_video_to_playlists_mocked():
     assert "bem-te-vi" in _PLAYLIST_CACHE
 
     clear_playlist_cache()
+
+
+def test_location_formatting_and_hashtags():
+    loc = GeoLocation(
+        id="passos_sede",
+        label="Sede Passos",
+        lat=-20.7188,
+        lng=-46.6097,
+        city="Passos",
+        state="Minas Gerais",
+        country="Brasil",
+        poi="Parque da Mata"
+    )
+
+    block = format_location_block(loc)
+    assert "📍 LOCALIZAÇÃO E HABITAT:" in block
+    assert "• Localidade: Passos, Minas Gerais, Brasil" in block
+    assert "• Ponto de Referência / Bairro: Parque da Mata" in block
+    assert "• Coordenadas Geográficas: -20.718800, -46.609700" in block
+    assert "https://www.google.com/maps?q=-20.718800,-46.609700" in block
+
+    hts = build_geo_hashtags(loc)
+    assert "#Passos" in hts
+    assert "#PassosMG" in hts
+    assert "#MinasGerais" in hts
+    assert "#Brasil" in hts
+
+
+def test_bird_youtube_title_with_custom_location():
+    p = Path("2026-10-23_14-30_Bem-te-vi_Canon-SX60_1clipe.mp4")
+    record = {"duration_seconds": 35.0, "metadata_json": {}}
+    bird_info = {
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee"
+    }
+    loc = GeoLocation(
+        id="passos",
+        label="Passos",
+        lat=-20.7188,
+        lng=-46.6097,
+        city="Passos",
+        state="MG",
+        country="Brasil"
+    )
+
+    title = build_bird_youtube_title(p, record, bird_info, loc=loc)
+    assert title == "2026-10-23 (14:30) | Bem-te-vi (Pitangus sulphuratus) - Great Kiskadee | Passos, MG"
+    assert "Vídeo 4K UHD" not in title
+    assert len(title) <= 100
+

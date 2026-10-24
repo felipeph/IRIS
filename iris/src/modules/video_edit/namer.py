@@ -1,16 +1,20 @@
 import re
+import unicodedata
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Any, Union
 
+from src.core.geo import format_gps_token
+
 def sanitize_name_token(text: str) -> str:
     """
-    Substitui caracteres especiais, espaços e pontos por hífens.
+    Substitui caracteres especiais, acentos, espaços e pontos por hífens.
     Garante que não haja pontos no meio de tokens de arquivo.
     """
     if not text:
         return ""
-    cleaned = re.sub(r'[^A-Za-z0-9_-]+', '-', str(text)).strip('-')
+    normalized = unicodedata.normalize('NFKD', str(text)).encode('ASCII', 'ignore').decode('utf-8')
+    cleaned = re.sub(r'[^A-Za-z0-9_-]+', '-', normalized).strip('-')
     cleaned = cleaned.replace('.', '-')
     cleaned = re.sub(r'-+', '-', cleaned)
     return cleaned
@@ -35,6 +39,7 @@ def generate_edited_video_name(
     first_dt: datetime,
     last_dt: Optional[datetime] = None,
     camera_model: str = "Camera",
+    species_pt: Optional[str] = None,
     orig_w: int = 1920,
     orig_h: int = 1080,
     target_w: int = 3840,
@@ -48,15 +53,17 @@ def generate_edited_video_name(
     clip_count: int = 1,
     trim_seconds: Optional[float] = None,
     has_audio: Optional[bool] = None,
-    final_duration_s: Optional[float] = None
+    final_duration_s: Optional[float] = None,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    gps_token: Optional[str] = None
 ) -> str:
     """
-    Gera o nome oficial exaustivo do vídeo editado em 7_Video_Editado_4K.
-    REGRA CRÍTICA: Não contém nenhum ponto '.' no corpo do nome, utilizando '-' em substituição,
-    reservando o ponto exclusivamente para a extensão (.mp4).
+    Gera o nome oficial simplificado do vídeo editado em 7_Video_Editado_4K:
+    {date_time}_{especie}_{camera}_{clip_count}_{resolucao}_{fps}_{velocidade}_{trim}_{audio}_{duracao}_{gps}.mp4
 
-    Exemplo gerado:
-    2026-08-17_14h30m_Canon-SX60_1clipe_orig-1920x1080_to_4K-3840x2160_orig30fps_to_60fps_speed2-0x_trim2-0s_mute_00m13s_video_editado.mp4
+    Exemplo com ave e GPS:
+    2026-10-23_14-30_Bem-te-vi_Canon-SX60_3clipes_1920x1080-to-3840x2160_fps-30-to-60_1-0x_trim2-0s_audio_00m45s_S20-4569_W45-4383.mp4
     """
     # Resolução de argumentos com aliases
     resolved_trim = trim_seconds if trim_seconds is not None else (trim_sec if trim_sec is not None else 2.0)
@@ -67,62 +74,78 @@ def generate_edited_video_name(
     else:
         resolved_mute = False
     resolved_dur = final_duration_s if final_duration_s is not None else (duration_sec if duration_sec is not None else 0.0)
-    # 1. Intervalo de Datas/Horas
-    first_date_str = first_dt.strftime('%Y-%m-%d')
-    first_time_str = first_dt.strftime('%Hh%Mm')
-    
-    if last_dt and clip_count > 1:
-        last_date_str = last_dt.strftime('%Y-%m-%d')
-        last_time_str = last_dt.strftime('%Hh%Mm')
-        if first_date_str == last_date_str:
-            time_range = f"{first_date_str}_{first_time_str}-{last_time_str}"
-        else:
-            time_range = f"{first_date_str}_{first_time_str}-to-{last_date_str}_{last_time_str}"
-    else:
-        time_range = f"{first_date_str}_{first_time_str}"
 
-    # 2. Câmera
+    # 1. Data e Horário inicial no formato YYYY-MM-DD_HH-MM
+    date_time_str = first_dt.strftime('%Y-%m-%d_%H-%M')
+
+    # 2. Espécie da ave em português (se informada)
+    species_token = sanitize_name_token(species_pt) if species_pt else ""
+
+    # 3. Câmera
     cam_str = sanitize_name_token(camera_model) or "Camera"
 
-    # 3. Quantidade de clipes
+    # 4. Quantidade de clipes
     clipe_str = f"{clip_count}clipe" if clip_count == 1 else f"{clip_count}clipes"
 
-    # 4. Resoluções original e final
-    dim_orig = f"orig-{orig_w}x{orig_h}" if orig_w and orig_h else "orig-AutoRes"
-    res_label = "4K" if target_h >= 2160 else f"{target_h}p"
-    dim_target = f"{res_label}-{target_w}x{target_h}"
-    res_str = f"{dim_orig}_to_{dim_target}"
+    # 5. Resoluções original e final simplificadas
+    w_orig = orig_w or 1920
+    h_orig = orig_h or 1080
+    w_target = target_w or 3840
+    h_target = target_h or 2160
+    res_str = f"{w_orig}x{h_orig}-to-{w_target}x{h_target}"
 
-    # 5. FPS original e final (sem pontos)
+    # 6. FPS original e final simplificados
     if orig_fps > 0:
-        orig_fps_str = f"orig{format_number_no_dot(orig_fps, precision=2 if orig_fps != round(orig_fps) else 0)}fps"
+        orig_fps_str = format_number_no_dot(orig_fps, precision=2 if orig_fps != round(orig_fps) else 0)
     else:
-        orig_fps_str = "origAutoFPS"
-    target_fps_str = f"to_{target_fps}fps"
-    fps_full_str = f"{orig_fps_str}_{target_fps_str}"
+        orig_fps_str = "30"
+    fps_str = f"fps-{orig_fps_str}-to-{target_fps}"
 
-    # 6. Velocidade (sem pontos)
+    # 7. Velocidade simplificada (sem a palavra 'speed')
     speed_num_str = format_number_no_dot(speed, precision=1 if speed != int(speed) else 1)
-    speed_str = f"speed{speed_num_str}x"
+    speed_str = f"{speed_num_str}x"
 
-    # 7. Trimming (sem pontos)
+    # 8. Trimming (sem pontos)
     trim_num_str = format_number_no_dot(resolved_trim, precision=1 if resolved_trim != int(resolved_trim) else (1 if resolved_trim > 0 else 0))
     trim_str = f"trim{trim_num_str}s"
 
-    # 8. Estado do áudio
+    # 9. Estado do áudio
     audio_str = "mute" if resolved_mute else "audio"
 
-    # 9. Duração final resultante
+    # 10. Duração final resultante
     total_seconds = max(0.0, resolved_dur)
     m, s = divmod(int(round(total_seconds)), 60)
     h, m = divmod(m, 60)
     duration_str = f"{h:02d}h{m:02d}m{s:02d}s" if h > 0 else f"{m:02d}m{s:02d}s"
 
-    # 10. Sufixo
-    suffix = "video_editado.mp4"
+    # 11. Coordenadas GPS (formato S20-4569_W45-4383)
+    gps_str = ""
+    if lat is not None and lng is not None:
+        try:
+            gps_str = format_gps_token(float(lat), float(lng))
+        except Exception:
+            gps_str = ""
+    elif gps_token:
+        gps_str = sanitize_name_token(gps_token)
 
-    # Montagem e validação final anti-ponto
-    base_name = f"{time_range}_{cam_str}_{clipe_str}_{res_str}_{fps_full_str}_{speed_str}_{trim_str}_{audio_str}_{duration_str}_{suffix[:-4]}"
+    # Montagem dos tokens em ordem estrita
+    tokens = [date_time_str]
+    if species_token:
+        tokens.append(species_token)
+    tokens.extend([
+        cam_str,
+        clipe_str,
+        res_str,
+        fps_str,
+        speed_str,
+        trim_str,
+        audio_str,
+        duration_str
+    ])
+    if gps_str:
+        tokens.append(gps_str)
+
+    base_name = "_".join(tokens)
     # Garante que não sobrou nenhum ponto no corpo antes da extensão
     base_name_clean = base_name.replace(".", "-")
     base_name_clean = re.sub(r"-+", "-", base_name_clean)

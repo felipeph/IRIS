@@ -216,6 +216,7 @@ from src.modules.youtube.describer import (
     resolve_bird_identification,
     build_bird_youtube_title,
     resolve_bird_target_playlists,
+    resolve_project_geolocation,
 )
 
 def build_timelapse_youtube_metadata(
@@ -275,10 +276,11 @@ def build_timelapse_youtube_metadata(
     if video_path.exists() and "video_size_bytes" not in record_copy["metadata_json"]:
         record_copy["metadata_json"]["video_size_bytes"] = video_path.stat().st_size
 
+    loc = resolve_project_geolocation(record_copy, project=project)
     bird_info = resolve_bird_identification(record_copy, project=project)
     if bird_info:
-        title = build_bird_youtube_title(video_path, record_copy, bird_info)
-        target_playlists = resolve_bird_target_playlists(bird_info, yt_config)
+        title = build_bird_youtube_title(video_path, record_copy, bird_info, loc=loc)
+        target_playlists = resolve_bird_target_playlists(bird_info, yt_config, loc=loc)
     else:
         title = build_youtube_title(video_path, record_copy)
         seq_dir = str(record_copy.get("sequence_dir", ""))
@@ -289,9 +291,16 @@ def build_timelapse_youtube_metadata(
             if is_le else yt_config.get("playlist", "Timelapses")
         )
         target_playlists = [tl_playlist]
+        if loc and loc.city:
+            city_pl = f"{loc.city} - {loc.state}" if loc.state else loc.city
+            target_playlists.append(city_pl)
 
-    description = build_rich_youtube_description(record_copy, project_name=project_name, bird_info=bird_info)
+    description = build_rich_youtube_description(record_copy, project_name=project_name, bird_info=bird_info, loc=loc)
     tags = build_youtube_tags(record_copy)
+    if loc:
+        for loc_tag in [loc.city, loc.state, loc.country, loc.poi, loc.suburb]:
+            if loc_tag and loc_tag.strip() and loc_tag.strip() not in tags:
+                tags.append(loc_tag.strip())
     if bird_info:
         for b_cand in [
             bird_info.get("species_common"),
@@ -312,7 +321,8 @@ def build_timelapse_youtube_metadata(
         "privacy_status": privacy,
         "playlist": target_playlists[0] if target_playlists else yt_config.get("playlist", "Timelapses"),
         "playlists": target_playlists,
-        "bird_info": bird_info
+        "bird_info": bird_info,
+        "geo_location": loc.to_dict() if loc else None
     }
 
 

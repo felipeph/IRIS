@@ -67,16 +67,16 @@ def test_generate_edited_video_name_individual_no_dots():
     assert "." not in body, f"Body of filename contains dots: {body}"
     
     # Assert presence of key metadata components
-    assert "2026-08-17_14h30m" in name
+    assert "2026-08-17_14-30" in name
     assert "Canon-PowerShot-SX60-HS" in name
     assert "1clipe" in name
-    assert "orig-1920x1080_to_4K-3840x2160" in name
-    assert "orig29-97fps_to_60fps" in name
-    assert "speed1-0x" in name
+    assert "1920x1080-to-3840x2160" in name
+    assert "fps-29-97-to-60" in name
+    assert "_1-0x_" in name
     assert "trim2-0s" in name
     assert "_audio_" in name
     assert "00m26s" in name
-    assert "video_editado.mp4" in name
+    assert "video_editado" not in name
 
 
 def test_generate_edited_video_name_joined_mute_no_dots():
@@ -104,13 +104,45 @@ def test_generate_edited_video_name_joined_mute_no_dots():
     body = name[:-4]
     assert "." not in body, f"Body contains dots: {body}"
     
-    assert "2026-08-17_14h30m-14h48m" in name
+    assert "2026-08-17_14-30" in name
     assert "Sony-A7IV" in name
     assert "3clipes" in name
-    assert "speed2-5x" in name
+    assert "1920x1080-to-3840x2160" in name
+    assert "fps-30-to-60" in name
+    assert "_2-5x_" in name
     assert "trim0s" in name
     assert "_mute_" in name
     assert "02m05s" in name
+    assert "video_editado" not in name
+
+
+def test_generate_edited_video_name_with_bird_and_gps():
+    start_dt = datetime(2026, 10, 23, 14, 30, 0)
+    end_dt = datetime(2026, 10, 23, 14, 35, 0)
+    
+    name = generate_edited_video_name(
+        first_dt=start_dt,
+        last_dt=end_dt,
+        camera_model="Canon PowerShot SX60 HS",
+        clip_count=3,
+        orig_w=1920,
+        orig_h=1080,
+        target_w=3840,
+        target_h=2160,
+        orig_fps=30.0,
+        target_fps=60,
+        speed=1.0,
+        trim_seconds=2.0,
+        has_audio=True,
+        final_duration_s=45.0,
+        species_pt="Bem-te-vi",
+        lat=-20.456887,
+        lng=-45.438307
+    )
+    
+    assert name.endswith(".mp4")
+    assert "." not in name[:-4]
+    assert name == "2026-10-23_14-30_Bem-te-vi_Canon-PowerShot-SX60-HS_3clipes_1920x1080-to-3840x2160_fps-30-to-60_1-0x_trim2-0s_audio_00m45s_S20-4569_W45-4383.mp4"
 
 
 def test_resolve_edited_output_path(tmp_path):
@@ -381,7 +413,7 @@ def test_build_edited_video_youtube_metadata(tmp_path):
     assert "tags" in meta
     assert "2026-08-17" in meta["title"]
     assert "14:30" in meta["title"]
-    assert "Vídeo 4K UHD" in meta["title"]
+    assert "Vídeo 4K UHD" not in meta["title"]
     assert "Canon PowerShot SX60 HS" not in meta["title"]
     assert "Canon PowerShot SX60 HS" in meta["description"]
     
@@ -465,7 +497,8 @@ def test_build_edited_video_youtube_title_joined():
         "metadata_json": {}
     }
     title = build_edited_video_youtube_title(vpath, rec)
-    assert title == "2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD"
+    assert title.startswith("2026-10-09 (16:22 - 18:35)")
+    assert "Vídeo 4K UHD" not in title
 
 
 def test_build_edited_video_youtube_title_single_clip_long():
@@ -477,7 +510,8 @@ def test_build_edited_video_youtube_title_single_clip_long():
         "metadata_json": {}
     }
     title = build_edited_video_youtube_title(vpath, rec)
-    assert title == "2026-10-09 (16:22 - 16:25) - Vídeo 4K UHD"
+    assert title.startswith("2026-10-09 (16:22 - 16:25)")
+    assert "Vídeo 4K UHD" not in title
 
 
 def test_build_edited_video_youtube_title_single_clip_short():
@@ -489,7 +523,8 @@ def test_build_edited_video_youtube_title_single_clip_short():
         "metadata_json": {}
     }
     title = build_edited_video_youtube_title(vpath, rec)
-    assert title == "2026-10-09 (16:22) - Vídeo 4K UHD"
+    assert title.startswith("2026-10-09 (16:22)")
+    assert "Vídeo 4K UHD" not in title
 
 
 def test_build_edited_video_youtube_title_fallback_meta():
@@ -502,7 +537,8 @@ def test_build_edited_video_youtube_title_fallback_meta():
         }
     }
     title = build_edited_video_youtube_title(vpath, rec)
-    assert title == "2026-10-09 (16:22 - 18:35) - Vídeo 4K UHD"
+    assert title.startswith("2026-10-09 (16:22 - 18:35)")
+    assert "Vídeo 4K UHD" not in title
 
 
 def test_build_render_cmd_profiles(tmp_path):
