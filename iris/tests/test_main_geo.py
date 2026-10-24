@@ -32,13 +32,25 @@ def test_select_location_dialog_add_quick(mock_console):
     coords = "-20.123456, -44.654321"
     label = "Sítio Teste - Nova Lima - MG"
 
-    with patch("main.Prompt.ask", side_effect=["+", coords, label, "Nova Lima", "Minas Gerais"]):
+    mock_geo_result = {
+        "city": "Nova Lima",
+        "state": "Minas Gerais",
+        "country": "Brasil",
+        "suburb": "Jardim da Torre",
+        "poi": "Reserva Natural",
+        "source": "nominatim"
+    }
+
+    with patch("src.core.geo.reverse_geocode", return_value=mock_geo_result), \
+         patch("rich.prompt.Prompt.ask", side_effect=["+", coords, label, "S"]):
         loc = select_location_dialog(mock_console)
         assert loc.label == label
         assert loc.lat == pytest.approx(-20.123456)
         assert loc.lng == pytest.approx(-44.654321)
         assert loc.city == "Nova Lima"
         assert loc.state == "Minas Gerais"
+        assert loc.suburb == "Jardim da Torre"
+        assert loc.poi == "Reserva Natural"
 
     locations_after = len(GeoService.get_locations())
     assert locations_after == locations_before + 1

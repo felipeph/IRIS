@@ -24,7 +24,7 @@ from src.core.project import list_open_projects, get_project, create_project, ge
 from src.core.lock import ProjectLock, ProjectLockedError
 from src.core.pipeline import PipelineRunner
 from src.core.metadata import MEDIA_EXTENSIONS
-from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url, build_location_panel
+from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url, build_location_panel, interactive_add_location_flow
 
 console = Console()
 
@@ -85,26 +85,10 @@ def select_location_dialog(console: Console, default_id: str = None) -> GeoLocat
                 time.sleep(1)
             continue
         if choice == "+":
-            coords_input = Prompt.ask("Coordenadas (ex: -20.456887, -45.438307)")
-            try:
-                lat, lng = parse_coords(coords_input)
-                label = Prompt.ask("Rótulo amigável (ex: Bairro Belvedere - Belo Horizonte - MG)").strip()
-                if not label:
-                    console.print("[red]Rótulo não pode ser vazio.[/red]")
-                    time.sleep(1.5)
-                    continue
-                city = Prompt.ask("Cidade", default="").strip()
-                state = Prompt.ask("Estado por extenso", default="Minas Gerais").strip()
-                slug = re.sub(r'[^a-zA-Z0-9]+', '-', label.lower()).strip('-') or f"loc-{int(abs(lat))}"
-                new_loc = GeoLocation(id=slug, label=label, lat=lat, lng=lng, city=city, state=state, country="Brasil")
-                GeoService.add_location(new_loc)
-                console.print(f"[bold green]✔ Local '{label}' cadastrado com sucesso![/bold green]")
-                time.sleep(1.2)
+            new_loc = interactive_add_location_flow(console, set_as_default=False)
+            if new_loc:
                 return new_loc
-            except Exception as e:
-                console.print(f"[red]Erro ao cadastrar: {e}[/red]")
-                time.sleep(1.5)
-                continue
+            continue
 
         if choice.upper() in ["-", "X"]:
             if len(locations) <= 1:

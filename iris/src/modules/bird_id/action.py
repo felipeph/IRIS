@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from src.core.config import config
 from src.core.project import Project, ProjectItem
@@ -108,7 +108,8 @@ def write_bird_exif_tags(
     scientific: str,
     common_en: str = "",
     family: str = "",
-    order: str = ""
+    order: str = "",
+    extra_keywords: Optional[List[str]] = None
 ) -> bool:
     """
     Injeta metadados taxonômicos (IPTC, XMP e EXIF) no arquivo usando ExifTool sem recodificar pixels.
@@ -121,6 +122,11 @@ def write_bird_exif_tags(
         return False
 
     keywords = ["Aves"]
+    if extra_keywords:
+        for ek in extra_keywords:
+            clean_ek = str(ek or "").strip()
+            if clean_ek and clean_ek not in keywords:
+                keywords.append(clean_ek)
     for kw in [common_pt, scientific, common_en, family, order]:
         if kw and kw not in keywords:
             keywords.append(kw)
@@ -187,10 +193,12 @@ def write_bird_exif_tags(
 
 def apply_bird_metadata(
     file_path: Path,
-    record: Dict[str, Any]
+    record: Dict[str, Any],
+    extra_keywords: Optional[List[str]] = None
 ) -> bool:
     """
     Aplica metadados taxonômicos EXIF/IPTC/XMP ao arquivo indicado com base no registro.
+    Suporta inclusão de palavras-chave extras (ex: tags de geolocalização).
     """
     if not file_path.exists():
         return False
@@ -202,7 +210,7 @@ def apply_bird_metadata(
     family = record.get("family", "") or meta_dict.get("family", "")
     order = record.get("order", "") or meta_dict.get("order", "")
 
-    return write_bird_exif_tags(file_path, common_pt, sci, common_en, family, order)
+    return write_bird_exif_tags(file_path, common_pt, sci, common_en, family, order, extra_keywords=extra_keywords)
 
 
 def apply_bird_physical_move(

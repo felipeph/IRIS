@@ -1,7 +1,11 @@
 import re
+import time
+import requests
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any, Tuple
+from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Prompt, Confirm
 from src.core.config import config
 
 # Extensões com suporte seguro a gravação de metadados sem perigo de corrupção ou overhead massivo
@@ -26,6 +30,17 @@ class GeoLocation:
     city: str = ""
     state: str = ""
     country: str = "Brasil"
+    suburb: str = ""
+    poi: str = ""
+
+    def get_tags(self) -> List[str]:
+        """Retorna lista ordenada e sem duplicatas de tags geográficas para IPTC/XMP/Keywords."""
+        tags = []
+        for val in [self.poi, self.suburb, self.city, self.state, self.country, self.label]:
+            val_clean = str(val or "").strip()
+            if val_clean and val_clean not in tags:
+                tags.append(val_clean)
+        return tags
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -37,6 +52,8 @@ class GeoLocation:
             "city": self.city,
             "state": self.state,
             "country": self.country,
+            "suburb": self.suburb,
+            "poi": self.poi,
         }
 
     @classmethod
@@ -50,6 +67,8 @@ class GeoLocation:
             city=str(data.get("city", "")).strip(),
             state=str(data.get("state", "")).strip(),
             country=str(data.get("country", "Brasil")).strip(),
+            suburb=str(data.get("suburb", "")).strip(),
+            poi=str(data.get("poi", "")).strip(),
         )
 
 
@@ -137,15 +156,24 @@ def build_location_panel(
     reg_str = ", ".join(reg_parts) if reg_parts else "Brasil"
 
     clean_title = title.replace("\\[", "[").replace("\\]", "]").replace("[", "\\[")
-    loc_text = (
-        f"[bold yellow]{clean_title}[/bold yellow]\n"
-        f"  [dim]• Rótulo:[/dim]       [bold white]{loc.label}[/bold white]\n"
-        f"  [dim]• Região:[/dim]       {reg_str}\n"
-        f"  [dim]• Coordenadas:[/dim]  {loc.lat:.6f}, {loc.lng:.6f} [dim](Token: {gps_token})[/dim]\n"
-        f"  [dim]• Precisão:[/dim]     Raio de {int(loc.accuracy_m):,}m [dim](Usado no iNaturalist)[/dim]\n"
+    lines = [
+        f"[bold yellow]{clean_title}[/bold yellow]",
+        f"  [dim]• Rótulo:[/dim]       [bold white]{loc.label}[/bold white]"
+    ]
+    if loc.poi:
+        lines.append(f"  [dim]• Ponto/Parque:[/dim] [bold green]{loc.poi}[/bold green]")
+    if loc.suburb:
+        lines.append(f"  [dim]• Bairro:[/dim]       [bold cyan]{loc.suburb}[/bold cyan]")
+    lines.append(f"  [dim]• Região:[/dim]       {reg_str}")
+    tags_list = loc.get_tags()
+    if tags_list:
+        lines.append(f"  [dim]• Tags Exif/IPTC:[/dim] {', '.join(tags_list)}")
+    lines.extend([
+        f"  [dim]• Coordenadas:[/dim]  {loc.lat:.6f}, {loc.lng:.6f} [dim](Token: {gps_token})[/dim]",
+        f"  [dim]• Precisão:[/dim]     Raio de {int(loc.accuracy_m):,}m [dim](Usado no iNaturalist)[/dim]",
         f"  [dim]• Google Maps:[/dim]  [link={gmaps}]{gmaps}[/link]"
-    )
-    return Panel(loc_text, expand=False, border_style=border_style)
+    ])
+    return Panel("\n".join(lines), expand=False, border_style=border_style)
 
 
 def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str = "") -> List[str]:
@@ -183,9 +211,19 @@ def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str =
     if loc.country:
         args.append(f"-IPTC:Country-PrimaryLocationName={loc.country}")
         args.append(f"-XMP-photoshop:Country={loc.country}")
-    if loc.label:
-        args.append(f"-IPTC:Sub-location={loc.label}")
-        args.append(f"-XMP-iptcCore:Location={loc.label}")
+
+    sub_loc = loc.poi or loc.suburb or loc.label
+    if sub_loc:
+        args.append(f"-IPTC:Sub-location={sub_loc}")
+        args.append(f"-XMP-iptcCore:Location={sub_loc}")
+
+    tags = loc.get_tags()
+    for tag in tags:
+        args.append(f"-Keywords+={tag}")
+        args.append(f"-Subject+={tag}")
+
+    if tags:
+        args.append(f"-XPKeywords={';'.join(tags)}")
 
     args.extend([
         "-IPTC:CodedCharacterSet=UTF8",
@@ -194,6 +232,208 @@ def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str =
     ])
 
     return args
+
+
+def reverse_geocode(lat: float, lng: float, timeout: float = 4.0) -> Dict[str, str]:
+    """
+    Consulta serviços de geocodificação reversa para extrair cidade, estado, país, bairro e POI/parque.
+    Provedor primário: OpenStreetMap Nominatim (gratuito, sem chave, com detalhes em PT-BR).
+    Fallback secundário: BigDataCloud Reverse Geocoding API.
+    Retorna dicionário com chaves: city, state, country, suburb, poi, source (ou 'offline').
+    """
+    # 1. Provedor Primário: OpenStreetMap Nominatim
+    try:
+        url = "https://nominatim.openstreetmap.org/reverse"
+        params = {
+            "format": "jsonv2",
+            "lat": lat,
+            "lon": lng,
+            "zoom": 18,
+            "addressdetails": 1,
+            "namedetails": 1,
+            "accept-language": "pt-BR,pt;q=0.9,en;q=0.8"
+        }
+        headers = {
+            "User-Agent": "IRIS-PhotoManager/1.0 (https://github.com/felipeph/IRIS)"
+        }
+        resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+        if resp.status_code == 200:
+            data = resp.json()
+            addr = data.get("address", {})
+            city = addr.get("city") or addr.get("town") or addr.get("municipality") or addr.get("village") or addr.get("hamlet") or addr.get("county") or ""
+            state = addr.get("state") or ""
+            country = addr.get("country") or "Brasil"
+            suburb = addr.get("suburb") or addr.get("neighbourhood") or addr.get("quarter") or addr.get("residential") or addr.get("city_district") or ""
+
+            poi = ""
+            for k in ["park", "leisure", "nature_reserve", "protected_area", "national_park", "tourism", "amenity", "historic", "natural"]:
+                if addr.get(k):
+                    poi = str(addr.get(k)).strip()
+                    break
+
+            if not poi:
+                cat = data.get("category", "")
+                name = str(data.get("name", "")).strip()
+                road = str(addr.get("road", "")).strip()
+                if name and name != road and name not in [city, suburb, state, country] and cat in ["leisure", "tourism", "amenity", "natural", "boundary", "historic"]:
+                    poi = name
+
+            return {
+                "city": city.strip(),
+                "state": state.strip(),
+                "country": country.strip(),
+                "suburb": suburb.strip(),
+                "poi": poi.strip(),
+                "source": "nominatim"
+            }
+    except Exception:
+        pass
+
+    # 2. Provedor Fallback: BigDataCloud
+    try:
+        url_bdc = "https://api.bigdatacloud.net/data/reverse-geocode-client"
+        params_bdc = {
+            "latitude": lat,
+            "longitude": lng,
+            "localityLanguage": "pt"
+        }
+        resp_bdc = requests.get(url_bdc, params=params_bdc, timeout=timeout)
+        if resp_bdc.status_code == 200:
+            data_bdc = resp_bdc.json()
+            city = data_bdc.get("city") or data_bdc.get("locality") or ""
+            state = data_bdc.get("principalSubdivision") or ""
+            country = data_bdc.get("countryName") or "Brasil"
+
+            suburb = ""
+            locality_info = data_bdc.get("localityInfo", {})
+            admin_list = locality_info.get("administrative", [])
+            for item in reversed(admin_list):
+                lvl = item.get("adminLevel", 0)
+                if lvl in [9, 10] and item.get("name"):
+                    suburb = item.get("name")
+                    break
+
+            return {
+                "city": city.strip(),
+                "state": state.strip(),
+                "country": country.strip(),
+                "suburb": suburb.strip(),
+                "poi": "",
+                "source": "bigdatacloud"
+            }
+    except Exception:
+        pass
+
+    return {
+        "city": "",
+        "state": "",
+        "country": "Brasil",
+        "suburb": "",
+        "poi": "",
+        "source": "offline"
+    }
+
+
+def interactive_add_location_flow(
+    console: Console,
+    set_as_default: bool = False
+) -> Optional[GeoLocation]:
+    """
+    Fluxo interativo simplificado para cadastro de novo local predefinido.
+    Solicita apenas rótulo e coordenadas; consulta API e apresenta painel de confirmação ágil.
+    """
+    console.print("\n[bold cyan]Cadastrar Nova Geolocalização[/bold cyan]")
+    console.print("[dim]Dica: Cole as coordenadas do Google Maps (ex: -20.456887, -45.438307). O restante será obtido via API![/dim]")
+
+    coords_input = Prompt.ask("Coordenadas (Latitude, Longitude)").strip()
+    try:
+        lat, lng = parse_coords(coords_input)
+    except ValueError as e:
+        console.print(f"[red]Erro nas coordenadas: {e}[/red]")
+        time.sleep(2)
+        return None
+
+    label = Prompt.ask("Rótulo amigável (ex: Casa, Sítio, Parque das Mangabeiras)").strip()
+    if not label:
+        console.print("[red]O rótulo não pode ser vazio.[/red]")
+        time.sleep(2)
+        return None
+
+    with console.status("[bold cyan]Consultando dados geográficos na API (OpenStreetMap Nominatim)...[/bold cyan]", spinner="dots"):
+        geo_info = reverse_geocode(lat, lng)
+
+    city = geo_info.get("city", "")
+    state = geo_info.get("state", "")
+    country = geo_info.get("country", "Brasil") or "Brasil"
+    suburb = geo_info.get("suburb", "")
+    poi = geo_info.get("poi", "")
+    accuracy_m = 25000.0
+
+    temp_loc = GeoLocation(
+        id="preview",
+        label=label,
+        lat=lat,
+        lng=lng,
+        accuracy_m=accuracy_m,
+        city=city,
+        state=state,
+        country=country,
+        suburb=suburb,
+        poi=poi
+    )
+
+    console.print()
+    console.print(build_location_panel(temp_loc, title="📍 [DADOS IDENTIFICADOS AUTOMATICAMENTE VIA API]", border_style="cyan"))
+
+    if geo_info.get("source") == "offline" or not city:
+        console.print("[yellow]Aviso: Não foi possível obter dados completos via API (sem internet ou localidade remota).[/yellow]")
+
+    console.print("\n[bold white]O que deseja fazer?[/bold white]")
+    console.print("  [green][ENTER] ou S[/green] Salvar e confirmar com estes dados")
+    console.print("  [cyan]E[/cyan]          Editar manualmente algum campo")
+    console.print("  [red]C[/red]          Cancelar cadastro")
+
+    action = Prompt.ask("\nEscolha uma opção", default="S").strip().upper()
+
+    if action == "C":
+        console.print("[yellow]Cadastro cancelado.[/yellow]")
+        time.sleep(1.2)
+        return None
+
+    if action == "E":
+        label = Prompt.ask("Rótulo", default=label).strip() or label
+        poi = Prompt.ask("Ponto de interesse / Parque (opcional)", default=poi).strip()
+        suburb = Prompt.ask("Bairro (opcional)", default=suburb).strip()
+        city = Prompt.ask("Cidade/Município", default=city).strip()
+        state = Prompt.ask("Estado por extenso", default=state or "Minas Gerais").strip()
+        country = Prompt.ask("País", default=country or "Brasil").strip()
+        acc_str = Prompt.ask("Raio de precisão em metros", default=str(int(accuracy_m))).strip()
+        try:
+            accuracy_m = float(acc_str)
+        except ValueError:
+            accuracy_m = 25000.0
+
+    slug = re.sub(r'[^a-zA-Z0-9]+', '-', label.lower()).strip('-')
+    if not slug:
+        slug = f"loc-{abs(lat):.2f}-{abs(lng):.2f}".replace('.', '-')
+
+    new_loc = GeoLocation(
+        id=slug,
+        label=label,
+        lat=lat,
+        lng=lng,
+        accuracy_m=accuracy_m,
+        city=city,
+        state=state,
+        country=country,
+        suburb=suburb,
+        poi=poi
+    )
+
+    GeoService.add_location(new_loc, set_as_default=set_as_default)
+    console.print(f"[bold green]✔ Local '{label}' cadastrado com sucesso![/bold green]")
+    time.sleep(1.2)
+    return new_loc
 
 
 class GeoService:
@@ -208,7 +448,9 @@ class GeoService:
             "accuracy_m": 25000.0,
             "city": "Formiga",
             "state": "Minas Gerais",
-            "country": "Brasil"
+            "country": "Brasil",
+            "suburb": "São Luiz",
+            "poi": ""
         },
         {
             "id": "bh-belvedere",
@@ -218,7 +460,9 @@ class GeoService:
             "accuracy_m": 15000.0,
             "city": "Belo Horizonte",
             "state": "Minas Gerais",
-            "country": "Brasil"
+            "country": "Brasil",
+            "suburb": "Belvedere",
+            "poi": ""
         },
         {
             "id": "ouro-preto-sao-bartolomeu",
@@ -228,7 +472,9 @@ class GeoService:
             "accuracy_m": 20000.0,
             "city": "Ouro Preto",
             "state": "Minas Gerais",
-            "country": "Brasil"
+            "country": "Brasil",
+            "suburb": "São Bartolomeu",
+            "poi": ""
         }
     ]
 

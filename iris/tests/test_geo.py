@@ -112,3 +112,206 @@ def test_geo_service_delete_protection():
         assert GeoService.delete_location("unico") is False
     finally:
         config.set("geo.locations", orig_locs)
+
+
+def test_geolocation_suburb_poi_and_tags():
+    loc = GeoLocation(
+        id="mangabeiras",
+        label="Meu Ponto",
+        lat=-19.9547,
+        lng=-43.9056,
+        city="Belo Horizonte",
+        state="Minas Gerais",
+        country="Brasil",
+        suburb="Mangabeiras",
+        poi="Parque das Mangabeiras"
+    )
+    d = loc.to_dict()
+    assert d["suburb"] == "Mangabeiras"
+    assert d["poi"] == "Parque das Mangabeiras"
+
+    rebuilt = GeoLocation.from_dict(d)
+    assert rebuilt.suburb == "Mangabeiras"
+    assert rebuilt.poi == "Parque das Mangabeiras"
+
+    tags = rebuilt.get_tags()
+    assert "Parque das Mangabeiras" in tags
+    assert "Mangabeiras" in tags
+    assert "Belo Horizonte" in tags
+    assert "Minas Gerais" in tags
+    assert "Brasil" in tags
+    assert "Meu Ponto" in tags
+
+
+def test_build_exiftool_geo_args_with_tags():
+    loc = GeoLocation(
+        id="mangabeiras",
+        label="Observatório",
+        lat=-19.9547,
+        lng=-43.9056,
+        city="Belo Horizonte",
+        state="Minas Gerais",
+        country="Brasil",
+        suburb="Mangabeiras",
+        poi="Parque das Mangabeiras"
+    )
+    args = build_exiftool_geo_args(loc, is_video=False, ext=".jpg")
+
+    assert "-IPTC:City=Belo Horizonte" in args
+    assert "-IPTC:Province-State=Minas Gerais" in args
+    assert "-IPTC:Country-PrimaryLocationName=Brasil" in args
+    assert "-IPTC:Sub-location=Parque das Mangabeiras" in args
+    assert "-XMP-iptcCore:Location=Parque das Mangabeiras" in args
+
+    assert "-Keywords+=Parque das Mangabeiras" in args
+    assert "-Keywords+=Mangabeiras" in args
+    assert "-Keywords+=Belo Horizonte" in args
+    assert "-Keywords+=Minas Gerais" in args
+    assert "-Keywords+=Brasil" in args
+
+    assert "-Subject+=Parque das Mangabeiras" in args
+    assert "-Subject+=Mangabeiras" in args
+
+    assert any(a.startswith("-XPKeywords=") and "Parque das Mangabeiras" in a for a in args)
+
+
+def test_build_location_panel_content():
+    from src.core.geo import build_location_panel
+    loc = GeoLocation(
+        id="teste-panel",
+        label="Entrada Principal",
+        lat=-19.95,
+        lng=-43.90,
+        city="Belo Horizonte",
+        state="Minas Gerais",
+        country="Brasil",
+        suburb="Mangabeiras",
+        poi="Parque das Mangabeiras"
+    )
+    panel = build_location_panel(loc)
+    render_text = str(panel.renderable)
+    assert "Entrada Principal" in render_text
+    assert "Parque das Mangabeiras" in render_text
+    assert "Mangabeiras" in render_text
+    assert "Belo Horizonte" in render_text
+
+
+def test_reverse_geocode_nominatim_success():
+    from unittest.mock import patch, MagicMock
+    from src.core.geo import reverse_geocode
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "category": "leisure",
+        "type": "park",
+        "name": "Parque das Mangabeiras",
+        "address": {
+            "park": "Parque das Mangabeiras",
+            "suburb": "Mangabeiras",
+            "city": "Belo Horizonte",
+            "state": "Minas Gerais",
+            "country": "Brasil"
+        }
+    }
+
+    with patch("requests.get", return_value=mock_resp):
+        info = reverse_geocode(-19.9547, -43.9056)
+        assert info["city"] == "Belo Horizonte"
+        assert info["state"] == "Minas Gerais"
+        assert info["country"] == "Brasil"
+        assert info["suburb"] == "Mangabeiras"
+        assert info["poi"] == "Parque das Mangabeiras"
+        assert info["source"] == "nominatim"
+
+
+def test_reverse_geocode_fallback_bigdatacloud():
+    from unittest.mock import patch, MagicMock
+    from src.core.geo import reverse_geocode
+
+    # Primeiro request (Nominatim) falha com timeout
+    mock_bdc = MagicMock()
+    mock_bdc.status_code = 200
+    mock_bdc.json.return_value = {
+        "city": "Formiga",
+        "principalSubdivision": "Minas Gerais",
+        "countryName": "Brasil",
+        "localityInfo": {
+            "administrative": [
+                {"name": "Brasil", "adminLevel": 2},
+                {"name": "Minas Gerais", "adminLevel": 4},
+                {"name": "Formiga", "adminLevel": 8},
+                {"name": "São Luiz", "adminLevel": 10}
+            ]
+        }
+    }
+
+    def side_effect(url, **kwargs):
+        if "nominatim" in url:
+            raise Exception("Nominatim Timeout")
+        return mock_bdc
+
+    with patch("requests.get", side_effect=side_effect):
+        info = reverse_geocode(-20.456887, -45.438307)
+        assert info["city"] == "Formiga"
+        assert info["state"] == "Minas Gerais"
+        assert info["country"] == "Brasil"
+        assert info["suburb"] == "São Luiz"
+        assert info["source"] == "bigdatacloud"
+
+
+def test_reverse_geocode_offline_graceful():
+    from unittest.mock import patch
+    from src.core.geo import reverse_geocode
+
+    with patch("requests.get", side_effect=Exception("No internet connection")):
+        info = reverse_geocode(-20.456887, -45.438307)
+        assert info["city"] == ""
+        assert info["country"] == "Brasil"
+        assert info["source"] == "offline"
+
+
+def test_interactive_add_location_flow_save_quick():
+    from unittest.mock import patch
+    from rich.console import Console
+    from src.core.geo import interactive_add_location_flow
+
+    mock_console = Console(record=True)
+    coords = "-19.9547, -43.9056"
+    label = "Parque das Mangabeiras BH"
+
+    mock_geo = {
+        "city": "Belo Horizonte",
+        "state": "Minas Gerais",
+        "country": "Brasil",
+        "suburb": "Mangabeiras",
+        "poi": "Parque das Mangabeiras",
+        "source": "nominatim"
+    }
+
+    with patch("src.core.geo.reverse_geocode", return_value=mock_geo), \
+         patch("rich.prompt.Prompt.ask", side_effect=[coords, label, "S"]):
+        loc = interactive_add_location_flow(mock_console, set_as_default=False)
+        assert loc is not None
+        assert loc.label == label
+        assert loc.city == "Belo Horizonte"
+        assert loc.suburb == "Mangabeiras"
+        assert loc.poi == "Parque das Mangabeiras"
+        # Cleanup
+        GeoService.delete_location(loc.id)
+
+
+def test_interactive_add_location_flow_cancel():
+    from unittest.mock import patch
+    from rich.console import Console
+    from src.core.geo import interactive_add_location_flow
+
+    mock_console = Console(record=True)
+    coords = "-19.9547, -43.9056"
+    label = "Ponto Cancelado"
+
+    with patch("src.core.geo.reverse_geocode", return_value={"city": "BH", "country": "Brasil"}), \
+         patch("rich.prompt.Prompt.ask", side_effect=[coords, label, "C"]):
+        loc = interactive_add_location_flow(mock_console)
+        assert loc is None
+

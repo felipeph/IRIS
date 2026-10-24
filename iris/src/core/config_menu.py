@@ -6,7 +6,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from src.core.config import config
-from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url, build_location_panel
+from src.core.geo import GeoService, GeoLocation, parse_coords, format_gps_token, maps_url, build_location_panel, interactive_add_location_flow, reverse_geocode
 
 
 def _menu_storage_ingestion(console: Console):
@@ -1164,51 +1164,7 @@ def _menu_bird_id(console: Console):
 
 def _add_location_flow(console: Console):
     """Fluxo interativo para cadastrar um novo local predefinido."""
-    console.print("\n[bold cyan]Cadastrar Nova Geolocalização[/bold cyan]")
-    console.print("[dim]Dica: Cole as coordenadas diretamente do Google Maps (ex: -20.456887, -45.438307)[/dim]")
-    coords_input = Prompt.ask("Coordenadas (Latitude, Longitude)")
-    try:
-        lat, lng = parse_coords(coords_input)
-    except ValueError as e:
-        console.print(f"[red]Erro nas coordenadas: {e}[/red]")
-        time.sleep(2)
-        return
-
-    label = Prompt.ask("Rótulo amigável (ex: Bairro Belvedere - Belo Horizonte - MG)").strip()
-    if not label:
-        console.print("[red]O rótulo não pode ser vazio.[/red]")
-        time.sleep(2)
-        return
-
-    city = Prompt.ask("Cidade (ex: Belo Horizonte)", default="").strip()
-    state = Prompt.ask("Estado por extenso (ex: Minas Gerais)", default="Minas Gerais").strip()
-    country = Prompt.ask("País", default="Brasil").strip()
-    accuracy_m_str = Prompt.ask("Raio de precisão geográfica em metros", default="25000").strip()
-    try:
-        accuracy_m = float(accuracy_m_str)
-    except ValueError:
-        accuracy_m = 25000.0
-
-    slug = re.sub(r'[^a-zA-Z0-9]+', '-', label.lower()).strip('-')
-    if not slug:
-        slug = f"loc-{abs(lat):.2f}-{abs(lng):.2f}".replace('.', '-')
-    loc_id = Prompt.ask("Identificador único (slug)", default=slug).strip()
-
-    set_as_default = Confirm.ask("Definir este local como o padrão global do IRIS?", default=False)
-
-    loc = GeoLocation(
-        id=loc_id,
-        label=label,
-        lat=lat,
-        lng=lng,
-        accuracy_m=accuracy_m,
-        city=city,
-        state=state,
-        country=country
-    )
-    GeoService.add_location(loc, set_as_default=set_as_default)
-    console.print(f"[bold green]✔ Local '{label}' cadastrado com sucesso![/bold green]")
-    time.sleep(1.5)
+    interactive_add_location_flow(console)
 
 
 def _edit_location_flow(console: Console, loc: GeoLocation):
@@ -1219,10 +1175,12 @@ def _edit_location_flow(console: Console, loc: GeoLocation):
 
         console.print("  [cyan]1.[/cyan] Alterar Coordenadas (Latitude, Longitude)")
         console.print("  [cyan]2.[/cyan] Alterar Rótulo")
-        console.print("  [cyan]3.[/cyan] Alterar Cidade")
-        console.print("  [cyan]4.[/cyan] Alterar Estado")
-        console.print("  [cyan]5.[/cyan] Alterar País")
-        console.print("  [cyan]6.[/cyan] Alterar Raio de Precisão")
+        console.print("  [cyan]3.[/cyan] Alterar Ponto de Interesse / Parque")
+        console.print("  [cyan]4.[/cyan] Alterar Bairro")
+        console.print("  [cyan]5.[/cyan] Alterar Cidade/Município")
+        console.print("  [cyan]6.[/cyan] Alterar Estado")
+        console.print("  [cyan]7.[/cyan] Alterar País")
+        console.print("  [cyan]8.[/cyan] Alterar Raio de Precisão")
         console.print("  [cyan]P.[/cyan] Definir como Padrão Global")
         console.print("  [cyan]X.[/cyan] [red]Excluir este local[/red]")
         console.print("  [cyan]0.[/cyan] Voltar")
@@ -1236,8 +1194,22 @@ def _edit_location_flow(console: Console, loc: GeoLocation):
                 lat, lng = parse_coords(new_c)
                 loc.lat = lat
                 loc.lng = lng
+                re_query = Confirm.ask("Deseja consultar a API para atualizar automaticamente cidade, bairro e parque?", default=True)
+                if re_query:
+                    with console.status("[bold cyan]Consultando dados geográficos na API...[/bold cyan]", spinner="dots"):
+                        info = reverse_geocode(lat, lng)
+                    if info.get("city"):
+                        loc.city = info["city"]
+                    if info.get("state"):
+                        loc.state = info["state"]
+                    if info.get("country"):
+                        loc.country = info["country"]
+                    if info.get("suburb"):
+                        loc.suburb = info["suburb"]
+                    if info.get("poi"):
+                        loc.poi = info["poi"]
                 GeoService.update_location(loc)
-                console.print("[green]Coordenadas atualizadas![/green]")
+                console.print("[green]Coordenadas atualizadas com sucesso![/green]")
             except ValueError as e:
                 console.print(f"[red]Erro: {e}[/red]")
             time.sleep(1.2)
@@ -1249,21 +1221,31 @@ def _edit_location_flow(console: Console, loc: GeoLocation):
                 console.print("[green]Rótulo atualizado![/green]")
             time.sleep(1.2)
         elif sub_choice == "3":
-            loc.city = Prompt.ask("Nova cidade", default=loc.city).strip()
+            loc.poi = Prompt.ask("Novo Ponto de Interesse / Parque (opcional)", default=loc.poi).strip()
+            GeoService.update_location(loc)
+            console.print("[green]Ponto/Parque atualizado![/green]")
+            time.sleep(1.2)
+        elif sub_choice == "4":
+            loc.suburb = Prompt.ask("Novo bairro (opcional)", default=loc.suburb).strip()
+            GeoService.update_location(loc)
+            console.print("[green]Bairro atualizado![/green]")
+            time.sleep(1.2)
+        elif sub_choice == "5":
+            loc.city = Prompt.ask("Nova cidade/município", default=loc.city).strip()
             GeoService.update_location(loc)
             console.print("[green]Cidade atualizada![/green]")
             time.sleep(1.2)
-        elif sub_choice == "4":
+        elif sub_choice == "6":
             loc.state = Prompt.ask("Novo estado por extenso", default=loc.state).strip()
             GeoService.update_location(loc)
             console.print("[green]Estado atualizado![/green]")
             time.sleep(1.2)
-        elif sub_choice == "5":
+        elif sub_choice == "7":
             loc.country = Prompt.ask("Novo país", default=loc.country).strip()
             GeoService.update_location(loc)
             console.print("[green]País atualizado![/green]")
             time.sleep(1.2)
-        elif sub_choice == "6":
+        elif sub_choice == "8":
             acc_str = Prompt.ask("Novo raio de precisão (metros)", default=str(int(loc.accuracy_m)))
             try:
                 loc.accuracy_m = float(acc_str)

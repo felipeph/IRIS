@@ -20,6 +20,8 @@ geo:
       city: "Formiga"
       state: "Minas Gerais"
       country: "Brasil"
+      suburb: "São Luiz"
+      poi: ""
     - id: bh-belvedere
       label: "Bairro Belvedere - Belo Horizonte - MG"
       lat: -19.9667
@@ -28,6 +30,8 @@ geo:
       city: "Belo Horizonte"
       state: "Minas Gerais"
       country: "Brasil"
+      suburb: "Belvedere"
+      poi: ""
     - id: ouro-preto-sao-bartolomeu
       label: "São Bartolomeu - Ouro Preto - MG"
       lat: -20.3167
@@ -36,6 +40,8 @@ geo:
       city: "Ouro Preto"
       state: "Minas Gerais"
       country: "Brasil"
+      suburb: "São Bartolomeu"
+      poi: ""
 classification:
   moon_zoom_threshold_mm: 1000.0
   recognize_timelapse_folders: true       # Reconhece pastas pré-organizadas com 'timelapse' no nome

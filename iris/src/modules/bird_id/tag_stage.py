@@ -115,6 +115,17 @@ class BirdTagStage(PipelineStage):
             console.print("[dim]Nenhum arquivo elegível de ave com alta certeza para injeção de metadados.[/dim]")
             return True
 
+        # Obter tags da localização do projeto para incorporar palavras-chave geográficas
+        project_loc = None
+        if hasattr(project, "geo_location_id") and project.geo_location_id:
+            from src.core.geo import GeoService
+            project_loc = GeoService.get_location(project.geo_location_id)
+        if not project_loc:
+            from src.core.geo import GeoService
+            project_loc = GeoService.get_default_location()
+
+        extra_geo_tags = project_loc.get_tags() if project_loc else []
+
         tracker = ProgressTracker(total_files, mode="items")
         start_str = datetime.now().strftime("%H:%M:%S")
         stage_title = "ETAPA: INJEÇÃO DE METADADOS DE AVES (EXIF/IPTC)"
@@ -131,7 +142,7 @@ class BirdTagStage(PipelineStage):
                 live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, file_path.name, "Injetando EXIF/IPTC..."))
 
                 try:
-                    ok = apply_bird_metadata(file_path, rec)
+                    ok = apply_bird_metadata(file_path, rec, extra_keywords=extra_geo_tags)
                     if ok:
                         success_count += 1
                     else:
