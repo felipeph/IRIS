@@ -168,35 +168,53 @@ def calculate_aspect_ratio(width: Optional[int], height: Optional[int]) -> str:
     return f"{rx}:{ry}"
 
 
-def build_youtube_title(video_path: Path, record: Dict[str, Any]) -> str:
-    """Gera título limpo e atrativo para o YouTube, limitado a 100 caracteres."""
+def build_youtube_title(
+    video_path: Path,
+    record: Dict[str, Any],
+    loc: Optional[GeoLocation] = None,
+    project: Optional[Any] = None
+) -> str:
+    """Gera título padronizado para vídeos timelapse no YouTube: {Data} ({Hora}) | {Cidade}, {UF} | Timelapse 4K UHD."""
     name = video_path.name
     parts = name.split('_')
     date_part = parts[0] if len(parts) > 0 else datetime.now().strftime('%Y-%m-%d')
     time_part = parts[1] if len(parts) > 1 else ""
 
-    # Extrai modelo de câmera se presente
-    meta = record.get("metadata_json") or {}
-    camera = meta.get("camera_model") or record.get("camera_model")
-    if not camera and len(parts) > 2 and not parts[2].startswith("timelapse"):
-        candidate = parts[2]
-        if not re.search(r'\d+x\d+', candidate) and not candidate.endswith("fps"):
-            camera = candidate
-
     if "-" in time_part:
         t1, t2 = time_part.split("-", 1)
         t1_clean = t1.replace('h', ':').replace('m', '')
         t2_clean = t2.replace('h', ':').replace('m', '')
-        time_str = f"({t1_clean} - {t2_clean})"
+        time_str = f"({t1_clean} - {t2_clean})" if (t1_clean and t2_clean) else ""
+    elif time_part and ("h" in time_part or "m" in time_part):
+        t_clean = time_part.replace('h', ':').replace('m', '')
+        time_str = f"({t_clean})"
     else:
         time_str = ""
 
     title_elements = [date_part]
     if time_str:
         title_elements.append(time_str)
-    title_elements.append("- Timelapse 4K UHD")
+    temporal_full = " ".join(title_elements).strip()
 
-    title = " ".join(title_elements)
+    # Identificar se é longa exposição
+    seq_dir = str(record.get("sequence_dir", ""))
+    out_vid = str(record.get("output_video_path", "")) or name
+    is_le = "4_Timelapses_LongaExposicao" in seq_dir or "longa_exposicao" in out_vid or "longa-exposicao" in out_vid
+
+    format_desc = "Timelapse Longa Exposição 4K UHD" if is_le else "Timelapse 4K UHD"
+
+    if loc is None:
+        loc = resolve_project_geolocation(record, project=project)
+
+    loc_str = ""
+    if loc and getattr(loc, "city", None):
+        loc_str = f"{loc.city}, {loc.state}" if getattr(loc, "state", None) else loc.city
+
+    if loc_str:
+        title = f"{temporal_full} | {loc_str} | {format_desc}"
+    else:
+        title = f"{temporal_full} | {format_desc}"
+
     if len(title) > 100:
         title = title[:97] + "..."
     return title

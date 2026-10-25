@@ -282,7 +282,7 @@ def build_timelapse_youtube_metadata(
         title = build_bird_youtube_title(video_path, record_copy, bird_info, loc=loc)
         target_playlists = resolve_bird_target_playlists(bird_info, yt_config, loc=loc)
     else:
-        title = build_youtube_title(video_path, record_copy)
+        title = build_youtube_title(video_path, record_copy, loc=loc, project=project)
         seq_dir = str(record_copy.get("sequence_dir", ""))
         out_vid = str(record_copy.get("output_video_path", ""))
         is_le = "4_Timelapses_LongaExposicao" in seq_dir or "longa_exposicao" in out_vid

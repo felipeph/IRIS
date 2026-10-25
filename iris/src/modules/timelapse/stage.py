@@ -30,6 +30,14 @@ class TimelapseStage(PipelineStage):
         dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
         base_tl_config = config.get("modules.timelapse", {})
         
+        # 0. Localização do Projeto
+        from src.core.geo import GeoService, GeoLocation, reverse_geocode
+        project_loc = None
+        if hasattr(project, "geo_location_id") and project.geo_location_id:
+            project_loc = GeoService.get_location(project.geo_location_id)
+        if not project_loc:
+            project_loc = GeoService.get_default_location()
+
         # 1. Buscar itens de timelapse do projeto (convencional e longa exposição)
         tl_items = project.get_items(category="timelapse") + project.get_items(category="timelapse_long_exposure")
 
@@ -51,13 +59,20 @@ class TimelapseStage(PipelineStage):
         summary_table = Table(title="Sequências de Timelapse do Projeto", show_header=True, header_style="bold magenta")
         summary_table.add_column("Sequência", style="cyan")
         summary_table.add_column("Fotos", justify="right", style="green")
+        summary_table.add_column("Localização", style="magenta")
         summary_table.add_column("Status Render", style="yellow")
 
         for seq_rel, items in groups.items():
             seq_dir = dest_root / Path(seq_rel)
             existing_renders = [tl for tl in project.get_timelapses() if tl.get("sequence_dir") == str(seq_dir.resolve())]
             status_desc = "[green]Já Renderizado[/green]" if existing_renders else "[yellow]Pendente[/yellow]"
-            summary_table.add_row(seq_rel, str(len(items)), status_desc)
+            
+            # Identificação do rótulo de localização para a sequência
+            first_gps = next((it for it in items if it.meta_latitude is not None and it.meta_longitude is not None), None)
+            loc_label = f"{project_loc.city}, {project_loc.state}" if (project_loc and project_loc.city) else (project_loc.label if project_loc else "Padrão")
+            if first_gps:
+                loc_label += " (GPS)"
+            summary_table.add_row(seq_rel, str(len(items)), loc_label, status_desc)
 
         console.print(summary_table)
 
@@ -151,6 +166,35 @@ class TimelapseStage(PipelineStage):
             if render_profile not in ("fast", "balanced", "quality"):
                 render_profile = "quality" if is_long_exp else "fast"
 
+            # Resolver geolocalização da sequência
+            seq_loc = None
+            first_with_gps = next((it for it in items if it.meta_latitude is not None and it.meta_longitude is not None), None)
+            if first_with_gps and first_with_gps.meta_latitude is not None and first_with_gps.meta_longitude is not None:
+                lat_it = float(first_with_gps.meta_latitude)
+                lng_it = float(first_with_gps.meta_longitude)
+                for loc_cand in GeoService.get_locations():
+                    if abs(loc_cand.lat - lat_it) < 0.005 and abs(loc_cand.lng - lng_it) < 0.005:
+                        seq_loc = loc_cand
+                        break
+                if not seq_loc:
+                    geo_data = reverse_geocode(lat_it, lng_it)
+                    seq_loc = GeoLocation(
+                        id=f"seq-gps-{seq_idx}",
+                        label=geo_data.get("city") or "Local da Captura",
+                        lat=lat_it,
+                        lng=lng_it,
+                        city=geo_data.get("city", ""),
+                        state=geo_data.get("state", ""),
+                        country=geo_data.get("country", "Brasil"),
+                        suburb=geo_data.get("suburb", ""),
+                        poi=geo_data.get("poi", "")
+                    )
+            if not seq_loc:
+                seq_loc = project_loc
+
+            lat_val = seq_loc.lat if seq_loc else None
+            lng_val = seq_loc.lng if seq_loc else None
+
             video_name = generate_timelapse_video_name(
                 first_dt=first_dt,
                 last_dt=last_dt,
@@ -163,7 +207,9 @@ class TimelapseStage(PipelineStage):
                 target_height=target_h,
                 crop_mode=crop_mode,
                 is_test=False,
-                is_long_exposure=is_long_exp
+                is_long_exposure=is_long_exp,
+                lat=lat_val,
+                lng=lng_val
             )
 
             output_video_path = resolve_produced_output_path(dest_root, first_dt, video_name)
@@ -179,8 +225,9 @@ class TimelapseStage(PipelineStage):
                 is_direct_desc = "Quadro Completo 100% (Pillarbox 4K com Bordas Laterais)"
             else:
                 is_direct_desc = "Corte Direto 1:1 sem redimensionamento" if (orig_w >= target_w and orig_h >= target_h) else "Escala Proporcional"
+            loc_tag_str = f" | Local: [bold magenta]{seq_loc.city}, {seq_loc.state}[/bold magenta]" if (seq_loc and seq_loc.city) else ""
             console.print(f"[cyan]Destino final 6_Produzidos: {output_video_path}[/cyan]")
-            console.print(f"[cyan]Configuração: Perfil [bold]{render_profile.upper()}[/bold] | Enquadramento: [bold]{crop_mode}[/bold] ({is_direct_desc}) | FPS: [bold]{fps}[/bold] | FPI: [bold]{fpi}[/bold][/cyan]")
+            console.print(f"[cyan]Configuração: Perfil [bold]{render_profile.upper()}[/bold] | Enquadramento: [bold]{crop_mode}[/bold] ({is_direct_desc}) | FPS: [bold]{fps}[/bold] | FPI: [bold]{fpi}[/bold]{loc_tag_str}[/cyan]")
 
             # 3. Preparar sequência numerada via hardlinks
             prep_ok, temp_seq_dir, sorted_photos = prepare_numbered_sequence(
@@ -259,6 +306,8 @@ class TimelapseStage(PipelineStage):
                     "deband_grain": bool(render_stats.get("deband_grain", False)),
                     "render_stats": render_stats
                 }
+                if seq_loc:
+                    rich_meta["geo_location"] = seq_loc.to_dict()
 
                 # Salvar no banco do projeto e banco central
                 record = {

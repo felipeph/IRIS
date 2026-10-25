@@ -22,12 +22,17 @@ def generate_timelapse_video_name(
     target_height: int = 2160,
     crop_mode: str = "center",
     is_test: bool = False,
-    is_long_exposure: bool = False
+    is_long_exposure: bool = False,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+    gps_token: Optional[str] = None
 ) -> str:
     """
     Gera o nome dinâmico oficial do vídeo timelapse.
-    Exemplo: 2016-05-14_22h15m-22h28m_Canon-PowerShot-SX50-HS_4000x2248_4K_center_60fps_1fpi_97x_00m08s_timelapse.mp4
+    Exemplo: 2016-05-14_22h15m-22h28m_Canon-PowerShot-SX50-HS_4000x2248_4K_center_60fps_1fpi_97x_00m08s_S20-4569_W45-4383_timelapse.mp4
     """
+    from src.core.geo import format_gps_token
+
     first_date_str = first_dt.strftime('%Y-%m-%d')
     last_date_str = last_dt.strftime('%Y-%m-%d')
     first_time_str = first_dt.strftime('%Hh%Mm')
@@ -58,11 +63,36 @@ def generate_timelapse_video_name(
     else:
         speedup_str = "1x"
 
+    gps_str = ""
+    if lat is not None and lng is not None:
+        try:
+            gps_str = format_gps_token(float(lat), float(lng))
+        except Exception:
+            gps_str = ""
+    elif gps_token:
+        gps_str = re.sub(r'[^A-Za-z0-9_-]+', '-', str(gps_token)).strip('-_')
+
     if is_long_exposure:
         suffix = "timelapse_longa_exposicao_teste.mp4" if is_test else "timelapse_longa_exposicao.mp4"
     else:
         suffix = "timelapse_teste.mp4" if is_test else "timelapse.mp4"
-    return f"{range_str}_{cam_str}_{dim_str}_{res_str}_{crop_str}_{fps}fps_{fpi}fpi_{speedup_str}_{duration_str}_{suffix}"
+
+    tokens = [
+        range_str,
+        cam_str,
+        dim_str,
+        res_str,
+        crop_str,
+        f"{fps}fps",
+        f"{fpi}fpi",
+        speedup_str,
+        duration_str
+    ]
+    if gps_str:
+        tokens.append(gps_str)
+    tokens.append(suffix)
+
+    return "_".join(tokens)
 
 def resolve_produced_output_path(
     dest_root: Path,

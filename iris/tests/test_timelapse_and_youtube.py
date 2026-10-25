@@ -928,6 +928,187 @@ def test_timelapse_stage_long_exposure_custom_fpi(tmp_path, monkeypatch):
     assert rec["metadata_json"]["frames_per_image"] == 3
 
 
+def test_generate_timelapse_video_name_with_gps():
+    d1 = datetime(2026, 8, 17, 16, 55, 0)
+    d2 = datetime(2026, 8, 17, 18, 30, 0)
+    # Com coordenadas numéricas
+    name_with_gps = generate_timelapse_video_name(
+        first_dt=d1,
+        last_dt=d2,
+        camera_model="Canon SX60",
+        orig_w=4000,
+        orig_h=3000,
+        total_photos=500,
+        lat=-20.456887,
+        lng=-45.438307
+    )
+    assert "_S20-4569_W45-4383_timelapse.mp4" in name_with_gps
+
+    # Com gps_token explícito
+    name_with_token = generate_timelapse_video_name(
+        first_dt=d1,
+        last_dt=d2,
+        camera_model="Canon SX60",
+        orig_w=4000,
+        orig_h=3000,
+        total_photos=500,
+        gps_token="S20-1234_W45-5678"
+    )
+    assert "_S20-1234_W45-5678_timelapse.mp4" in name_with_token
+
+    # Sem GPS
+    name_no_gps = generate_timelapse_video_name(
+        first_dt=d1,
+        last_dt=d2,
+        camera_model="Canon SX60",
+        orig_w=4000,
+        orig_h=3000,
+        total_photos=500
+    )
+    assert "_S20" not in name_no_gps
+    assert name_no_gps.endswith("_timelapse.mp4")
+
+
+def test_build_timelapse_youtube_title_with_location():
+    from src.core.geo import GeoLocation
+    from src.modules.youtube.describer import build_youtube_title
+
+    vpath = Path("2026-08-17_16h55m-18h30m_Canon_4K_center_60fps_1fpi_50x_00m10s_S20-4569_W45-4383_timelapse.mp4")
+    record = {"sequence_dir": "4_Timelapses/Geral"}
+    loc = GeoLocation(
+        id="passos-loc",
+        label="Passos - MG",
+        lat=-20.718,
+        lng=-46.611,
+        city="Passos",
+        state="Minas Gerais"
+    )
+    title = build_youtube_title(vpath, record, loc=loc)
+    assert "2026-08-17 (16:55 - 18:30)" in title
+    assert "Passos, Minas Gerais" in title
+    assert "Timelapse 4K UHD" in title
+    assert "|" in title
+
+    # Longa exposição
+    record_le = {"sequence_dir": "4_Timelapses_LongaExposicao/Geral"}
+    title_le = build_youtube_title(vpath, record_le, loc=loc)
+    assert "Timelapse Longa Exposição 4K UHD" in title_le
+
+
+def test_build_timelapse_youtube_metadata_includes_geolocation():
+    from src.modules.youtube.uploader import build_timelapse_youtube_metadata
+
+    vpath = Path("2026-08-17_16h55m-18h30m_Canon_4K_center_60fps_1fpi_50x_00m10s_S20-4569_W45-4383_timelapse.mp4")
+    record = {
+        "photo_count": 600,
+        "duration_seconds": 10.0,
+        "speedup_factor": 50,
+        "encoder": "h264_qsv",
+        "fps": 60,
+        "resolution": "3840x2160",
+        "metadata_json": {
+            "geo_location": {
+                "id": "passos-loc",
+                "label": "Passos Centro",
+                "lat": -20.718,
+                "lng": -46.611,
+                "city": "Passos",
+                "state": "Minas Gerais",
+                "country": "Brasil"
+            }
+        }
+    }
+    yt_config = {
+        "privacy_status": "public",
+        "category_id": "22",
+        "playlist": "Timelapses"
+    }
+
+    meta = build_timelapse_youtube_metadata(vpath, record, yt_config)
+
+    # 1. Título contém localização
+    assert "Passos, Minas Gerais" in meta["title"]
+    assert "Timelapse 4K UHD" in meta["title"]
+
+    # 2. Playlists contém a temática e a cidade
+    assert "Timelapses" in meta["playlists"]
+    assert "Passos - Minas Gerais" in meta["playlists"]
+
+    # 3. Descrição contém bloco de localização e hashtags
+    assert "📍 LOCALIZAÇÃO E HABITAT:" in meta["description"]
+    assert "Passos, Minas Gerais, Brasil" in meta["description"]
+    assert "https://www.google.com/maps?q=" in meta["description"]
+    assert "#Passos" in meta["description"]
+
+    # 4. geo_location é repassado para YouTube recordingDetails
+    assert meta["geo_location"] is not None
+    assert meta["geo_location"]["lat"] == -20.718
+    assert meta["geo_location"]["lng"] == -46.611
+    assert meta["geo_location"]["city"] == "Passos"
+
+
+def test_timelapse_stage_persists_geolocation(tmp_path, monkeypatch):
+    from src.core.config import config
+    from src.core.geo import GeoService, GeoLocation
+    from src.core.project import create_project, ProjectItem
+
+    proj_name = f"test_geo_tl_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    proj = create_project(proj_name, str(tmp_path))
+
+    # Definir localização no projeto
+    test_loc = GeoLocation(
+        id="loc-test-tl",
+        label="Ponto Teste",
+        lat=-20.456887,
+        lng=-45.438307,
+        city="Formiga",
+        state="Minas Gerais"
+    )
+    GeoService.add_location(test_loc, set_as_default=True)
+    proj.geo_location_id = "loc-test-tl"
+    proj.save_metadata()
+
+    # Criar item de timelapse
+    seq_dir = tmp_path / "4_Timelapses" / "Sec1"
+    seq_dir.mkdir(parents=True)
+    p1 = seq_dir / "IMG_0001.JPG"
+    p1.write_bytes(b"dummy photo 1")
+
+    item = ProjectItem(
+        original_path=str(p1),
+        staging_path=str(p1),
+        category="timelapse",
+        relative_dest_dir="4_Timelapses/Sec1",
+        organized_path=str(p1),
+        meta_timestamp="2026-10-24T10:00:00",
+        meta_latitude=-20.456887,
+        meta_longitude=-45.438307
+    )
+    proj.save_item(item)
+
+    monkeypatch.setattr(config, "get", lambda key, default=None: {
+        "general.destination_root": str(tmp_path),
+        "modules.timelapse": {"fps": 60, "frames_per_image": 1},
+        "modules.youtube.privacy_status": "unlisted"
+    }.get(key, default))
+
+    monkeypatch.setattr("src.modules.timelapse.stage.render_timelapse_video", lambda **kw: (True, "libx264", "", {}))
+    monkeypatch.setattr("src.modules.timelapse.stage.prepare_numbered_sequence", lambda **kw: (True, tmp_path, [p1]))
+    monkeypatch.setattr("src.modules.timelapse.stage.clean_sequence_dir", lambda *a: None)
+
+    stage = get_timelapse_stage("timelapse", "Render")
+    success = stage.run(proj, interactive=False, force_render=True)
+    assert success is True
+
+    tls = proj.get_timelapses()
+    assert len(tls) == 1
+    geo = tls[0]["metadata_json"].get("geo_location")
+    assert geo is not None
+    assert geo["city"] == "Formiga"
+    assert "_S20-4569_W45-4383_timelapse.mp4" in tls[0]["output_video_path"]
+
+
+
 
 
 
