@@ -212,6 +212,11 @@ class ConfigManager:
                 mods["timelapse_long_exposure"]["frames_per_image"] = 1
                 has_changes = True
 
+            if "video_edit" in mods:
+                if "auto_join_birds" not in mods["video_edit"]:
+                    mods["video_edit"]["auto_join_birds"] = True
+                    has_changes = True
+
             if "youtube" in mods:
                 if "timelapse_long_exposure_playlist" not in mods["youtube"]:
                     mods["youtube"]["timelapse_long_exposure_playlist"] = "Timelapses Longa Exposição"
@@ -412,6 +417,7 @@ class ConfigManager:
                     "enabled": True,
                     "render_profile": "fast",
                     "mode": "individual",
+                    "auto_join_birds": True,
                     "speed": 1.0,
                     "target_fps": 60,
                     "target_width": 3840,

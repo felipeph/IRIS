@@ -386,6 +386,9 @@ def _menu_video_edit(console: Console):
         ve_strip = config.get("modules.video_edit.strip_audio", False)
         table.add_row("6", "Remover Áudio Vídeos (Mudo)", "modules.video_edit.strip_audio", "[red]Sim (Mudo)[/red]" if ve_strip else "[green]Não (Preservar)[/green]")
         
+        ve_auto_birds = config.get("modules.video_edit.auto_join_birds", True)
+        table.add_row("7", "Auto-Join Aves (Mesmo Dia)", "modules.video_edit.auto_join_birds", "[green]Sim (Ativada)[/green]" if ve_auto_birds else "[yellow]Não (Desativada)[/yellow]")
+        
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
         
@@ -403,7 +406,7 @@ def _menu_video_edit(console: Console):
                 console.print("[red]Opção inválida! Escolha 'fast', 'balanced' ou 'quality'.[/red]")
             time.sleep(1)
         elif choice == "2":
-            console.print("Modos de Edição: [bold]individual[/bold] (Upscale 1:1 de cada vídeo individualmente), [bold]joined[/bold] (Junta os vídeos que vieram da mesma pasta de origem)")
+            console.print("Modos de Edição: [bold]individual[/bold] (Upscale 1:1 de cada vídeo), [bold]joined[/bold] (Concatena vídeos da mesma pasta). [dim]Nota: Aves da mesma espécie no mesmo dia são unificadas automaticamente se a opção 7 estiver ativa.[/dim]")
             curr = config.get("modules.video_edit.mode", "individual")
             new_val = Prompt.ask("Escolha o modo (individual/joined)", default=curr).lower().strip()
             if new_val in ["individual", "joined"]:
@@ -452,6 +455,12 @@ def _menu_video_edit(console: Console):
             curr = config.get("modules.video_edit.strip_audio", False)
             new_val = Confirm.ask("Remover áudio dos vídeos editados (produzir vídeo mudo)?", default=curr)
             config.set("modules.video_edit.strip_audio", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "7":
+            curr = config.get("modules.video_edit.auto_join_birds", True)
+            new_val = Confirm.ask("Unir automaticamente múltiplos vídeos da mesma ave gravados no mesmo dia?", default=curr)
+            config.set("modules.video_edit.auto_join_birds", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
         else:

@@ -83,15 +83,24 @@ class VideoEditStage(PipelineStage):
 
         # 2. Agrupar vídeos em sessões de trabalho
         mode = ve_config.get("mode", "individual")
-        sessions = group_videos_into_sessions(video_items, mode=mode)
+        auto_join_birds = bool(ve_config.get("auto_join_birds", True))
+        bird_min_conf = float(config.get("modules.bird_id.min_species_confidence", 0.70))
+        sessions = group_videos_into_sessions(
+            video_items,
+            mode=mode,
+            project=project,
+            auto_join_birds=auto_join_birds,
+            min_species_confidence=bird_min_conf
+        )
 
         total_sessions = len(sessions)
         speed_factor = ve_config.get("speed", 1.0)
         target_fps = ve_config.get("target_fps", 60)
         speed_label = f"{speed_factor}x"
         render_profile = ve_config.get("render_profile", "fast")
+        auto_join_label = " | Auto-Join Aves: ATIVADO" if auto_join_birds else ""
 
-        console.print(f"\n[bold cyan]=== Etapa 6: Edição e Upscale de Vídeos 4K ({len(video_items)} clipe(s) em {total_sessions} lote(s) | Modo: {mode.upper()} | Perfil: {render_profile.upper()} | Velocidade: {speed_label} | FPS Alvo: {target_fps}) ===[/bold cyan]")
+        console.print(f"\n[bold cyan]=== Etapa 6: Edição e Upscale de Vídeos 4K ({len(video_items)} clipe(s) em {total_sessions} lote(s) | Modo: {mode.upper()}{auto_join_label} | Perfil: {render_profile.upper()} | Velocidade: {speed_label} | FPS Alvo: {target_fps}) ===[/bold cyan]")
 
         # 3. Exibir Tabela Rich com resumo dos itens e status
         summary_table = Table(title="Vídeos Detectados para Edição e Upscale 4K", show_header=True, header_style="bold magenta")
@@ -186,10 +195,11 @@ class VideoEditStage(PipelineStage):
             is_done = str(out_cand.resolve()) in existing_paths and out_cand.exists()
             status_desc = "[green]✔ Já Renderizado[/green]" if is_done else "[yellow]Pendente[/yellow]"
 
+            first_fname = Path(first_it.organized_path or first_it.staging_path or first_it.original_path).name
             if len(s_items) == 1:
-                display_name = Path(first_it.staging_path).name
+                display_name = f"{first_fname} [cyan]({species_pt})[/cyan]" if species_pt else first_fname
             else:
-                display_name = f"{len(s_items)} clipes fundidos ({Path(first_it.staging_path).name} ...)"
+                display_name = f"{len(s_items)} clipes fundidos [bold cyan]({species_pt})[/bold cyan] ({first_fname} ...)" if species_pt else f"{len(s_items)} clipes fundidos ({first_fname} ...)"
 
             summary_table.add_row(
                 str(idx),

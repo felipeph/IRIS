@@ -772,3 +772,258 @@ def test_render_edited_video_software_fallback(tmp_path, monkeypatch):
     assert len(calls) == 2
     assert "libx264" in enc_used
 
+
+def test_group_videos_auto_join_birds_same_species_same_day():
+    """Valida o agrupamento automático de múltiplos vídeos da mesma espécie de ave gravados no mesmo dia."""
+    # 3 clipes de Bem-te-vi no dia 2026-10-25
+    b1 = ProjectItem(
+        original_path="/dcim/b1.mp4", staging_path="/staging/b1.mp4", organized_path="/iris/3_Videos/2026/10/25/Bem-te-vi/b1.mp4",
+        category="video", meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T09:00:00", meta_duration_str="30s"
+    )
+    b2 = ProjectItem(
+        original_path="/dcim/b2.mp4", staging_path="/staging/b2.mp4", organized_path="/iris/3_Videos/2026/10/25/Bem-te-vi/b2.mp4",
+        category="video", meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T11:30:00", meta_duration_str="45s"
+    )
+    b3 = ProjectItem(
+        original_path="/dcim/b3.mp4", staging_path="/staging/b3.mp4", organized_path="/iris/3_Videos/2026/10/25/Bem-te-vi/b3.mp4",
+        category="video", meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T16:00:00", meta_duration_str="20s"
+    )
+
+    # 2 clipes de Sabiá-laranjeira no dia 2026-10-25
+    s1 = ProjectItem(
+        original_path="/dcim/s1.mp4", staging_path="/staging/s1.mp4", organized_path="/iris/3_Videos/2026/10/25/Sabia-laranjeira/s1.mp4",
+        category="video", meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T10:00:00", meta_duration_str="40s"
+    )
+    s2 = ProjectItem(
+        original_path="/dcim/s2.mp4", staging_path="/staging/s2.mp4", organized_path="/iris/3_Videos/2026/10/25/Sabia-laranjeira/s2.mp4",
+        category="video", meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T14:00:00", meta_duration_str="50s"
+    )
+
+    # 1 clipe de Bem-te-vi no dia seguinte (2026-10-26) -> deve formar sessão separada por ser outro dia
+    b_next_day = ProjectItem(
+        original_path="/dcim/b_next.mp4", staging_path="/staging/b_next.mp4", organized_path="/iris/3_Videos/2026/10/26/Bem-te-vi/b_next.mp4",
+        category="video", meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-26T08:00:00", meta_duration_str="60s"
+    )
+
+    # 1 clipe de paisagem sem ave no dia 2026-10-25
+    land = ProjectItem(
+        original_path="/dcim/land.mp4", staging_path="/staging/land.mp4", organized_path="/iris/3_Videos/2026/10/25/land.mp4",
+        category="video", meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T12:00:00", meta_duration_str="15s"
+    )
+
+    bird_map = {
+        "/staging/b1.mp4": {"species_common": "Bem-te-vi", "species_scientific": "Pitangus sulphuratus", "confidence": 0.85, "needs_review": False},
+        "/staging/b2.mp4": {"species_common": "Bem-te-vi", "species_scientific": "Pitangus sulphuratus", "confidence": 0.90, "needs_review": False},
+        "/staging/b3.mp4": {"species_common": "Bem-te-vi", "species_scientific": "Pitangus sulphuratus", "confidence": 0.88, "needs_review": False},
+        "/staging/s1.mp4": {"species_common": "Sabiá-laranjeira", "species_scientific": "Turdus rufiventris", "confidence": 0.92, "needs_review": False},
+        "/staging/s2.mp4": {"species_common": "Sabiá-laranjeira", "species_scientific": "Turdus rufiventris", "confidence": 0.95, "needs_review": False},
+        "/staging/b_next.mp4": {"species_common": "Bem-te-vi", "species_scientific": "Pitangus sulphuratus", "confidence": 0.87, "needs_review": False},
+    }
+
+    items = [b1, b2, b3, s1, s2, b_next_day, land]
+
+    # No modo individual com auto_join_birds=True
+    sessions = group_videos_into_sessions(items, mode="individual", bird_ident_map=bird_map, auto_join_birds=True)
+
+    # Espera-se exatamente 4 sessões:
+    # 1. Bem-te-vi (2026-10-25) com 3 clipes (b1, b2, b3)
+    # 2. Sabiá-laranjeira (2026-10-25) com 2 clipes (s1, s2)
+    # 3. Paisagem (2026-10-25) com 1 clipe (land)
+    # 4. Bem-te-vi (2026-10-26) com 1 clipe (b_next_day)
+    assert len(sessions) == 4
+
+    # Sessão 1: Bem-te-vi dia 25 (primeiro clipe b1 às 09:00)
+    assert len(sessions[0]) == 3
+    assert [it.original_path for it in sessions[0]] == ["/dcim/b1.mp4", "/dcim/b2.mp4", "/dcim/b3.mp4"]
+
+    # Sessão 2: Sabiá-laranjeira dia 25 (primeiro clipe s1 às 10:00)
+    assert len(sessions[1]) == 2
+    assert [it.original_path for it in sessions[1]] == ["/dcim/s1.mp4", "/dcim/s2.mp4"]
+
+    # Sessão 3: Paisagem dia 25 (land às 12:00)
+    assert len(sessions[2]) == 1
+    assert sessions[2][0].original_path == "/dcim/land.mp4"
+
+    # Sessão 4: Bem-te-vi dia 26 (b_next_day às 08:00 do dia 26)
+    assert len(sessions[3]) == 1
+    assert sessions[3][0].original_path == "/dcim/b_next.mp4"
+
+
+def test_group_videos_auto_join_birds_different_cameras():
+    """Vídeos da mesma ave e mesmo dia, mas gravados com câmeras diferentes, não devem ser misturados."""
+    b_canon1 = ProjectItem(
+        original_path="/c1.mp4", staging_path="/staging/c1.mp4", category="video",
+        meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T10:00:00"
+    )
+    b_canon2 = ProjectItem(
+        original_path="/c2.mp4", staging_path="/staging/c2.mp4", category="video",
+        meta_camera_make="Canon", meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T11:00:00"
+    )
+    b_gopro = ProjectItem(
+        original_path="/g1.mp4", staging_path="/staging/g1.mp4", category="video",
+        meta_camera_make="GoPro", meta_camera_model="Hero 11",
+        meta_timestamp="2026-10-25T10:30:00"
+    )
+
+    bird_map = {
+        "/staging/c1.mp4": {"species_common": "Bem-te-vi", "confidence": 0.90, "needs_review": False},
+        "/staging/c2.mp4": {"species_common": "Bem-te-vi", "confidence": 0.90, "needs_review": False},
+        "/staging/g1.mp4": {"species_common": "Bem-te-vi", "confidence": 0.90, "needs_review": False},
+    }
+
+    sessions = group_videos_into_sessions([b_canon1, b_canon2, b_gopro], mode="individual", bird_ident_map=bird_map, auto_join_birds=True)
+    assert len(sessions) == 2
+    # Sessão Canon: 2 clipes
+    assert len(sessions[0]) == 2
+    assert sessions[0][0].meta_camera_model == "SX60"
+    # Sessão GoPro: 1 clipe
+    assert len(sessions[1]) == 1
+    assert sessions[1][0].meta_camera_model == "Hero 11"
+
+
+def test_group_videos_auto_join_birds_disabled():
+    """Quando auto_join_birds=False, o comportamento individual original 1:1 é preservado estritamente."""
+    b1 = ProjectItem(original_path="/b1.mp4", staging_path="/staging/b1.mp4", category="video", meta_timestamp="2026-10-25T10:00:00")
+    b2 = ProjectItem(original_path="/b2.mp4", staging_path="/staging/b2.mp4", category="video", meta_timestamp="2026-10-25T11:00:00")
+
+    bird_map = {
+        "/staging/b1.mp4": {"species_common": "Bem-te-vi", "confidence": 0.90, "needs_review": False},
+        "/staging/b2.mp4": {"species_common": "Bem-te-vi", "confidence": 0.90, "needs_review": False},
+    }
+
+    sessions = group_videos_into_sessions([b1, b2], mode="individual", bird_ident_map=bird_map, auto_join_birds=False)
+    assert len(sessions) == 2
+    assert len(sessions[0]) == 1
+    assert len(sessions[1]) == 1
+
+
+def test_group_videos_auto_join_birds_quality_filters():
+    """Vídeos com needs_review=True ou confiança abaixo do mínimo não são agrupados como ave confirmada."""
+    b1 = ProjectItem(original_path="/b1.mp4", staging_path="/staging/b1.mp4", category="video", meta_timestamp="2026-10-25T10:00:00")
+    b_low_conf = ProjectItem(original_path="/b_low.mp4", staging_path="/staging/b_low.mp4", category="video", meta_timestamp="2026-10-25T10:30:00")
+    b_review = ProjectItem(original_path="/b_rev.mp4", staging_path="/staging/b_rev.mp4", category="video", meta_timestamp="2026-10-25T11:00:00")
+
+    bird_map = {
+        "/staging/b1.mp4": {"species_common": "Bem-te-vi", "confidence": 0.85, "needs_review": False},
+        "/staging/b_low.mp4": {"species_common": "Bem-te-vi", "confidence": 0.40, "needs_review": False}, # Abaixo de 0.70
+        "/staging/b_rev.mp4": {"species_common": "Bem-te-vi", "confidence": 0.85, "needs_review": True},  # Necessita revisão
+    }
+
+    sessions = group_videos_into_sessions([b1, b_low_conf, b_review], mode="individual", bird_ident_map=bird_map, auto_join_birds=True)
+    # Apenas b1 tem alta certeza confirmada; b_low e b_rev viram itens individuais não agrupados
+    assert len(sessions) == 3
+    assert len(sessions[0]) == 1
+    assert len(sessions[1]) == 1
+    assert len(sessions[2]) == 1
+
+
+def test_group_videos_joined_mode_with_birds_and_folders():
+    """No modo joined com auto_join_birds=True, aves são unificadas por espécie e paisagens por pasta."""
+    b1 = ProjectItem(original_path="/DCIM/100CANON/b1.mp4", staging_path="/staging/b1.mp4", category="video", meta_camera_make="Canon", meta_camera_model="SX60", meta_timestamp="2026-10-25T09:00:00")
+    b2 = ProjectItem(original_path="/DCIM/100CANON/b2.mp4", staging_path="/staging/b2.mp4", category="video", meta_camera_make="Canon", meta_camera_model="SX60", meta_timestamp="2026-10-25T14:00:00")
+    land1 = ProjectItem(original_path="/DCIM/100CANON/l1.mp4", staging_path="/staging/l1.mp4", category="video", meta_camera_make="Canon", meta_camera_model="SX60", meta_timestamp="2026-10-25T10:00:00")
+    land2 = ProjectItem(original_path="/DCIM/100CANON/l2.mp4", staging_path="/staging/l2.mp4", category="video", meta_camera_make="Canon", meta_camera_model="SX60", meta_timestamp="2026-10-25T15:00:00")
+
+    bird_map = {
+        "/staging/b1.mp4": {"species_common": "Bem-te-vi", "confidence": 0.90, "needs_review": False},
+        "/staging/b2.mp4": {"species_common": "Bem-te-vi", "confidence": 0.90, "needs_review": False},
+    }
+
+    sessions = group_videos_into_sessions([b1, b2, land1, land2], mode="joined", bird_ident_map=bird_map, auto_join_birds=True)
+    # Espera-se 2 sessões: 1 para Bem-te-vi (2 clipes) e 1 para paisagens de 100CANON (2 clipes)
+    assert len(sessions) == 2
+    assert len(sessions[0]) == 2
+    assert [it.original_path for it in sessions[0]] == ["/DCIM/100CANON/b1.mp4", "/DCIM/100CANON/b2.mp4"]
+    assert len(sessions[1]) == 2
+    assert [it.original_path for it in sessions[1]] == ["/DCIM/100CANON/l1.mp4", "/DCIM/100CANON/l2.mp4"]
+
+
+def test_video_edit_stage_with_bird_auto_join(tmp_path, monkeypatch):
+    """Testa a execução do VideoEditStage unindo automaticamente vídeos da mesma espécie de ave."""
+    proj = Project("TestBirdJoinProj")
+
+    v1_file = tmp_path / "v1.mp4"
+    v2_file = tmp_path / "v2.mp4"
+    v1_file.write_bytes(b"dummy1")
+    v2_file.write_bytes(b"dummy2")
+
+    it1 = ProjectItem(
+        original_path=str(v1_file),
+        staging_path=str(v1_file),
+        organized_path=str(v1_file),
+        category="video",
+        meta_camera_make="Canon",
+        meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T09:00:00",
+        meta_width=1920,
+        meta_height=1080,
+        meta_duration_str="30s"
+    )
+    it2 = ProjectItem(
+        original_path=str(v2_file),
+        staging_path=str(v2_file),
+        organized_path=str(v2_file),
+        category="video",
+        meta_camera_make="Canon",
+        meta_camera_model="SX60",
+        meta_timestamp="2026-10-25T11:00:00",
+        meta_width=1920,
+        meta_height=1080,
+        meta_duration_str="30s"
+    )
+    proj.save_item(it1)
+    proj.save_item(it2)
+
+    # Registra identificação taxonômica no SQLite do projeto
+    proj.add_bird_identification({
+        "item_path": str(v1_file.resolve()),
+        "is_video": True,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "confidence": 0.91,
+        "needs_review": False
+    })
+    proj.add_bird_identification({
+        "item_path": str(v2_file.resolve()),
+        "is_video": True,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "species_common_en": "Great Kiskadee",
+        "confidence": 0.89,
+        "needs_review": False
+    })
+
+    # Mock de renderização
+    def mock_render(clip_paths, output_video_path, config):
+        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+        output_video_path.write_bytes(b"0" * 1000)
+        return True, "h264_qsv", "", {"final_duration_seconds": 60.0, "trim_seconds": 2.0}
+
+    monkeypatch.setattr("src.modules.video_edit.stage.render_edited_video", mock_render)
+    monkeypatch.setattr("src.modules.video_edit.stage.send_windows_toast", lambda *a, **k: None)
+    monkeypatch.setattr("src.modules.video_edit.stage.send_ntfy_notification", lambda *a, **k: None)
+
+    stage = get_video_edit_stage("video_edit", "Edição de Vídeo")
+    ok = stage.run(proj, interactive=False, mode="individual")
+    assert ok is True
+
+    # Verifica persistência no SQLite
+    recs = proj.get_edited_videos()
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["clip_count"] == 2
+    assert "Bem-te-vi" in rec["output_video_path"]
+    assert "2clipes" in rec["output_video_path"]
+    assert rec["metadata_json"]["bird_identification"]["species_common"] == "Bem-te-vi"
+
+

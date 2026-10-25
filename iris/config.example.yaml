@@ -160,6 +160,7 @@ modules:
     enabled: true
     render_profile: fast            # Perfis: 'fast' (Intel QSV hardware), 'balanced' (unsharp 3x3), 'quality' (Lanczos + deband 16-bit)
     mode: "individual"              # 'individual' (upscale 1:1) ou 'joined' (junção de vídeos da mesma pasta de origem)
+    auto_join_birds: true           # Concatena automaticamente múltiplos vídeos da mesma espécie de ave gravados no mesmo dia
     speed: 1.0                      # Multiplicador de velocidade (ex: 1.0, 2.0, 0.5)
     target_fps: 60                  # Teto de FPS (ex: 30, 60)
     target_width: 3840              # 4K UHD Largura

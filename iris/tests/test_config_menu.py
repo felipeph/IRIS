@@ -124,6 +124,19 @@ def test_video_edit_menu(mock_console):
     finally:
         config.set("modules.video_edit.speed", original_speed)
 
+def test_video_edit_auto_join_birds_menu(mock_console):
+    """Testa alternância da opção 7 (Auto-Join Aves no Mesmo Dia) no menu de edição de vídeo."""
+    original_val = config.get("modules.video_edit.auto_join_birds", True)
+    try:
+        # Escolhe opção 7 -> Confirm.ask retorna False, depois 0 para sair
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["7", "0"]), \
+             patch("src.core.config_menu.Confirm.ask", return_value=False), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_video_edit(mock_console)
+            assert config.get("modules.video_edit.auto_join_birds") is False
+    finally:
+        config.set("modules.video_edit.auto_join_birds", original_val)
+
 def test_youtube_notifications_edit(mock_console):
     """Testa edição de valor em YouTube & Notificações."""
     original_playlist = config.get("modules.youtube.playlist", "Timelapses")
