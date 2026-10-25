@@ -58,12 +58,6 @@ class ConfigManager:
                 "enabled": True
             },
             {
-                "id": "sanitization",
-                "name": "Sanitização de Metadados EXIF e Geotag",
-                "module": "src.modules.sanitization.stage",
-                "enabled": True
-            },
-            {
                 "id": "planning",
                 "name": "Planejamento e Metadados (Staging)",
                 "module": "src.modules.planning.stage",
@@ -73,6 +67,12 @@ class ConfigManager:
                 "id": "organize",
                 "name": "Organização Física (SSD)",
                 "module": "src.modules.organize.stage",
+                "enabled": True
+            },
+            {
+                "id": "sanitization",
+                "name": "Sanitização de Metadados e Geotag (Álbuns)",
+                "module": "src.modules.sanitization.stage",
                 "enabled": True
             },
             {

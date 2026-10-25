@@ -232,10 +232,6 @@ pipeline:
     module: src.modules.cleanup.stage
     name: Limpeza da Origem (Após verificação)
   - enabled: true
-    id: sanitization
-    module: src.modules.sanitization.stage
-    name: Sanitização de Metadados EXIF e Geotag
-  - enabled: true
     id: planning
     module: src.modules.planning.stage
     name: Planejamento e Metadados (Staging)
@@ -243,6 +239,10 @@ pipeline:
     id: organize
     module: src.modules.organize.stage
     name: Organização Física (SSD)
+  - enabled: true
+    id: sanitization
+    module: src.modules.sanitization.stage
+    name: Sanitização de Metadados e Geotag (Álbuns)
   - enabled: true
     id: bird_detect
     module: src.modules.bird_id.detect_stage

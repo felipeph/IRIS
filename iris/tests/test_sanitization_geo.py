@@ -89,15 +89,22 @@ def test_sanitization_geo_workflow(tmp_path, monkeypatch, mock_geo_loc):
     mock_proc.stderr = ""
 
     executed_cmds = []
+    argfile_contents = []
     def fake_subprocess_run(cmd, **kwargs):
         executed_cmds.append(list(cmd))
+        if "-@" in cmd:
+            idx = cmd.index("-@") + 1
+            if idx < len(cmd):
+                argfile = Path(cmd[idx])
+                if argfile.exists():
+                    argfile_contents.append(argfile.read_text(encoding="utf-8"))
         return mock_proc
 
     with patch("src.modules.sanitization.stage.read_gps_batch", return_value=mock_gps_return), \
          patch("src.modules.sanitization.stage.shutil.which", return_value="exiftool"), \
          patch("subprocess.run", side_effect=fake_subprocess_run):
 
-        stage = SanitizationStage("sanitization", "Sanitização de Metadados EXIF e Geotag")
+        stage = SanitizationStage("sanitization", "Sanitização de Metadados EXIF e Geotag (Álbuns)")
         success = stage.run(project)
         assert success is True
 
@@ -136,3 +143,116 @@ def test_sanitization_geo_workflow(tmp_path, monkeypatch, mock_geo_loc):
         cmd_str = " ".join(cmd)
         assert "no_gps.CR2" not in cmd_str
         assert "no_gps.mp4" not in cmd_str
+    for content in argfile_contents:
+        assert "no_gps.CR2" not in content
+        assert "no_gps.mp4" not in content
+
+
+def test_sanitization_selective_albums_and_timelapse_samples(tmp_path, mock_geo_loc):
+    """
+    Testa o comportamento seletivo pós-organização da Abordagem B1:
+    - Frames mestres em 4_Timelapses/ e 5_Astrofotografia/ são ignorados pelo ExifTool (bit-perfect).
+    - Amostras copiadas para 2_AlbunsDatas/ e fotos avulsas em 2_AlbunsDatas/ são sanitizadas.
+    """
+    project = create_project("test_sanit_selective", str(tmp_path / "source"), geo_location_id="test-formiga")
+
+    dest_root = tmp_path / "IRIS"
+    albums_dir = dest_root / "2_AlbunsDatas" / "2026" / "09" / "22"
+    tl_dir = dest_root / "4_Timelapses" / "GoPro" / "2026" / "09" / "22" / "timelapse_12-00-00"
+    astro_dir = dest_root / "5_Astrofotografia" / "Lua" / "2026" / "09" / "22" / "sessao_21-00-00"
+
+    albums_dir.mkdir(parents=True, exist_ok=True)
+    tl_dir.mkdir(parents=True, exist_ok=True)
+    astro_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Foto avulsa organizada em 2_AlbunsDatas
+    f_album = albums_dir / "2026-09-22_photo_album.jpg"
+    f_album.write_bytes(b"content_album_photo")
+    item_album = ProjectItem(
+        original_path="G:/DCIM/IMG_01.JPG",
+        staging_path=str(f_album),
+        organized_path=str(f_album),
+        relative_dest_dir="2_AlbunsDatas/2026/09/22",
+        category="avulsa",
+        status="organized",
+        file_size_bytes=len(b"content_album_photo"),
+        file_hash="hash_album"
+    )
+
+    # 2. Frame mestre de timelapse em 4_Timelapses com amostra extra em 2_AlbunsDatas
+    f_tl_master = tl_dir / "2026-09-22_tl_0001.jpg"
+    f_tl_master.write_bytes(b"content_timelapse_frame")
+
+    f_tl_sample = albums_dir / "timelapse_amostras_12-00-00" / "2026-09-22_tl_0001.jpg"
+    f_tl_sample.parent.mkdir(parents=True, exist_ok=True)
+    f_tl_sample.write_bytes(b"content_timelapse_frame_sample")
+
+    item_timelapse = ProjectItem(
+        original_path="G:/DCIM/TL_0001.JPG",
+        staging_path=str(f_tl_master),
+        organized_path=str(f_tl_master),
+        relative_dest_dir="4_Timelapses/GoPro/2026/09/22/timelapse_12-00-00",
+        category="timelapse",
+        status="organized",
+        file_size_bytes=len(b"content_timelapse_frame"),
+        file_hash="hash_tl_master",
+        extra_organized_paths_json=json.dumps([str(f_tl_sample)])
+    )
+
+    # 3. Frame mestre de astrofotografia em 5_Astrofotografia (RAW ou JPEG)
+    f_astro = astro_dir / "2026-09-22_astro_001.CR2"
+    f_astro.write_bytes(b"content_astro_raw")
+    item_astro = ProjectItem(
+        original_path="G:/DCIM/ASTRO_001.CR2",
+        staging_path=str(f_astro),
+        organized_path=str(f_astro),
+        relative_dest_dir="5_Astrofotografia/Lua/2026/09/22/sessao_21-00-00",
+        category="astro_lua",
+        status="organized",
+        file_size_bytes=len(b"content_astro_raw"),
+        file_hash="hash_astro"
+    )
+
+    with project.transaction():
+        project.save_item(item_album)
+        project.save_item(item_timelapse)
+        project.save_item(item_astro)
+
+    mock_gps_return = {
+        str(f_album.resolve()): (None, None, None),
+        str(f_tl_sample.resolve()): (None, None, None),
+    }
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = ""
+    mock_proc.stderr = ""
+
+    argfile_contents = []
+    def fake_subprocess_run(cmd, **kwargs):
+        if "-@" in cmd:
+            idx = cmd.index("-@") + 1
+            if idx < len(cmd):
+                argfile = Path(cmd[idx])
+                if argfile.exists():
+                    argfile_contents.append(argfile.read_text(encoding="utf-8"))
+        return mock_proc
+
+    with patch("src.modules.sanitization.stage.read_gps_batch", return_value=mock_gps_return), \
+         patch("src.modules.sanitization.stage.shutil.which", return_value="exiftool"), \
+         patch("subprocess.run", side_effect=fake_subprocess_run):
+
+        stage = SanitizationStage("sanitization", "Sanitização de Metadados e Geotag (Álbuns)")
+        success = stage.run(project)
+        assert success is True
+
+    # Verifica o que foi escrito nos argfiles do ExifTool
+    all_exiftool_targets = "\n".join(argfile_contents)
+
+    # 1. Foto de álbum e amostra de timelapse DEVEM ter sido passadas ao ExifTool
+    assert str(f_album.resolve()) in all_exiftool_targets
+    assert str(f_tl_sample.resolve()) in all_exiftool_targets
+
+    # 2. Frame mestre de timelapse e foto de astro NUNCA devem ter sido passados ao ExifTool
+    assert str(f_tl_master.resolve()) not in all_exiftool_targets
+    assert str(f_astro.resolve()) not in all_exiftool_targets

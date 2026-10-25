@@ -176,6 +176,12 @@ class PlanningStage(PipelineStage):
                     p_item.relative_dest_dir = str(c_item.relative_dest_dir)
                     p_item.extra_dest_dirs_json = json.dumps([str(p) for p in c_item.extra_dest_dirs])
                     p_item.burst_id = getattr(c_item, "burst_id", "") or ""
+                    if p_item.meta_latitude is None and loc:
+                        p_item.meta_latitude = loc.lat
+                        p_item.meta_longitude = loc.lng
+                        p_item.meta_gps_accuracy = loc.accuracy_m
+                        p_item.geo_source = "preset"
+                        p_item.geo_written = False
                     project.save_item(p_item)
         
         console.print("[bold green]Planejamento concluído![/bold green]")
