@@ -1108,6 +1108,227 @@ def test_timelapse_stage_persists_geolocation(tmp_path, monkeypatch):
     assert "_S20-4569_W45-4383_timelapse.mp4" in tls[0]["output_video_path"]
 
 
+def test_probe_is_multipicture_jpeg(tmp_path):
+    """Valida detecção genérica da assinatura binária CIPA DC-007 (MPF)."""
+    from src.modules.timelapse.renderer import probe_is_multipicture_jpeg
+
+    # 1. Arquivo não existente
+    assert probe_is_multipicture_jpeg(tmp_path / "non_existent.jpg") is False
+
+    # 2. JPEG padrão sem MPF
+    clean_jpg = tmp_path / "clean.jpg"
+    clean_jpg.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00" + b"\x00" * 200 + b"\xff\xd9")
+    assert probe_is_multipicture_jpeg(clean_jpg) is False
+
+    # 3. JPEG com assinatura MPF (CIPA DC-007)
+    mpf_jpg = tmp_path / "camera_mpf.jpg"
+    mpf_jpg.write_bytes(b"\xff\xd8\xff\xe1\x00\x10Exif\x00\x00\xff\xe2\x00\x18MPF\x00MM\x00*" + b"\x00" * 500 + b"\xff\xd9")
+    assert probe_is_multipicture_jpeg(mpf_jpg) is True
+
+
+def test_build_timelapse_render_cmd_force_sw_decode(tmp_path):
+    """Valida geração de comando no Modo Híbrido GPU (decodificação software + codificação h264_qsv)."""
+    out_path = tmp_path / "tl_hybrid.mp4"
+    pattern = "C:/seq/%06d.jpg"
+
+    cmd, direct_crop, deband = build_timelapse_render_cmd(
+        input_pattern=pattern,
+        output_video_path=out_path,
+        fps=60,
+        frames_per_image=1,
+        orig_w=4000,
+        orig_h=3000,
+        target_w=3840,
+        target_h=2160,
+        crop_mode="center",
+        render_profile="fast",
+        encoder_name="h264_qsv (Intel Quick Sync)",
+        encoder_args=["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "15"],
+        force_software=False,
+        force_sw_decode=True
+    )
+
+    assert direct_crop is True
+    assert deband is False
+    # Não deve ter aceleração de decodificação de hardware
+    assert "-hwaccel" not in cmd
+    assert "mjpeg_qsv" not in cmd
+    assert "vpp_qsv" not in cmd
+    # Deve usar demuxer image2 convencional
+    assert "-f" in cmd and "image2" in cmd
+    # DEVE MANTER o encoder acelerado por hardware GPU
+    assert "-c:v" in cmd and "h264_qsv" in cmd
+    vf_idx = cmd.index("-vf")
+    assert "crop=3840:2160:(iw-3840)/2:(ih-2160)/2" in cmd[vf_idx + 1]
+
+
+def test_render_timelapse_video_mpf_preflight_activates_hybrid(tmp_path, monkeypatch):
+    """Valida que foto com MPF ativa automaticamente o Modo Híbrido GPU sem tentar mjpeg_qsv."""
+    from src.modules.timelapse.renderer import render_timelapse_video
+
+    seq_dir = tmp_path / "seq_mpf"
+    seq_dir.mkdir()
+    p1 = seq_dir / "000001.jpg"
+    p1.write_bytes(b"\xff\xd8\xff\xe2\x00\x18MPF\x00MM\x00*" + b"\x00" * 500 + b"\xff\xd9")
+
+    out_video = tmp_path / "output_mpf.mp4"
+
+    captured_cmds = []
+
+    class FakeProcess:
+        def __init__(self, cmd, *args, **kwargs):
+            captured_cmds.append(cmd)
+            self.returncode = 0
+            self.stdout = []
+            self.stderr = None
+            out_video.write_bytes(b"dummy_mp4_bytes")
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr("src.modules.timelapse.renderer.detect_ffmpeg_encoder", lambda **kw: ("h264_qsv (Intel Quick Sync)", ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "15"]))
+    monkeypatch.setattr("subprocess.Popen", FakeProcess)
+
+    success, encoder, err, stats = render_timelapse_video(
+        sequence_dir=seq_dir,
+        output_video_path=out_video,
+        photo_count=1,
+        config={"fps": 60, "render_profile": "fast"},
+        orig_w=4000,
+        orig_h=3000
+    )
+
+    assert success is True
+    assert len(captured_cmds) == 1
+    cmd = captured_cmds[0]
+    # MPF detectado -> deve usar Modo Híbrido GPU (sem mjpeg_qsv, com h264_qsv)
+    assert "mjpeg_qsv" not in cmd
+    assert "h264_qsv" in cmd
+    assert stats["render_mode"] == "qsv_hybrid"
+
+
+def test_render_timelapse_video_qsv_failure_fallback_hierarchy(tmp_path, monkeypatch):
+    """Valida a hierarquia de fallback: falha no decodificador HW migra para Modo Híbrido na GPU."""
+    from src.modules.timelapse.renderer import render_timelapse_video
+
+    seq_dir = tmp_path / "seq_clean"
+    seq_dir.mkdir()
+    p1 = seq_dir / "000001.jpg"
+    # JPEG sem MPF
+    p1.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 200 + b"\xff\xd9")
+
+    out_video = tmp_path / "output_fallback.mp4"
+
+    call_index = 0
+    captured_cmds = []
+
+    class FakeProcessFallback:
+        def __init__(self, cmd, *args, **kwargs):
+            nonlocal call_index
+            captured_cmds.append(cmd)
+            call_index += 1
+            if call_index == 1:
+                # Primeira tentativa (Camada 1: 100% HW) falha simulando erro de VPP ou mjpeg_qsv
+                self.returncode = 1
+                self.stdout = []
+                import io
+                self.stderr = io.StringIO("Error running VPP: invalid video parameters (-15)")
+            else:
+                # Segunda tentativa (Camada 2: Modo Híbrido GPU) tem sucesso
+                self.returncode = 0
+                self.stdout = []
+                self.stderr = None
+                out_video.write_bytes(b"dummy_mp4_bytes")
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(
+        "src.modules.timelapse.renderer.detect_ffmpeg_encoder",
+        lambda **kw: ("libx264 (CPU)", ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "15"]) if kw.get("force_cpu") else ("h264_qsv (Intel Quick Sync)", ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "15"])
+    )
+    monkeypatch.setattr("subprocess.Popen", FakeProcessFallback)
+
+    success, encoder, err, stats = render_timelapse_video(
+        sequence_dir=seq_dir,
+        output_video_path=out_video,
+        photo_count=1,
+        config={"fps": 60, "render_profile": "fast"},
+        orig_w=4000,
+        orig_h=3000
+    )
+
+    assert success is True
+    assert len(captured_cmds) == 2
+    # Tentativa 1: tentou mjpeg_qsv
+    assert "mjpeg_qsv" in captured_cmds[0]
+    # Tentativa 2: fallback para Modo Híbrido MANTENDO h264_qsv na GPU (NÃO cai para CPU)
+    assert "mjpeg_qsv" not in captured_cmds[1]
+    assert "h264_qsv" in captured_cmds[1]
+    assert "libx264" not in captured_cmds[1]
+    assert stats["render_mode"] == "qsv_hybrid"
+
+
+def test_render_timelapse_video_persistent_qsv_failure_falls_to_cpu(tmp_path, monkeypatch):
+    """Valida que após esgotar as tentativas de QSV, ocorre fallback final para CPU (libx264)."""
+    from src.modules.timelapse.renderer import render_timelapse_video
+
+    seq_dir = tmp_path / "seq_fail"
+    seq_dir.mkdir()
+    p1 = seq_dir / "000001.jpg"
+    p1.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 200 + b"\xff\xd9")
+
+    out_video = tmp_path / "output_cpu_fallback.mp4"
+
+    call_count = 0
+    captured_encoders = []
+
+    class FakeProcessAllFailThenCPUSucceeds:
+        def __init__(self, cmd, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            enc_name = cmd[cmd.index("-c:v") + 1] if "-c:v" in cmd else "unknown"
+            captured_encoders.append(enc_name)
+            if enc_name == "libx264":
+                # Sucesso apenas na CPU
+                self.returncode = 0
+                self.stdout = []
+                self.stderr = None
+                out_video.write_bytes(b"dummy_mp4_bytes")
+            else:
+                # Falha em todas as tentativas de QSV
+                self.returncode = 1
+                self.stdout = []
+                import io
+                self.stderr = io.StringIO("Device initialization failed")
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(
+        "src.modules.timelapse.renderer.detect_ffmpeg_encoder",
+        lambda **kw: ("libx264 (CPU)", ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "15"]) if kw.get("force_cpu") else ("h264_qsv (Intel Quick Sync)", ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "15"])
+    )
+    monkeypatch.setattr("src.modules.timelapse.renderer.clear_encoder_cache", lambda: None)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("subprocess.Popen", FakeProcessAllFailThenCPUSucceeds)
+
+    success, encoder, err, stats = render_timelapse_video(
+        sequence_dir=seq_dir,
+        output_video_path=out_video,
+        photo_count=1,
+        config={"fps": 60, "render_profile": "fast"},
+        orig_w=4000,
+        orig_h=3000,
+        max_qsv_retries=1  # Reduzido para teste rápido
+    )
+
+    assert success is True
+    # Deve ter tentado QSV, depois insistido no QSV, e finalmente caído em libx264
+    assert "libx264" in captured_encoders[-1]
+    assert stats["render_mode"] == "software_cpu"
+
+
 
 
 

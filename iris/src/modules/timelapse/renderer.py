@@ -12,9 +12,24 @@ from rich.console import Console
 from rich.live import Live
 
 from src.core.ui import PipelineUI
-from src.modules.timelapse.encoder import detect_ffmpeg_encoder
+from src.modules.timelapse.encoder import detect_ffmpeg_encoder, clear_encoder_cache
 
 console = Console()
+
+def probe_is_multipicture_jpeg(sample_photo: Path) -> bool:
+    """
+    Detecta genericamente se a imagem JPEG contém metadados MPF (Multi-Picture Format - CIPA DC-007).
+    Lê apenas os primeiros 64KB do arquivo para identificar o marcador APP2 com assinatura MPF\\0.
+    Executa em menos de 0.3 ms e é 100% agnóstico de câmera/fabricante.
+    """
+    try:
+        if not sample_photo or not sample_photo.exists():
+            return False
+        with open(sample_photo, "rb") as f:
+            header = f.read(65536)
+            return b"MPF\x00" in header
+    except Exception:
+        return False
 
 def build_video_filter_chain(
     crop_mode: str = "bottom",
@@ -82,7 +97,8 @@ def build_timelapse_render_cmd(
     encoder_name: str = "h264_qsv (Intel Quick Sync)",
     encoder_args: Optional[List[str]] = None,
     deband_cfg: Optional[Dict[str, Any]] = None,
-    force_software: bool = False
+    force_software: bool = False,
+    force_sw_decode: bool = False
 ) -> Tuple[List[str], bool, bool]:
     """
     Constrói a linha de comando do FFmpeg para renderização de timelapse de acordo com o perfil.
@@ -111,7 +127,13 @@ def build_timelapse_render_cmd(
 
     is_direct_crop = bool(orig_w >= target_w and orig_h >= target_h) if crop_m != "full" else False
 
-    use_qsv_hw = (profile == "fast" and not force_software and "qsv" in encoder_name.lower() and crop_m != "full")
+    use_qsv_hw = (
+        profile == "fast"
+        and not force_software
+        and not force_sw_decode
+        and "qsv" in encoder_name.lower()
+        and crop_m != "full"
+    )
 
     if use_qsv_hw:
         # Pipeline 100% em hardware Intel QSV (mjpeg_qsv decode + vpp_qsv crop/scale + h264_qsv encode)
@@ -224,7 +246,10 @@ def render_timelapse_video(
     config: Dict[str, Any],
     orig_w: int = 0,
     orig_h: int = 0,
-    force_software: bool = False
+    force_software: bool = False,
+    force_sw_decode: bool = False,
+    attempt: int = 1,
+    max_qsv_retries: int = 2
 ) -> Tuple[bool, str, str, Dict[str, Any]]:
     """
     Renderiza vídeo timelapse 4K UHD via FFmpeg demuxer image2 de acordo com o perfil configurado.
@@ -248,6 +273,13 @@ def render_timelapse_video(
     if deband_cfg is None:
         deband_cfg = {"enabled": True, "add_grain": True}
 
+    # 0. Pre-flight agnóstico: detecta formato Multi-Picture (MPF / CIPA DC-007) na primeira foto
+    if not force_software and not force_sw_decode and render_profile == "fast":
+        sample_photos = sorted(sequence_dir.glob("*.jpg"))
+        if sample_photos and probe_is_multipicture_jpeg(sample_photos[0]):
+            force_sw_decode = True
+            console.print("[cyan]⚡ Formato Multi-Picture (MPF / CIPA DC-007) detectado na sequência. Ativando decodificação segura via software + aceleração de codificação por GPU (h264_qsv)...[/cyan]")
+
     # 1. Detecta acelerador
     encoder_name, encoder_args = detect_ffmpeg_encoder(preset=preset, crf=crf, force_cpu=force_software)
 
@@ -270,7 +302,8 @@ def render_timelapse_video(
         encoder_name=encoder_name,
         encoder_args=encoder_args,
         deband_cfg=deband_cfg,
-        force_software=force_software
+        force_software=force_software,
+        force_sw_decode=force_sw_decode
     )
 
     total_frames = max(1, photo_count * frames_per_image)
@@ -405,12 +438,15 @@ def render_timelapse_video(
                     previsao_fim_str=datetime.now().strftime("%H:%M:%S")
                 ))
                 elapsed_sec = round(time.time() - start_time, 2)
+                render_mode = "qsv_full" if ("-c:v" in cmd and "mjpeg_qsv" in cmd) else ("qsv_hybrid" if "qsv" in encoder_name.lower() else "software_cpu")
                 render_stats = {
                     "render_time_seconds": elapsed_sec,
                     "total_frames": total_frames,
                     "avg_fps": round(total_frames / max(0.001, elapsed_sec), 1),
                     "encoder": encoder_name,
                     "render_profile": render_profile,
+                    "render_mode": render_mode,
+                    "attempts": attempt,
                     "is_direct_crop": is_direct_crop,
                     "target_width": target_w,
                     "target_height": target_h,
@@ -427,9 +463,16 @@ def render_timelapse_video(
                 return True, encoder_name, "", render_stats
             else:
                 err_detail = "".join(stderr_lines[-8:]) if stderr_lines else f"Código {process.returncode}"
-                # Fallback automático: se falhou no modo fast por hardware, tenta via software
-                if render_profile == "fast" and not force_software:
-                    console.print("\n[yellow]⚠ Falha no decodificador de hardware QSV (mjpeg_qsv). Acionando fallback automático para decodificação em software...[/yellow]")
+
+                if output_video_path.exists():
+                    try:
+                        output_video_path.unlink()
+                    except Exception:
+                        pass
+
+                # Camada 1 -> Camada 2: Se falhou no modo fast por hardware (mjpeg_qsv / vpp_qsv), tenta Modo Híbrido GPU
+                if render_profile == "fast" and not force_sw_decode and not force_software and "qsv" in encoder_name.lower():
+                    console.print("\n[yellow]⚠ Decodificador de hardware QSV incompatível com a sequência. Mantendo codificação por GPU (h264_qsv) e acionando decodificação via software (Modo Híbrido)...[/yellow]")
                     return render_timelapse_video(
                         sequence_dir=sequence_dir,
                         output_video_path=output_video_path,
@@ -437,8 +480,45 @@ def render_timelapse_video(
                         config=config,
                         orig_w=orig_w,
                         orig_h=orig_h,
-                        force_software=True
+                        force_software=False,
+                        force_sw_decode=True,
+                        attempt=1,
+                        max_qsv_retries=max_qsv_retries
                     )
+
+                # Camada 2: Insistência no codificador GPU QSV (retentativas com limpeza de cache)
+                if not force_software and "qsv" in encoder_name.lower() and attempt <= max_qsv_retries:
+                    console.print(f"\n[yellow]⚠ Erro temporário no codificador GPU QSV. Limpando cache do driver e insistindo no hardware (tentativa {attempt}/{max_qsv_retries})...[/yellow]")
+                    clear_encoder_cache()
+                    time.sleep(1.5)
+                    return render_timelapse_video(
+                        sequence_dir=sequence_dir,
+                        output_video_path=output_video_path,
+                        photo_count=photo_count,
+                        config=config,
+                        orig_w=orig_w,
+                        orig_h=orig_h,
+                        force_software=False,
+                        force_sw_decode=True,
+                        attempt=attempt + 1,
+                        max_qsv_retries=max_qsv_retries
+                    )
+
+                # Camada 3: Fallback terminal para CPU (libx264) apenas em último caso
+                if not force_software:
+                    console.print("\n[bold red]⚠ Aceleração Intel QSV na GPU falhou após todas as tentativas. Acionando fallback final para CPU (libx264 - pode ser muito lento)...[/bold red]")
+                    return render_timelapse_video(
+                        sequence_dir=sequence_dir,
+                        output_video_path=output_video_path,
+                        photo_count=photo_count,
+                        config=config,
+                        orig_w=orig_w,
+                        orig_h=orig_h,
+                        force_software=True,
+                        force_sw_decode=False,
+                        attempt=1
+                    )
+
                 return False, encoder_name, err_detail, {}
 
     except KeyboardInterrupt:
