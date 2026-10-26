@@ -406,4 +406,89 @@ def test_youtube_upload_stage_releases_media_file_descriptor(tmp_path):
         assert ok is True
         mock_media._fd.close.assert_called_once()
 
+def test_youtube_upload_stage_uses_default_64mb_chunk_size(tmp_path):
+    proj_dir = tmp_path / "project_root"
+    proj_dir.mkdir()
+    project = create_project("test_stage_chunk_64mb", str(proj_dir))
+
+    video_path = tmp_path / "tl_chunk.mp4"
+    video_path.write_bytes(b"dummy video content")
+
+    project.save_timelapse({
+        "output_video_path": str(video_path.resolve()),
+        "status": "rendered"
+    })
+
+    stage = YouTubeUploadStage("youtube", "Publicação no YouTube")
+    mock_youtube = MagicMock()
+    mock_insert_req = MagicMock()
+    mock_insert_req.next_chunk.return_value = (None, {"id": "uploaded_vid_chunk"})
+    mock_youtube.videos().insert.return_value = mock_insert_req
+
+    with patch("src.modules.youtube.stage.get_authenticated_service", return_value=mock_youtube), \
+         patch("src.modules.youtube.stage.MediaFileUpload") as mock_media_cls, \
+         patch("src.modules.youtube.stage.add_video_to_playlist"), \
+         patch("src.modules.youtube.stage.send_windows_toast"), \
+         patch("src.modules.youtube.stage.send_ntfy_notification"), \
+         patch("src.modules.youtube.stage.time.sleep"), \
+         patch("src.modules.youtube.stage.execute_post_upload_cleanup"):
+
+        mock_media_inst = MagicMock()
+        mock_media_inst._fd = None
+        mock_media_cls.return_value = mock_media_inst
+
+        ok = stage.run(project, interactive=False)
+        assert ok is True
+
+        mock_media_cls.assert_called_once()
+        _, kwargs = mock_media_cls.call_args
+        # 64MB = 64 * 1024 * 1024 = 67.108.864 bytes
+        assert kwargs.get("chunksize") == 64 * 1024 * 1024
+        assert kwargs.get("resumable") is True
+
+def test_youtube_upload_stage_uses_custom_chunk_size(tmp_path):
+    proj_dir = tmp_path / "project_root"
+    proj_dir.mkdir()
+    project = create_project("test_stage_custom_chunk", str(proj_dir))
+
+    video_path = tmp_path / "tl_custom_chunk.mp4"
+    video_path.write_bytes(b"dummy video content 2")
+
+    project.save_timelapse({
+        "output_video_path": str(video_path.resolve()),
+        "status": "rendered"
+    })
+
+    stage = YouTubeUploadStage("youtube", "Publicação no YouTube")
+    mock_youtube = MagicMock()
+    mock_insert_req = MagicMock()
+    mock_insert_req.next_chunk.return_value = (None, {"id": "uploaded_vid_custom"})
+    mock_youtube.videos().insert.return_value = mock_insert_req
+
+    orig_chunk = config.get("modules.youtube.chunk_size_mb", 64)
+    try:
+        config.set("modules.youtube.chunk_size_mb", 32)
+        with patch("src.modules.youtube.stage.get_authenticated_service", return_value=mock_youtube), \
+             patch("src.modules.youtube.stage.MediaFileUpload") as mock_media_cls, \
+             patch("src.modules.youtube.stage.add_video_to_playlist"), \
+             patch("src.modules.youtube.stage.send_windows_toast"), \
+             patch("src.modules.youtube.stage.send_ntfy_notification"), \
+             patch("src.modules.youtube.stage.time.sleep"), \
+             patch("src.modules.youtube.stage.execute_post_upload_cleanup"):
+
+            mock_media_inst = MagicMock()
+            mock_media_inst._fd = None
+            mock_media_cls.return_value = mock_media_inst
+
+            ok = stage.run(project, interactive=False)
+            assert ok is True
+
+            mock_media_cls.assert_called_once()
+            _, kwargs = mock_media_cls.call_args
+            # 32MB = 32 * 1024 * 1024 = 33.554.432 bytes
+            assert kwargs.get("chunksize") == 32 * 1024 * 1024
+    finally:
+        config.set("modules.youtube.chunk_size_mb", orig_chunk)
+
+
 

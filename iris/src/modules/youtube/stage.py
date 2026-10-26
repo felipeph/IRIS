@@ -320,7 +320,9 @@ class YouTubeUploadStage(PipelineStage):
             if rec_details:
                 body["recordingDetails"] = rec_details
 
-            chunk_size = 8 * 1024 * 1024  # 8MB
+            chunk_size_mb = yt_config.get("chunk_size_mb", 64)
+            # A YouTube Data API exige múltiplos de 256 KB (262.144 bytes)
+            chunk_size = max(256 * 1024, int(chunk_size_mb * 1024 * 1024))
             media = None
             request = None
             response = None

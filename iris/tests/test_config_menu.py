@@ -149,6 +149,19 @@ def test_youtube_notifications_edit(mock_console):
     finally:
         config.set("modules.youtube.playlist", original_playlist)
 
+def test_youtube_notifications_chunk_size_edit(mock_console):
+    """Testa edição da opção 8 (Tamanho do Chunk Upload em MB) em YouTube & Notificações."""
+    original_chunk = config.get("modules.youtube.chunk_size_mb", 64)
+    try:
+        # Escolhe opção 8 (Chunk Size) -> "128", depois 0 para sair
+        with patch("src.core.config_menu.Prompt.ask", side_effect=["8", "128", "0"]), \
+             patch("src.core.config_menu.time.sleep"):
+            _menu_youtube_notifications(mock_console)
+            assert config.get("modules.youtube.chunk_size_mb") == 128
+    finally:
+        config.set("modules.youtube.chunk_size_mb", original_chunk)
+
+
 def test_timelapse_long_exposure_fpi_edit(mock_console):
     """Testa edição da opção 8 (FPI - Frames por Foto) em Timelapses de Longa Exposição."""
     original_fpi = config.get("modules.timelapse_long_exposure.frames_per_image", 1)
@@ -273,6 +286,29 @@ def test_config_manager_auto_migrates_long_exposure_fpi(tmp_path: Path):
         cm = ConfigManager()
         cm.load()
         assert cm.get("modules.timelapse_long_exposure.frames_per_image") == 1
+
+
+def test_config_manager_auto_migrates_youtube_chunk_size(tmp_path: Path):
+    """Garante que ConfigManager insere chunk_size_mb em módulos legados de youtube."""
+    import yaml
+    from src.core.config import ConfigManager
+
+    test_cfg_file = tmp_path / "legacy_yt_config.yaml"
+    legacy_data = {
+        "modules": {
+            "youtube": {
+                "enabled": True,
+                "playlist": "Timelapses"
+            }
+        }
+    }
+    with open(test_cfg_file, "w", encoding="utf-8") as f:
+        yaml.dump(legacy_data, f)
+
+    with patch("src.core.config.CONFIG_FILE", test_cfg_file):
+        cm = ConfigManager()
+        cm.load()
+        assert cm.get("modules.youtube.chunk_size_mb") == 64
 
 
 def test_bird_id_menu_burst_consensus_edit(mock_console):

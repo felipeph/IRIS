@@ -17,7 +17,7 @@ O sistema utiliza a **YouTube Data API v3** oficial do Google:
 
 ## 2. Upload Resumable em Chunks com Barra Rich
 
-Para arquivos pesados em 4K UHD, o upload via HTTP simples é propenso a interrupções. O IRIS implementa o protocolo de **Resumable Upload em Chunks de 5MB**:
+Para arquivos pesados em 4K UHD, o upload via HTTP simples é propenso a interrupções. O IRIS implementa o protocolo de **Resumable Upload em Chunks de 64MB** (configurável via `modules.youtube.chunk_size_mb`):
 
 ```mermaid
 sequenceDiagram
@@ -28,11 +28,11 @@ sequenceDiagram
     IRIS->>GOOGLE: 1. POST /upload/youtube/v3/videos?uploadType=resumable\n(Metadados: Título, Descrição, Tags, Privacidade)
     GOOGLE-->>IRIS: 2. HTTP 200 + Header Location: <upload_uri>
     
-    loop Para cada chunk de 5MB
+    loop Para cada chunk de 64MB
         IRIS->>GOOGLE: 3. PUT <upload_uri> (Bytes X até Y de Z)
         alt Upload Incompleto
             GOOGLE-->>IRIS: 4. HTTP 308 Resume Incomplete (Range: 0-Y)
-            Note over IRIS: Atualiza Barra Rich (Velocidade Mbps + ETA)
+            Note over IRIS: Atualiza Barra Rich (Velocidade MB/s + ETA)
         else Upload Concluído
             GOOGLE-->>IRIS: 5. HTTP 200 OK + JSON {id: "video_id", status: ...}
         end

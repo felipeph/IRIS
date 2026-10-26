@@ -497,6 +497,9 @@ def _menu_youtube_notifications(console: Console):
         auto_clean_yt = config.get("modules.youtube.auto_cleanup_videos", False)
         table.add_row("7", "Limpeza s/ Confirmação", "modules.youtube.auto_cleanup_videos", "[green]Sim (Auto)[/green]" if auto_clean_yt else "[yellow]Não (Confirmar)[/yellow]")
         
+        chunk_mb = config.get("modules.youtube.chunk_size_mb", 64)
+        table.add_row("8", "Tamanho do Chunk Upload", "modules.youtube.chunk_size_mb", f"{chunk_mb} MB")
+        
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
         
@@ -545,6 +548,19 @@ def _menu_youtube_notifications(console: Console):
             new_val = Confirm.ask("Excluir vídeos locais automaticamente sem pedir confirmação no terminal?", default=curr)
             config.set("modules.youtube.auto_cleanup_videos", new_val)
             console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "8":
+            curr = config.get("modules.youtube.chunk_size_mb", 64)
+            new_val = Prompt.ask("Tamanho do chunk de upload em MB (recomendado: 64, mínimo: 1)", default=str(curr))
+            try:
+                val_int = int(new_val)
+                if val_int >= 1:
+                    config.set("modules.youtube.chunk_size_mb", val_int)
+                    console.print("[green]Salvo![/green]")
+                else:
+                    console.print("[red]Valor deve ser maior ou igual a 1 MB![/red]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

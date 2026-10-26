@@ -221,6 +221,9 @@ class ConfigManager:
                 if "timelapse_long_exposure_playlist" not in mods["youtube"]:
                     mods["youtube"]["timelapse_long_exposure_playlist"] = "Timelapses Longa Exposição"
                     has_changes = True
+                if "chunk_size_mb" not in mods["youtube"]:
+                    mods["youtube"]["chunk_size_mb"] = 64
+                    has_changes = True
 
             if "bird_id" in mods:
                 if "enable_burst_consensus" not in mods["bird_id"]:
@@ -432,6 +435,7 @@ class ConfigManager:
                 },
                 "youtube": {
                     "enabled": True,
+                    "chunk_size_mb": 64,
                     "playlist": "Timelapses",
                     "timelapse_long_exposure_playlist": "Timelapses Longa Exposição",
                     "video_playlist": "Natureza 4K UHD",

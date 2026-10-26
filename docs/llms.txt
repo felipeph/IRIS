@@ -21,7 +21,7 @@ O IRIS é uma plataforma autônoma de linha de comando (CLI) desenvolvida em Pyt
 5. Limpeza (cleanup): Higienização auditada da mídia de origem pós-verificação formal de integridade via Send2Trash.
 6. Timelapse 4K (timelapse): Renderização 4K UHD 60fps Lanczos, crop adaptativo (bottom, center, top) e Deband 16-bit com ruído anti-banding para VP09/AV01 no YouTube.
 7. Edição de Vídeo 4K (video_edit): Trimming de 2.0s contra tremidos de botão, aceleração dinâmica (--speed=Nx), upscale 4K Lanczos e filtro Unsharp Mask.
-8. YouTube (youtube): YouTube Data API v3 OAuth 2.0 com Resumable Upload em chunks de 5MB, fichas técnicas detalhadas e gestão automática de playlists.
+8. YouTube (youtube): YouTube Data API v3 OAuth 2.0 com Resumable Upload em chunks de 64MB (configurável), fichas técnicas detalhadas e gestão automática de playlists.
 9. Astrofotografia Lunar Stacking (astro_stack): Pré-processamento com corte de disco lunar em coordenadas inteiras e empilhamento multiponto PSS headless em TIFFs 16-bit.
 10. Astrofotografia Wavelets (astro_sharpen): Motor À Trous B3-spline multiescala com algoritmo Limb Guard contra halos no limbo lunar, Deconvolução Richardson-Lucy e família de presets RegiStax (PSNR 49.0 dB).
 11. CLI iris-astro (astro): Comandos autônomos de terminal: iris-astro stack, iris-astro sharpen e iris-astro pipeline.

@@ -37,7 +37,7 @@ O IRIS é uma plataforma de linha de comando (CLI) desenvolvida em Python para o
 7. Edição de Vídeo 4K (video_edit):
    - Trimming de 2.0s contra tremidos mecânicos, aceleração dinâmica (--speed=Nx), upscale 4K Lanczos e filtro Unsharp Mask.
 8. YouTube (youtube):
-   - YouTube Data API v3 OAuth 2.0 com Resumable Upload em chunks de 5MB, fichas técnicas detalhadas e gestão automática de playlists.
+   - YouTube Data API v3 OAuth 2.0 com Resumable Upload em chunks de 64MB (configurável), fichas técnicas detalhadas e gestão automática de playlists.
 9. Astrofotografia Lunar Stacking (astro_stack):
    - Pré-processamento de RAWs com recorte centralizado de disco lunar em coordenadas inteiras e empilhamento multiponto PSS headless em TIFFs 16-bit.
 10. Astrofotografia Wavelets (astro_sharpen):
