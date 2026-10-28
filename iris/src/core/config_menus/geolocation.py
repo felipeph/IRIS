@@ -251,3 +251,4 @@ def _menu_geolocation(console: Console):
             except ValueError:
                 console.print("[red]Opção inválida![/red]")
                 time.sleep(1)
+

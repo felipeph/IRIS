@@ -217,3 +217,4 @@ def _menu_youtube_notifications(console: Console):
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
+

@@ -269,3 +269,4 @@ def _extract_temporal_context(video_path: Path, record: Dict[str, Any]) -> Tuple
         date_part = datetime.now().strftime("%Y-%m-%d")
 
     return date_part, time_str
+

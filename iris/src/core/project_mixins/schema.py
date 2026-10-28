@@ -118,3 +118,4 @@ SHARED_TABLES_DDL = [
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"""
 ]
+

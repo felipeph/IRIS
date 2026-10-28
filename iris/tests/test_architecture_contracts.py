@@ -160,3 +160,4 @@ def test_modular_facades_export_all_contracts_and_stay_compact():
     assert cm_lines < 350, f"config_menu.py voltou a crescer demais ({cm_lines} linhas)"
     assert desc_lines < 350, f"describer.py voltou a crescer demais ({desc_lines} linhas)"
     assert proj_lines < 350, f"project.py voltou a crescer demais ({proj_lines} linhas)"
+

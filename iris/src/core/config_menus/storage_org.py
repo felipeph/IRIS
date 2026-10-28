@@ -254,3 +254,4 @@ def _menu_organization_classification(console: Console):
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
+

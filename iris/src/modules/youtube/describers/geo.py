@@ -94,3 +94,4 @@ def build_geo_hashtags(loc: GeoLocation) -> List[str]:
         if "#Brasil" not in tags:
             tags.append("#Brasil")
     return [t for t in tags if t]
+

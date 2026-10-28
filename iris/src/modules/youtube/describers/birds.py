@@ -290,3 +290,4 @@ def resolve_bird_target_playlists(
         _add(yt_config.get("video_playlist", "Natureza 4K UHD"))
 
     return targets
+

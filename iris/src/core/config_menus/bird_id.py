@@ -317,3 +317,4 @@ def _menu_bird_id(console: Console):
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
+

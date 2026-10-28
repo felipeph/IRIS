@@ -549,3 +549,4 @@ def reconcile_all_projects_with_central(central_db_file: Optional[Path] = None) 
             project_name, project_db_file=db_path, central_db_file=central_db_file
         )
     return results
+

@@ -285,3 +285,4 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
         "bird_info": bird_info,
         "geo_location": loc.to_dict() if loc else None
     }
+

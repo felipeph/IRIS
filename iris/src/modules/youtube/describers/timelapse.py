@@ -335,3 +335,4 @@ Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IR
 """.replace("\r\n", "\n")
 
     return description[:5000]
+

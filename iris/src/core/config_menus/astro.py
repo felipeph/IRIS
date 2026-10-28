@@ -156,3 +156,4 @@ def _menu_astro(console: Console):
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
+

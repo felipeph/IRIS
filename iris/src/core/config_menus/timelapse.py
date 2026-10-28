@@ -261,3 +261,4 @@ def _menu_timelapse_long_exposure(console: Console):
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
+
