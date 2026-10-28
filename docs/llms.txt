@@ -1,31 +1,37 @@
 # IRIS — Imaging Resources and Integration System
-> Central de Engenharia e Automação de Mídia para Fotografia, Vídeo 4K, Astrofotografia Lunar e YouTube.
+> Central de Engenharia e Automação de Mídia para Fotografia, Ornitologia por IA, Vídeo 4K, Astrofotografia Lunar e YouTube.
 > Repositório: https://github.com/felipeph/IRIS
 > Documentação: https://felipeph.github.io/IRIS/
 
 ## Resumo Executivo
-O IRIS é uma plataforma autônoma de linha de comando (CLI) desenvolvida em Python para gerenciar o ciclo de vida de mídias de fotografia e vídeo de natureza. Ele substitui processos manuais por um pipeline de software unificado, idempotente e resiliente a falhas.
+O IRIS é uma plataforma CLI em Python que orquestra de ponta a ponta fluxos audiovisuais de natureza e astrofotografia: ingestão segura, organização por categorias e rajadas, geolocalização reversa, identificação taxonômica de aves (YOLOv8s + iNaturalist API v2 + catálogo global), empilhamento e wavelets lunares, renderização de timelapses e vídeos 4K (com auto-join por ave/dia) e publicação no YouTube.
 
 ## Invariantes e Princípios de Arquitetura
-- Zero Data Loss: Nenhum arquivo original é deletado sem confirmação prévia de hash verificado (xxHash64) no destino e envio prioritário para a lixeira (Send2Trash).
-- Dual-Database SQLite com WAL Mode: iris_central.db para catálogo global e <projeto>.db para estado granular por arquivo. Propriedades ACID completas sem servidores externos.
-- Concorrência Segura: ProjectLock baseado em arquivo atômico com PID e heartbeat (TTL de 300 segundos).
-- GPU First com Fallback: Renderização FFmpeg acelerada via NVENC/QSV/AMF com cache de sondagem, cooldown de 1.0s de VRAM e transição transparente para CPU (libx264).
-- Isolamento de Licenças: Integração com PlanetarySystemStacker (GPL-3) via subprocesso isolado, mantendo o código mestre do IRIS sob licença MIT.
+- Zero Data Loss: Nenhum arquivo original é removido sem hash xxHash64 verificado no SSD e envio prioritário para a Lixeira (Send2Trash). Arquivos RAW e vídeos originais nunca são regravados pelo ExifTool.
+- Dual-Database SQLite com WAL Mode (Schema v2): `iris_central.db` (projetos, `species_catalog` e tabelas espelhadas) e `<projeto>.db` (tabela `items` + Dual-Write via ATTACH DATABASE e transações SAVEPOINT).
+- Arquitetura Modular com Fachadas Retrocompatíveis:
+  - `src/core/config_menu.py` + `src/core/config_menus/*` (9 submenus temáticos).
+  - `src/core/project.py` + `src/core/project_mixins/*` (`schema`, `base`, `items`, `media`, `astro`, `birds`, `central_db`).
+  - `src/modules/youtube/describer.py` + `src/modules/youtube/describers/*` (`formatting`, `geo`, `birds`, `timelapse`, `video_edit`).
+- Concorrência Segura: `ProjectLock` atômico via `os.O_CREAT | os.O_EXCL` com PID e TTL.
 
-## Módulos do Pipeline (Estágios)
-1. Ingestão (ingestion): CopyStrategy (RAM 4MB buffer + xxHash64 simultâneo + os.fsync) e MoveStrategy multithreaded em 5 fases.
-2. Sanitização EXIF (sanitization): Remoção de blocos MPF, MakerNotes Canon e trailers pós-EOI via ExifTool para Google Fotos Storage Saver sem recompressão.
-3. Planejamento (planning): Extração de metadados ópticos e categorização preditiva.
-4. Organização Física (organize): Particionamento em 7 categorias numéricas, renomeação semântica rica e amostragem de timelapses para álbuns.
-5. Limpeza (cleanup): Higienização auditada da mídia de origem pós-verificação formal de integridade via Send2Trash.
-6. Timelapse 4K (timelapse): Renderização 4K UHD 60fps Lanczos, crop adaptativo (bottom, center, top) e Deband 16-bit com ruído anti-banding para VP09/AV01 no YouTube.
-7. Edição de Vídeo 4K (video_edit): Trimming de 2.0s contra tremidos de botão, aceleração dinâmica (--speed=Nx), upscale 4K Lanczos e filtro Unsharp Mask.
-8. YouTube (youtube): YouTube Data API v3 OAuth 2.0 com Resumable Upload em chunks de 64MB (configurável), fichas técnicas detalhadas e gestão automática de playlists.
-9. Astrofotografia Lunar Stacking (astro_stack): Pré-processamento com corte de disco lunar em coordenadas inteiras e empilhamento multiponto PSS headless em TIFFs 16-bit.
-10. Astrofotografia Wavelets (astro_sharpen): Motor À Trous B3-spline multiescala com algoritmo Limb Guard contra halos no limbo lunar, Deconvolução Richardson-Lucy e família de presets RegiStax (PSNR 49.0 dB).
-11. CLI iris-astro (astro): Comandos autônomos de terminal: iris-astro stack, iris-astro sharpen e iris-astro pipeline.
+## As 14 Etapas do Pipeline (`pipeline.stages`)
+1. `ingestion` (`src.modules.ingestion.stage`): MoveStrategy (5 fases multithreaded) ou CopyStrategy com xxHash64 -> `1_Entrada/<projeto>/`.
+2. `cleanup` (`src.modules.cleanup.stage`): Limpeza Hash-Guarded da origem após `verified == 1`.
+3. `planning` (`src.modules.planning.stage`): Extração EXIF/ffprobe, detecção de rajadas (`burst_id`), perfis de timelapse (normal e longa exposição) e geolocalização (`GeoService`).
+4. `organize` (`src.modules.organize.stage`): Movimentação para `2_AlbunsDatas/`, `3_Videos/`, `4_Timelapses/`, `4_Timelapses_LongaExposicao/`, `5_Lua/` com deduplicação xxHash64 e amostras de timelapse.
+5. `sanitization` (`src.modules.sanitization.stage`): Sanitização EXIF e injeção de Geotag/IPTC/XMP via argfile UTF-8 exclusivamente nas fotos de `2_AlbunsDatas/`.
+6. `bird_detect` (`src.modules.bird_id.detect_stage`): Detecção espacial YOLOv8s em fotos/vídeos e salvamento dos melhores recortes por nitidez Laplaciana em `10_Aves/Recortes/<projeto>/`.
+7. `bird_id` (`src.modules.bird_id.classify_stage`): Classificação via iNaturalist Computer Vision API v2 (ou BioCLIP) com prior geográfico, consenso de rajada e early exit -> `bird_identifications` e `species_catalog`.
+8. `bird_organize` (`src.modules.bird_id.organize_stage`): Renomeação taxonômica (`_{Nome_PT}_{Nome_Cientifico}`) e organização em subpastas por espécie.
+9. `bird_tag` (`src.modules.bird_id.tag_stage`): Injeção de tags taxonômicas EXIF/IPTC/XMP UTF-8 via ExifTool.
+   * Atalho Interativo `[B]` (`src.modules.bird_id.correction`): Revisão manual de espécies, busca no catálogo global, propagação em lote para rajadas/sessões e atualização física/EXIF.
+10. `astro_stack` (`src.modules.astro_stack.stage`): Pré-processamento RAW e empilhamento lunar headless via PlanetarySystemStacker (`.venv_astro`) -> `8_Astro_Stack/`.
+11. `astro_sharpen` (`src.modules.astro_sharpen.stage`): Motor `LunarWaveletEngine` À Trous B3-spline com Limb Guard, CLAHE 16-bit e presets RegiStax -> `9_Astro_Sharpening/`.
+12. `timelapse` (`src.modules.timelapse.stage`): Renderização 4K UHD (normal 60fps e longa exposição 30fps) com Lanczos e Deband 16-bit -> `6_Produzidos/`.
+13. `video_edit` (`src.modules.video_edit.stage`): Masterização e upscale 4K UHD de vídeos com trimming, speed e Auto-Join automático por espécie de ave e data -> `7_Video_Editado_4K/`.
+14. `youtube` (`src.modules.youtube.stage`): Upload resumable em chunks de 64MB na YouTube Data API v3, títulos/descrições ornitológicas e geográficas, roteamento multi-playlist e limpeza local pós-verificação.
 
 ## Suíte de Testes
-- Framework: pytest (157 testes automatizados, 100% passando).
-- Execução: python -m pytest iris/tests
+- Framework: `pytest` (380+ testes automatizados, incluindo `test_architecture_contracts.py`).
+- Execução: `python -m pytest iris/tests`

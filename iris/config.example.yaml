@@ -95,29 +95,35 @@ modules:
     enable_clahe: true                # Realce adaptativo de contraste local 16-bit
     use_limb_guard: true              # Proteção anti-halo/ringing no limbo lunar
     windows_toast: true
+  bird_detect:
+    enabled: true
   bird_id:
     enabled: true
     classifier_type: "inaturalist"       # Provedor taxonômico: 'inaturalist' (API recomendada) ou 'bioclip' (local zero-shot)
     yolo_model: "yolov8s.pt"
     yolo_confidence: 0.25
     min_species_confidence: 0.70          # Limiar de alta certeza para renomeação, subpasta e tags EXIF
-    rename_files: true                   # Renomeação com {stem}_{Nome_PT}_{Nome_Cientifico} (apenas sublinhados, sem colchetes)
-    organize_in_subfolders: true         # Organiza em subpasta com nome popular da ave dentro da categoria
-    write_exif_tags: true                # Injeta palavras-chave IPTC/EXIF/XMP via ExifTool
-    video_target_frames: 15              # Alvo de frames amostrados proporcionalmente à duração do vídeo
-    video_max_crops: 5                   # Quantidade de recortes mais nítidos enviados para votação ponderada
-    video_min_confident_crops: 2         # Mínimo de recortes nítidos da mesma espécie para validar o vídeo
-    zoom_threshold_mm: 300.0             # Distância focal equivalente mínima para filtrar teleobjetivas
+    enable_burst_consensus: true          # Votação consensual para fotos da mesma rajada
+    burst_min_agreement_ratio: 0.50       # Concordância mínima na rajada
+    enable_burst_early_exit: true         # Interrompe consultas após N confirmações de alta certeza na rajada
+    burst_early_exit_confirmations: 3     # Número de confirmações para early exit
+    rename_files: true                    # Renomeação com {stem}_{Nome_PT}_{Nome_Cientifico} (apenas sublinhados, sem colchetes)
+    organize_in_subfolders: true          # Organiza em subpasta com nome popular da ave dentro da categoria
+    write_exif_tags: true                 # Injeta palavras-chave IPTC/EXIF/XMP via ExifTool
+    video_target_frames: 15               # Alvo de frames amostrados proporcionalmente à duração do vídeo
+    video_max_crops: 5                    # Quantidade de recortes mais nítidos enviados para votação ponderada
+    video_min_confident_crops: 2          # Mínimo de recortes nítidos da mesma espécie para validar o vídeo
+    zoom_threshold_mm: 300.0              # Distância focal equivalente mínima para filtrar teleobjetivas
     iris_crops_folder: "10_Aves/Recortes" # Pasta na raiz do destino para recortes (ex: C:\IRIS\10_Aves\Recortes\{projeto}\)
-    save_crops: true                     # Salva recortes de alta resolução na pasta do IRIS
+    save_crops: true                      # Salva recortes de alta resolução na pasta do IRIS
     inaturalist:
       api_url: "https://api.inaturalist.org/v2/computervision/score_image"
       credentials_file: "secrets/inaturalist.json"
-      default_lat: -19.92                # Latitude padrão para fotos sem GPS (prior geográfico regional)
-      default_lng: -43.94                # Longitude padrão para fotos sem GPS
-      positional_accuracy_meters: 25000  # Raio de confiança/precisão geográfica em metros (ex: 25km)
-      request_delay_seconds: 1.0         # Intervalo entre requisições para rate-limiting seguro
-      use_exif_gps: true                 # Extrai GPS nativo do EXIF da foto quando disponível
+      default_lat: -20.456887             # Latitude padrão para fotos sem GPS (prior geográfico regional)
+      default_lng: -45.438307             # Longitude padrão para fotos sem GPS
+      positional_accuracy_meters: 25000   # Raio de confiança/precisão geográfica em metros (ex: 25km)
+      request_delay_seconds: 1.0          # Intervalo entre requisições para rate-limiting seguro
+      use_exif_gps: true                  # Extrai GPS nativo do EXIF da foto quando disponível
   cleanup:
     auto_clean: true
     allow_permanent_sd_clean: false   # Permite exclusão permanente no SD se Lixeira não for suportada (default: false - Zero Data Loss)
@@ -183,45 +189,17 @@ modules:
     bird_playlist: "Birds 4K"           # Playlist agregadora geral de aves
     bird_playlists:
       general: true                     # Adiciona à playlist geral (ex: 'Birds 4K')
+      by_city: true                     # Cria/adiciona playlist municipal (ex: 'Pássaros de Formiga - MG')
       scientific_name: true             # Cria/adiciona playlist da espécie pelo nome científico (ex: 'Pitangus sulphuratus')
       common_name_pt: true              # Cria/adiciona playlist da espécie pelo nome comum em PT (ex: 'Bem-te-vi')
       common_name_en: true              # Cria/adiciona playlist da espécie pelo nome comum em EN (ex: 'Great Kiskadee')
     secrets_dir: "secrets"
-
     stage_interval_seconds: 180
     ntfy_topic: "timelapse-studio-2026"
     windows_toast: true
     cleanup_local_videos: true
     cleanup_to_trash: true
     auto_cleanup_videos: false
-  bird_detect:
-    enabled: true
-  bird_id:
-    enabled: true
-    classifier_type: inaturalist
-    min_species_confidence: 0.70
-    enable_burst_consensus: true
-    burst_min_agreement_ratio: 0.50
-    enable_burst_early_exit: true
-    burst_early_exit_confirmations: 3
-    rename_files: true
-    organize_in_subfolders: true
-    write_exif_tags: true
-    zoom_threshold_mm: 300.0
-    iris_crops_folder: "10_Aves/Recortes"
-    yolo_model: "yolov8s.pt"
-    yolo_confidence: 0.25
-    video_target_frames: 15
-    video_max_crops: 5
-    video_min_confident_crops: 2
-    inaturalist:
-      api_url: "https://api.inaturalist.org/v2/computervision/score_image"
-      credentials_file: "secrets/inaturalist.json"
-      default_lat: -20.456887
-      default_lng: -45.438307
-      positional_accuracy_meters: 25000
-      request_delay_seconds: 1.0
-      use_exif_gps: true
 pipeline:
   stages:
   - enabled: true
@@ -251,7 +229,7 @@ pipeline:
   - enabled: true
     id: bird_id
     module: src.modules.bird_id.classify_stage
-    name: Identificação Taxonômica de Aves (iNaturalist)
+    name: Classificação Taxonômica de Aves (iNaturalist)
   - enabled: true
     id: bird_organize
     module: src.modules.bird_id.organize_stage
@@ -273,7 +251,10 @@ pipeline:
     module: src.modules.timelapse.stage
     name: Renderização de Timelapse 4K
   - enabled: true
+    id: video_edit
+    module: src.modules.video_edit.stage
+    name: Edição e Upscale de Vídeo 4K
+  - enabled: true
     id: youtube
     module: src.modules.youtube.stage
     name: Publicação de Vídeos no YouTube
-

@@ -3,9 +3,13 @@ ProjectItemsMixin (RFC 09).
 Gerencia operações CRUD e consultas otimizadas da tabela 'items' no SQLite.
 """
 
+from __future__ import annotations
+
 import sqlite3
-from typing import List, Optional
-from src.core.project import ProjectItem
+from typing import List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.core.project import ProjectItem
 
 
 class ProjectItemsMixin:
