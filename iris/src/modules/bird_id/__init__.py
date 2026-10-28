@@ -14,6 +14,8 @@ from .classify_stage import BirdClassifyStage
 from .organize_stage import BirdOrganizeStage
 from .burst_consensus import aggregate_burst_species
 from .stage import BirdIdStage, get_stage
+from .correction import BirdCorrectionStage, interactive_bird_correction_flow
+from .catalog import sync_species_catalog, search_species, list_species, get_species
 
 __all__ = [
     "BirdDetector",
@@ -23,6 +25,12 @@ __all__ = [
     "BirdClassifyStage",
     "BirdOrganizeStage",
     "BirdIdStage",
+    "BirdCorrectionStage",
+    "interactive_bird_correction_flow",
+    "sync_species_catalog",
+    "search_species",
+    "list_species",
+    "get_species",
     "get_stage",
     "aggregate_burst_species",
 ]

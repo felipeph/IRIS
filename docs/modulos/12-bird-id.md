@@ -139,3 +139,25 @@ Todos os parâmetros podem ser ajustados interativamente através da opção `8.
 - **`relatorio_aves.csv`**: Gerado na pasta do projeto ao final da classificação, contendo caminho original, nomes taxonômicos, métricas de confiança, caminho do recorte e status de revisão.
 - **Tabela Rich Interativa**: Resumo no terminal colorido destacando espécies com alta certeza em verde e casos pendentes de revisão em amarelo/vermelho.
 - **Rastreabilidade no SQLite**: Todas as mídias mantêm vínculo direto com a localização exata do recorte armazenado em disco na raiz do IRIS.
+
+---
+
+## 6. Catálogo Global de Espécies e Revisão Manual (`bird_correction`)
+
+Para casos de baixa certeza (`needs_review = True`) ou identificações imprecisas em campo (ex: recortes com desfoque ou espécies exóticas sugeridas pela IA), o IRIS conta com o **Módulo de Correção e Catálogo Taxonômico Integrado**:
+
+- **Acesso Direto pelo Menu**: Pressione a tecla **`B`** no menu principal do projeto ativo (`main.py`) para abrir o fluxo interativo Rich de revisão. O cabeçalho do IRIS alerta proativamente com `⚠️ X ave(s) aguardando revisão/correção taxonômica!` sempre que houver itens pendentes.
+- **Catálogo Global no SQLite Central (`species_catalog`)**:
+  - Armazena todas as espécies já catalogadas no histórico de projetos do IRIS com contadores de frequência de uso (`use_count`), pré-populado com a base curada de 97 aves de Minas Gerais e do Brasil (`br_mg_aves.csv`).
+  - Busca inteligente rápida tolerante a acentuação e minúsculas (ex: pesquisando `suir` ou `sabia`).
+- **Opções de Correção**:
+  1. Seleção das sugestões alternativas do modelo (Top 2 / Top 3);
+  2. Escolha assistida a partir das espécies mais frequentes do catálogo central;
+  3. Cadastro manual de nova espécie com atualização automática do catálogo global;
+  4. Descarte de falsos positivos ("Não é ave").
+- **Propagação em Lote**: Se o clipe corrigido fizer parte de uma sessão contínua ou rajada, o IRIS detecta os clipes vizinhos gravados no mesmo horário e oferece aplicar a correção para todos simultaneamente.
+- **Sincronização Completa**:
+  - Dual-write atômico com `confidence = 1.0`, `needs_review = 0` e histórico de auditoria (`manual_correction = True`).
+  - Se a mídia já foi organizada fisicamente no disco, ela é automaticamente movida para a subpasta da nova espécie e suas tags EXIF/IPTC são atualizadas.
+  - Atualização imediata do relatório `relatorio_aves.csv`.
+

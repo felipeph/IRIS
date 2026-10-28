@@ -56,6 +56,9 @@ def get_stage(stage_id: str, name: str) -> PipelineStage:
         return BirdOrganizeStage(stage_id, name)
     elif stage_id in ["bird_tag", "bird_exif", "bird_metadata"]:
         return BirdTagStage(stage_id, name)
+    elif stage_id in ["bird_correction", "bird_review"]:
+        from .correction import BirdCorrectionStage
+        return BirdCorrectionStage(stage_id, name)
     elif stage_id in ["bird_id", "bird_classify"]:
         return BirdClassifyStage(stage_id, name)
     return BirdIdStage(stage_id, name)

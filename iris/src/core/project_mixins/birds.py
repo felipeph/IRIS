@@ -259,3 +259,167 @@ class ProjectBirdsMixin:
                 row = cursor.fetchone()
                 return row[0] if row else 0
 
+    def list_known_species(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """Retorna espécies registradas no catálogo global ordenadas por uso."""
+        from src.modules.bird_id.catalog import list_species
+        return list_species(limit=limit, offset=offset, db_path=getattr(self, "_central_db_file", None))
+
+    def search_known_species(self, query: str, limit: int = 25) -> List[Dict[str, Any]]:
+        """Busca flexível no catálogo global de espécies sem acentos."""
+        from src.modules.bird_id.catalog import search_species
+        return search_species(query=query, limit=limit, db_path=getattr(self, "_central_db_file", None))
+
+    def get_known_species(self, scientific_or_common: str) -> Optional[Dict[str, Any]]:
+        """Localiza uma espécie no catálogo global por nome científico ou comum."""
+        from src.modules.bird_id.catalog import get_species
+        return get_species(scientific_or_common=scientific_or_common, db_path=getattr(self, "_central_db_file", None))
+
+    def register_known_species(
+        self,
+        common: str,
+        scientific: str,
+        common_en: str = "",
+        family: str = "",
+        order_name: str = "",
+        source: str = "manual"
+    ) -> Dict[str, Any]:
+        """Registra ou atualiza uma espécie no catálogo global."""
+        from src.modules.bird_id.catalog import register_or_increment_species
+        return register_or_increment_species(
+            common=common,
+            scientific=scientific,
+            common_en=common_en,
+            family=family,
+            order_name=order_name,
+            source=source,
+            db_path=getattr(self, "_central_db_file", None)
+        )
+
+    def correct_bird_identification(
+        self,
+        item_path: str,
+        new_species: Dict[str, Any],
+        apply_physical_move: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Corrige formalmente a identificação de uma ave no banco local e central,
+        redefinindo confidence=1.0, needs_review=0 e registrando metadados de auditoria.
+        Se apply_physical_move for True e o projeto já tiver organizado os arquivos,
+        renomeia e move para a subpasta da nova espécie, atualizando as tags EXIF/IPTC.
+        """
+        self._ensure_db_initialized()
+        existing = self.get_bird_identification(item_path)
+        if not existing:
+            try:
+                from pathlib import Path
+                existing = self.get_bird_identification(str(Path(item_path).resolve()))
+            except Exception:
+                pass
+        if not existing:
+            return None
+
+        from datetime import datetime
+        from pathlib import Path
+        from src.modules.bird_id.catalog import register_or_increment_species
+
+        comm_pt = str(new_species.get("species_common") or "").strip()
+        sci = str(new_species.get("species_scientific") or "").strip()
+        comm_en = str(new_species.get("species_common_en") or "").strip()
+        family = str(new_species.get("family") or "").strip()
+        order_name = str(new_species.get("order") or new_species.get("order_name") or "").strip()
+
+        if not comm_pt and not sci:
+            raise ValueError("Ao menos o nome comum ou científico deve ser fornecido para correção.")
+        if not comm_pt:
+            comm_pt = sci
+        if not sci:
+            sci = comm_pt
+
+        # Incrementa / atualiza no catálogo global
+        register_or_increment_species(
+            common=comm_pt,
+            scientific=sci,
+            common_en=comm_en,
+            family=family,
+            order_name=order_name,
+            source="manual_correction",
+            count_increment=1,
+            db_path=getattr(self, "_central_db_file", None)
+        )
+
+        old_meta = existing.get("metadata_json", {})
+        if not isinstance(old_meta, dict):
+            old_meta = {}
+
+        new_meta = dict(old_meta)
+        new_meta["manual_correction"] = True
+        new_meta["corrected_at"] = datetime.now().isoformat()
+        new_meta["previous_species"] = {
+            "species_common": existing.get("species_common", ""),
+            "species_scientific": existing.get("species_scientific", ""),
+            "confidence": existing.get("confidence", 0.0),
+            "needs_review": existing.get("needs_review", False),
+        }
+        if comm_en:
+            new_meta["species_common_en"] = comm_en
+        if family:
+            new_meta["family"] = family
+        if order_name:
+            new_meta["order"] = order_name
+
+        new_meta = _sanitize_meta_dict(new_meta)
+        meta_json_str = json.dumps(new_meta, default=str)
+
+        old_db_path = existing.get("item_path", item_path)
+
+        sql_main = """
+            UPDATE main.bird_identifications
+            SET species_common = ?,
+                species_scientific = ?,
+                confidence = 1.0,
+                needs_review = 0,
+                metadata_json = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE project_name = ? AND item_path = ?
+        """
+        sql_central = sql_main.replace("main.bird_identifications", "central.bird_identifications")
+        params = (comm_pt, sci, meta_json_str, self.name, old_db_path)
+        self._execute_dual_write(sql_main, params, sql_central, params)
+
+        updated_record = dict(existing)
+        updated_record["species_common"] = comm_pt
+        updated_record["species_scientific"] = sci
+        updated_record["species_common_en"] = comm_en
+        updated_record["family"] = family
+        updated_record["order"] = order_name
+        updated_record["confidence"] = 1.0
+        updated_record["needs_review"] = False
+        updated_record["metadata_json"] = new_meta
+
+        # Se solicitado e o arquivo já tiver sido organizado fisicamente anteriormente
+        if apply_physical_move:
+            try:
+                from src.core.config import config
+                from src.modules.bird_id.action import apply_bird_physical_move, apply_bird_metadata
+                item = None
+                for it in self.get_items():
+                    for p in [it.organized_path, it.staging_path, it.original_path]:
+                        if p and (p == old_db_path or Path(p).resolve() == Path(old_db_path).resolve()):
+                            item = it
+                            break
+                    if item:
+                        break
+
+                if item:
+                    bird_cfg = dict(config.get("modules.bird_id", {}))
+                    # Só move fisicamente se já passou pela etapa de organização física (ex: já está em organized_path)
+                    if item.organized_path and Path(item.organized_path).exists():
+                        new_path = apply_bird_physical_move(item, self, updated_record, bird_cfg)
+                        if new_path.exists() and bool(bird_cfg.get("write_exif_tags", True)):
+                            apply_bird_metadata(new_path, updated_record)
+            except Exception:
+                pass
+
+        return updated_record
+
+

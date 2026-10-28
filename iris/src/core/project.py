@@ -135,6 +135,18 @@ SHARED_TABLES_DDL = [
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(project_name, item_path)
+    )""",
+    """CREATE TABLE IF NOT EXISTS species_catalog (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        species_common TEXT NOT NULL,
+        species_scientific TEXT NOT NULL UNIQUE,
+        species_common_en TEXT DEFAULT '',
+        family TEXT DEFAULT '',
+        order_name TEXT DEFAULT '',
+        use_count INTEGER DEFAULT 1,
+        source TEXT DEFAULT 'historical',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"""
 ]
 
@@ -171,6 +183,12 @@ def init_central_db(force: bool = False):
 
         for ddl in SHARED_TABLES_DDL:
             cursor.execute(ddl)
+
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_species_catalog_names ON species_catalog(species_common, species_scientific)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_species_catalog_usage ON species_catalog(use_count DESC)")
+        except sqlite3.OperationalError:
+            pass
 
         try:
             cursor.execute("ALTER TABLE timelapses ADD COLUMN metadata_json TEXT DEFAULT '{}'")

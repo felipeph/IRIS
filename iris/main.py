@@ -174,10 +174,20 @@ def run_pipeline_for_project(active_project):
             
             # Cabeçalho
             status = get_project_status_text(active_project)
+            bird_alert = ""
+            if hasattr(active_project, "list_bird_identifications"):
+                try:
+                    bird_recs = active_project.list_bird_identifications()
+                    needs_rev_cnt = sum(1 for r in bird_recs if r.get("needs_review"))
+                    if needs_rev_cnt > 0:
+                        bird_alert = f"\n[bold red]⚠️  {needs_rev_cnt} ave(s) aguardando revisão/correção taxonômica! (Pressione B)[/bold red]"
+                except Exception:
+                    pass
+
             header_text = (
                 "[bold white]:camera: IRIS - IMAGING RESOURCES AND INTEGRATION SYSTEM :rocket:[/bold white]\n"
                 f"[dim]Projeto Ativo:[/dim] [cyan][{active_project.name}][/cyan]\n"
-                f"[dim]Status:[/dim] [yellow][{status}][/yellow]"
+                f"[dim]Status:[/dim] [yellow][{status}][/yellow]{bird_alert}"
             )
             console.print(Panel(header_text, expand=False, border_style="cyan"))
 
@@ -243,6 +253,7 @@ def run_pipeline_for_project(active_project):
                 console.print(f"  [cyan]{i}.[/cyan] :arrow_forward: Etapa {i}: {stage.name}")
                 
             console.print("-" * 60)
+            console.print("  [cyan]B.[/cyan] :bird: [bold yellow]Revisar / Corrigir Espécies de Aves[/bold yellow]")
             console.print("  [cyan]G.[/cyan] :round_pushpin: Alterar Localização do Projeto")
             console.print("  [cyan]L.[/cyan] :wastebasket: Alternar Limpeza Automática")
             console.print("  [cyan]P.[/cyan] :open_file_folder: Voltar / Selecionar Projeto")
@@ -254,6 +265,9 @@ def run_pipeline_for_project(active_project):
             if choice == "0":
                 console.print("Até logo!")
                 sys.exit(0)
+            elif choice == "B":
+                from src.modules.bird_id.correction import interactive_bird_correction_flow
+                interactive_bird_correction_flow(active_project)
             elif choice == "G":
                 new_loc = select_location_dialog(console, default_id=active_project.geo_location_id)
                 if new_loc:

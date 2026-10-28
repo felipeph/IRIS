@@ -268,14 +268,19 @@ def apply_bird_physical_move(
                 # Idempotência: já está dentro de {Nome_PT}/rajada_...
                 target_dir = current_path.parent
             else:
-                date_dir = current_path.parent.parent
+                if current_path.parent.parent.name.isdigit():
+                    date_dir = current_path.parent.parent
+                else:
+                    date_dir = current_path.parent.parent.parent
                 target_dir = date_dir / sub_dir_name / current_path.parent.name
         else:
             # Caso de foto avulsa ou vídeo: 2_AlbunsDatas/YYYY/MM/DD/{Nome_PT}/
             if parent_name == sub_dir_name.lower():
                 target_dir = current_path.parent
-            else:
+            elif current_path.parent.name.isdigit():
                 target_dir = current_path.parent / sub_dir_name
+            else:
+                target_dir = current_path.parent.parent / sub_dir_name
     else:
         target_dir = current_path.parent
 

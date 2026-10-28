@@ -596,6 +596,29 @@ class BirdClassifyStage(PipelineStage):
             live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, "Concluído", "Finalizando"))
 
         if classified_records:
+            # Sincroniza e incrementa espécies confirmadas no catálogo global
+            try:
+                from .catalog import register_or_increment_species
+                for r in classified_records:
+                    sci = (r.get("species_scientific") or "").strip()
+                    comm = (r.get("species_common") or "").strip()
+                    if sci and comm and not r.get("needs_review", False):
+                        meta_dict = r.get("metadata_json", {}) if isinstance(r.get("metadata_json"), dict) else {}
+                        c_en = r.get("species_common_en") or meta_dict.get("species_common_en", "")
+                        fam = r.get("family") or meta_dict.get("family", "")
+                        ord_name = r.get("order") or meta_dict.get("order", "")
+                        register_or_increment_species(
+                            common=comm,
+                            scientific=sci,
+                            common_en=c_en,
+                            family=fam,
+                            order_name=ord_name,
+                            source="classifier",
+                            count_increment=1
+                        )
+            except Exception:
+                pass
+
             # Exportar relatório CSV de conferência
             try:
                 csv_path = project.project_dir / "relatorio_aves.csv"
