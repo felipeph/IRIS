@@ -479,29 +479,32 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
         else:
             general_photo_items.append(item)
 
-    # Processar itens de Astrofotografia (Lua)
+    # Processar itens de Astrofotografia (Lua) - Isolamento estrito por rajada
     if astro_items:
-        current_session = [astro_items[0]]
-        astro_sessions = [current_session]
+        astro_burst_interval = float(class_config.get("astro_burst_interval_seconds", 4.0))
+        current_burst = [astro_items[0]]
+        astro_bursts = [current_burst]
         for prev, curr in zip(astro_items[:-1], astro_items[1:]):
             delta = (curr.timestamp - prev.timestamp).total_seconds()
-            if delta <= 60.0:
-                current_session.append(curr)
+            if prev.date_str == curr.date_str and 0.0 <= delta <= astro_burst_interval:
+                current_burst.append(curr)
             else:
-                current_session = [curr]
-                astro_sessions.append(current_session)
+                current_burst = [curr]
+                astro_bursts.append(current_burst)
 
-        for session in astro_sessions:
-            first = session[0]
+        for burst in astro_bursts:
+            first = burst[0]
             y, m, d = first.date_str.split("-")
             session_dir = Path("5_Astrofotografia") / "Lua" / y / m / d / f"sessao_{first.time_str}"
-            for it in session:
+            burst_id = f"rajada_{first.date_str}_{first.time_str}" if len(burst) >= 2 else ""
+            for it in burst:
                 target_name = generate_target_filename(it, name_config)
                 classified.append(ClassifiedItem(
                     metadata=it,
                     category="astro_lua",
                     relative_dest_dir=session_dir,
                     target_filename=target_name,
+                    burst_id=burst_id,
                 ))
 
     # Processar Vídeos

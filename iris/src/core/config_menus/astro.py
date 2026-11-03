@@ -57,6 +57,15 @@ def _menu_astro(console: Console):
         ntfy = config.get("modules.astro_stack.ntfy_topic", "iris-alerts")
         table.add_row("11", "Tópico NTFY Push", "modules.astro_stack.ntfy_topic", str(ntfy))
 
+        disc_ini = config.get("modules.astro_stack.discard_initial_frames", 1)
+        table.add_row("12", "Descarte Inicial de Rajada (frames)", "modules.astro_stack.discard_initial_frames", f"{disc_ini} frame(s)")
+
+        disc_fin = config.get("modules.astro_stack.discard_final_frames", 1)
+        table.add_row("13", "Descarte Final de Rajada (frames)", "modules.astro_stack.discard_final_frames", f"{disc_fin} frame(s)")
+
+        burst_int = config.get("modules.astro_stack.burst_interval_seconds", 4.0)
+        table.add_row("14", "Intervalo Máximo de Rajada Lunar (s)", "modules.astro_stack.burst_interval_seconds", f"{burst_int:.1f} s")
+
         console.print(table)
         console.print("\n[dim]Pressione o número da opção para alterar ou '0' para voltar.[/dim]")
 
@@ -152,6 +161,37 @@ def _menu_astro(console: Console):
             config.set("modules.astro_stack.ntfy_topic", new_val)
             config.set("modules.astro_sharpen.ntfy_topic", new_val)
             console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "12":
+            curr = config.get("modules.astro_stack.discard_initial_frames", 1)
+            new_val = Prompt.ask("Quantidade de frames iniciais a descartar por rajada (obturador)", default=str(curr))
+            try:
+                val_int = max(0, int(new_val))
+                config.set("modules.astro_stack.discard_initial_frames", val_int)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "13":
+            curr = config.get("modules.astro_stack.discard_final_frames", 1)
+            new_val = Prompt.ask("Quantidade de frames finais a descartar por rajada (obturador)", default=str(curr))
+            try:
+                val_int = max(0, int(new_val))
+                config.set("modules.astro_stack.discard_final_frames", val_int)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "14":
+            curr = config.get("modules.astro_stack.burst_interval_seconds", 4.0)
+            new_val = Prompt.ask("Intervalo máximo em segundos entre fotos contínuas da mesma rajada", default=str(curr))
+            try:
+                val_f = max(0.5, float(new_val))
+                config.set("modules.astro_stack.burst_interval_seconds", val_f)
+                config.set("classification.astro_burst_interval_seconds", val_f)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número decimal válido![/red]")
             time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")

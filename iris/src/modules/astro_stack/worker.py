@@ -75,6 +75,10 @@ def parse_args():
     parser.add_argument("--vendor-dir", type=Path, default=None, help="Caminho para vendor/PlanetarySystemStacker")
     parser.add_argument("--workers", type=int, default=None, help="Número de workers paralelos para decodificação (auto)")
     parser.add_argument("--timeout", type=int, default=600, help="Timeout do processo PSS em segundos")
+    parser.add_argument("--discard-initial-frames", "--discard_initial_frames", type=int, default=0, help="Número de frames iniciais a descartar por rajada (vibração do obturador)")
+    parser.add_argument("--discard-final-frames", "--discard_final_frames", type=int, default=0, help="Número de frames finais a descartar por rajada (vibração do obturador)")
+    parser.add_argument("--manifest", type=Path, default=None, help="Caminho para arquivo JSON contendo lista explícita de frames para empilhar")
+    parser.add_argument("--burst-interval", "--burst_interval", type=float, default=4.0, help="Intervalo máximo em segundos entre fotos da mesma rajada")
     return parser.parse_args()
 
 
@@ -119,9 +123,40 @@ def main():
         print(f"ERRO: run_pss.py não encontrado em {vendor_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Coleta arquivos de imagem
+    # Coleta arquivos de imagem (via manifesto explícito ou varredura de diretório)
     extensions = {".cr2", ".cr3", ".nef", ".arw", ".dng", ".raw", ".tif", ".tiff", ".png", ".bmp", ".jpg", ".jpeg"}
-    files = sorted(p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions and not p.name.startswith("."))
+    if args.manifest and args.manifest.exists():
+        try:
+            with open(args.manifest, "r", encoding="utf-8") as mf:
+                manifest_paths = json.load(mf)
+            files = [Path(p) for p in manifest_paths if Path(p).is_file()]
+        except Exception as e:
+            print(f"AVISO: Falha ao carregar manifesto {args.manifest}: {e}. Recorrendo à leitura do diretório.", file=sys.stderr)
+            files = sorted(p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions and not p.name.startswith("."))
+    else:
+        files = sorted(p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions and not p.name.startswith("."))
+
+    # Filtro de descarte de obturador (choque mecânico de início e fim da rajada)
+    total_raw_count = len(files)
+    discard_initial = max(0, getattr(args, "discard_initial_frames", 0))
+    discard_final = max(0, getattr(args, "discard_final_frames", 0))
+
+    if (discard_initial > 0 or discard_final > 0) and total_raw_count > 0:
+        min_required = 2
+        if total_raw_count - (discard_initial + discard_final) >= min_required:
+            end_idx = total_raw_count - discard_final if discard_final > 0 else total_raw_count
+            trimmed_files = files[discard_initial:end_idx]
+            print(f"STATUS: Descarte de obturador aplicado: {discard_initial} inicial(is), {discard_final} final(is). {len(trimmed_files)} de {total_raw_count} frames selecionados.", flush=True)
+            files = trimmed_files
+        else:
+            # Salvaguarda: ajuste proporcional para manter ao menos min_required frames
+            trimmed = files[:]
+            if len(trimmed) > min_required and discard_initial > 0:
+                trimmed = trimmed[1:]
+            if len(trimmed) > min_required and discard_final > 0:
+                trimmed = trimmed[:-1]
+            print(f"AVISO: Rajada possui apenas {total_raw_count} frames. Descarte solicitado ({discard_initial} ini + {discard_final} fim) deixaria menos de {min_required} frames. Ajustado para {len(trimmed)} frames.", file=sys.stderr)
+            files = trimmed
 
     if len(files) < 2:
         print(f"ERRO: Mínimo de 2 imagens necessário para empilhamento. Encontradas: {len(files)}", file=sys.stderr)

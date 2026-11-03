@@ -22,6 +22,41 @@ console = Console(legacy_windows=False)
 
 
 from src.core.cleanup import prune_empty_dirs_upward as _prune_empty_dirs_upward, clean_empty_directories
+import re
+
+
+def partition_astro_bursts(files: List[Path], max_interval: float = 4.0) -> List[List[Path]]:
+    """Particiona uma lista de arquivos de fotos/RAW em rajadas contíguas baseadas em timestamp/nome."""
+    if not files:
+        return []
+
+    def get_file_time(p: Path) -> float:
+        m = re.search(r"(\d{4})[-_](\d{2})[-_](\d{2})[-_](\d{2})[-_](\d{2})[-_](\d{2})", p.stem)
+        if m:
+            try:
+                dt = datetime.datetime(
+                    int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                    int(m.group(4)), int(m.group(5)), int(m.group(6))
+                )
+                return dt.timestamp()
+            except Exception:
+                pass
+        try:
+            return p.stat().st_mtime
+        except Exception:
+            return 0.0
+
+    sorted_files = sorted(files, key=lambda p: (get_file_time(p), p.name))
+    bursts: List[List[Path]] = [[sorted_files[0]]]
+    for prev, curr in zip(sorted_files[:-1], sorted_files[1:]):
+        t_prev = get_file_time(prev)
+        t_curr = get_file_time(curr)
+        delta = t_curr - t_prev
+        if 0.0 <= delta <= max_interval:
+            bursts[-1].append(curr)
+        else:
+            bursts.append([curr])
+    return bursts
 
 
 class AstroStackStage(PipelineStage):
@@ -80,7 +115,8 @@ class AstroStackStage(PipelineStage):
                         rel_key = f"5_Astrofotografia/Lua/{src_p.name}"
                     sessions[rel_key] = direct_raws
                 else:
-                    for sess_dir in src_p.rglob("sessao_*"):
+                    found_dirs = sorted(set(list(src_p.rglob("sessao_*")) + list(src_p.rglob("rajada_*"))))
+                    for sess_dir in found_dirs:
                         if sess_dir.is_dir():
                             raws = sorted(p for p in sess_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions and not p.name.startswith("."))
                             if len(raws) >= 2:
@@ -112,6 +148,12 @@ class AstroStackStage(PipelineStage):
         stab_mode = astro_config.get("stab_mode", "Surface")
         timeout = astro_config.get("timeout_seconds", 600)
         margin = astro_config.get("margin_pixels", 128)
+        val_ini = astro_config.get("discard_initial_frames", 1)
+        discard_initial = int(val_ini) if val_ini is not None else 1
+        val_fin = astro_config.get("discard_final_frames", 1)
+        discard_final = int(val_fin) if val_fin is not None else 1
+        val_intv = astro_config.get("burst_interval_seconds", 4.0)
+        burst_interval = float(val_intv) if val_intv is not None else 4.0
 
         stacked_count = 0
         total_raws_processed = 0
@@ -121,158 +163,175 @@ class AstroStackStage(PipelineStage):
 
         for s_idx, (session_rel_dir, raw_files) in enumerate(sessions.items(), 1):
             session_name = Path(session_rel_dir).name
-            console.print(f"\n[cyan][{s_idx}/{total_sessions}][/cyan] Sessão: [bold white]{session_rel_dir}[/bold white] ({len(raw_files)} frames)")
+            detected_bursts = partition_astro_bursts(raw_files, max_interval=burst_interval)
+            num_bursts = len(detected_bursts)
 
-            # Verifica se já foi empilhado
-            if project.is_astro_session_stacked(session_rel_dir) and not kwargs.get("force", False):
-                console.print(f"  [dim]✔ Sessão já empilhada anteriormente. Pulando.[/dim]")
-                continue
+            if num_bursts > 1:
+                console.print(f"\n[cyan][{s_idx}/{total_sessions}][/cyan] Sessão: [bold white]{session_rel_dir}[/bold white] ({len(raw_files)} frames divididos em {num_bursts} rajadas)")
+            else:
+                console.print(f"\n[cyan][{s_idx}/{total_sessions}][/cyan] Sessão: [bold white]{session_rel_dir}[/bold white] ({len(raw_files)} frames)")
 
             session_input_dir = raw_files[0].parent
             session_output_dir = resolve_astro_stack_dir(session_rel_dir, dest_root)
             session_output_dir.mkdir(parents=True, exist_ok=True)
 
-            t0 = time.time()
-            start_str = datetime.datetime.now().strftime("%H:%M:%S")
+            for b_idx, burst_files in enumerate(detected_bursts, 1):
+                burst_key = f"{session_rel_dir}/rajada_{b_idx}" if num_bursts > 1 else session_rel_dir
+                burst_display_name = f"{session_name} (Rajada {b_idx}/{num_bursts})" if num_bursts > 1 else session_name
 
-            # Variáveis de estado para o painel vertical Rich
-            current_phase_msg = "Iniciando análise dos frames da sessão..."
-            current_item = ""
-            progress_pct = 0.0
-            crop_size = 0
-            shared_gain = 1.0
-            completed_stacks: Dict[str, str] = {}
-            current_phase = "init"
-            decode_fps = 0.0
-            decode_rem_seconds = 0.0
-            last_kp_time = None
-            kp_durations: List[float] = []
+                # Verifica se já foi empilhado
+                if project.is_astro_session_stacked(burst_key) and not kwargs.get("force", False):
+                    console.print(f"  [dim]✔ {burst_display_name} já empilhada anteriormente. Pulando.[/dim]")
+                    continue
 
-            def make_renderable():
-                now = time.time()
-                elapsed = now - t0
-                elapsed_str = str(datetime.timedelta(seconds=int(elapsed)))
+                if len(burst_files) < 2:
+                    console.print(f"  [yellow]⚠ {burst_display_name} possui apenas {len(burst_files)} frame; empilhamento requer no mínimo 2 frames. Pulando.[/yellow]")
+                    continue
 
-                remaining = None
-                if current_phase == "decode" and decode_rem_seconds > 0:
-                    kps_left = max(0, len(keep_percents) - len(completed_stacks))
-                    remaining = decode_rem_seconds + (kps_left * 60.0)
-                elif current_phase in ("pss", "kp_done") and kp_durations:
-                    avg_kp = sum(kp_durations) / len(kp_durations)
-                    kps_left = max(0, len(keep_percents) - len(completed_stacks))
-                    remaining = kps_left * avg_kp
-                elif progress_pct > 5.0:
-                    total_est = elapsed / (progress_pct / 100.0)
-                    remaining = max(0.0, total_est - elapsed)
+                t0 = time.time()
+                start_str = datetime.datetime.now().strftime("%H:%M:%S")
 
-                if remaining is not None and remaining >= 0:
-                    eta_str = str(datetime.timedelta(seconds=int(remaining)))
-                    end_dt = datetime.datetime.now() + datetime.timedelta(seconds=int(remaining))
-                    previsao_str = end_dt.strftime("%H:%M:%S")
-                else:
-                    eta_str = "--:--:--"
-                    previsao_str = "--:--:--"
+                # Variáveis de estado para o painel vertical Rich
+                current_phase_msg = f"Iniciando análise de frames de {burst_display_name}..."
+                current_item = ""
+                progress_pct = 0.0
+                crop_size = 0
+                shared_gain = 1.0
+                completed_stacks: Dict[str, str] = {}
+                current_phase = "init"
+                decode_fps = 0.0
+                decode_rem_seconds = 0.0
+                last_kp_time = None
+                kp_durations: List[float] = []
 
-                return PipelineUI.generate_astro_stack_renderable(
-                    stage_title=f"🌕 EMPILHAMENTO LUNAR (PSS) [{s_idx}/{total_sessions}]",
-                    start_str=start_str,
-                    session_name=session_name,
-                    total_photos=len(raw_files),
-                    keep_percents=keep_percents,
-                    current_phase_msg=current_phase_msg,
-                    current_item=current_item,
-                    progress_pct=progress_pct,
-                    crop_size=crop_size,
-                    shared_gain=shared_gain,
-                    completed_stacks=completed_stacks,
-                    elapsed_str=elapsed_str,
-                    eta_str=eta_str,
-                    previsao_fim_str=previsao_str,
-                )
+                def make_renderable():
+                    now = time.time()
+                    elapsed = now - t0
+                    elapsed_str = str(datetime.timedelta(seconds=int(elapsed)))
 
-            try:
-                with Live(get_renderable=make_renderable, console=console, refresh_per_second=4) as live:
-                    def on_progress(event_or_msg, pct_val):
-                        nonlocal current_phase_msg, current_item, progress_pct, crop_size, shared_gain, completed_stacks
-                        nonlocal current_phase, decode_fps, decode_rem_seconds, last_kp_time
-                        now_ev = time.time()
-                        if isinstance(event_or_msg, dict):
-                            current_phase = event_or_msg.get("phase", current_phase)
-                            current_phase_msg = event_or_msg.get("msg", current_phase_msg)
-                            current_item = event_or_msg.get("item", current_item)
-                            if "progress_pct" in event_or_msg:
-                                progress_pct = float(event_or_msg["progress_pct"])
-                            if "fps" in event_or_msg:
-                                decode_fps = float(event_or_msg["fps"])
-                            if "rem_seconds" in event_or_msg:
-                                decode_rem_seconds = float(event_or_msg["rem_seconds"])
-                            if "crop_size" in event_or_msg and event_or_msg["crop_size"]:
-                                crop_size = int(event_or_msg["crop_size"])
-                            if "gain" in event_or_msg and event_or_msg["gain"]:
-                                shared_gain = float(event_or_msg["gain"])
-                            if "completed_stacks" in event_or_msg:
-                                completed_stacks.update(event_or_msg["completed_stacks"])
-                            if event_or_msg.get("phase") == "pss":
-                                if last_kp_time is None:
+                    remaining = None
+                    if current_phase == "decode" and decode_rem_seconds > 0:
+                        kps_left = max(0, len(keep_percents) - len(completed_stacks))
+                        remaining = decode_rem_seconds + (kps_left * 60.0)
+                    elif current_phase in ("pss", "kp_done") and kp_durations:
+                        avg_kp = sum(kp_durations) / len(kp_durations)
+                        kps_left = max(0, len(keep_percents) - len(completed_stacks))
+                        remaining = kps_left * avg_kp
+                    elif progress_pct > 5.0:
+                        total_est = elapsed / (progress_pct / 100.0)
+                        remaining = max(0.0, total_est - elapsed)
+
+                    if remaining is not None and remaining >= 0:
+                        eta_str = str(datetime.timedelta(seconds=int(remaining)))
+                        end_dt = datetime.datetime.now() + datetime.timedelta(seconds=int(remaining))
+                        previsao_str = end_dt.strftime("%H:%M:%S")
+                    else:
+                        eta_str = "--:--:--"
+                        previsao_str = "--:--:--"
+
+                    return PipelineUI.generate_astro_stack_renderable(
+                        stage_title=f"🌕 EMPILHAMENTO LUNAR (PSS) [{s_idx}/{total_sessions}]",
+                        start_str=start_str,
+                        session_name=burst_display_name,
+                        total_photos=len(burst_files),
+                        keep_percents=keep_percents,
+                        current_phase_msg=current_phase_msg,
+                        current_item=current_item,
+                        progress_pct=progress_pct,
+                        crop_size=crop_size,
+                        shared_gain=shared_gain,
+                        completed_stacks=completed_stacks,
+                        elapsed_str=elapsed_str,
+                        eta_str=eta_str,
+                        previsao_fim_str=previsao_str,
+                    )
+
+                try:
+                    with Live(get_renderable=make_renderable, console=console, refresh_per_second=4) as live:
+                        def on_progress(event_or_msg, pct_val):
+                            nonlocal current_phase_msg, current_item, progress_pct, crop_size, shared_gain, completed_stacks
+                            nonlocal current_phase, decode_fps, decode_rem_seconds, last_kp_time
+                            now_ev = time.time()
+                            if isinstance(event_or_msg, dict):
+                                current_phase = event_or_msg.get("phase", current_phase)
+                                current_phase_msg = event_or_msg.get("msg", current_phase_msg)
+                                current_item = event_or_msg.get("item", current_item)
+                                if "progress_pct" in event_or_msg:
+                                    progress_pct = float(event_or_msg["progress_pct"])
+                                if "fps" in event_or_msg:
+                                    decode_fps = float(event_or_msg["fps"])
+                                if "rem_seconds" in event_or_msg:
+                                    decode_rem_seconds = float(event_or_msg["rem_seconds"])
+                                if "crop_size" in event_or_msg and event_or_msg["crop_size"]:
+                                    crop_size = int(event_or_msg["crop_size"])
+                                if "gain" in event_or_msg and event_or_msg["gain"]:
+                                    shared_gain = float(event_or_msg["gain"])
+                                if "completed_stacks" in event_or_msg:
+                                    completed_stacks.update(event_or_msg["completed_stacks"])
+                                if event_or_msg.get("phase") == "pss":
+                                    if last_kp_time is None:
+                                        last_kp_time = now_ev
+                                if event_or_msg.get("phase") == "kp_done" and "kp" in event_or_msg:
+                                    completed_stacks[str(event_or_msg["kp"])] = event_or_msg.get("filename", "")
+                                    if last_kp_time is not None:
+                                        kp_durations.append(now_ev - last_kp_time)
                                     last_kp_time = now_ev
-                            if event_or_msg.get("phase") == "kp_done" and "kp" in event_or_msg:
-                                completed_stacks[str(event_or_msg["kp"])] = event_or_msg.get("filename", "")
-                                if last_kp_time is not None:
-                                    kp_durations.append(now_ev - last_kp_time)
-                                last_kp_time = now_ev
-                        else:
-                            current_phase_msg = str(event_or_msg)
-                            if pct_val is not None:
-                                progress_pct = float(pct_val)
+                            else:
+                                current_phase_msg = str(event_or_msg)
+                                if pct_val is not None:
+                                    progress_pct = float(pct_val)
+                            live.update(make_renderable())
+
+                        report_data = runner.run_session(
+                            input_dir=session_input_dir,
+                            output_dir=session_output_dir,
+                            keep_percents=keep_percents,
+                            margin=margin,
+                            align_box_width=align_box_width,
+                            align_search_width=align_search_width,
+                            stab_mode=stab_mode,
+                            timeout=timeout,
+                            discard_initial_frames=discard_initial,
+                            discard_final_frames=discard_final,
+                            files=burst_files,
+                            progress_callback=on_progress,
+                        )
+                        progress_pct = 100.0
+                        current_phase_msg = "[green]Empilhamento concluído com sucesso![/green]"
                         live.update(make_renderable())
 
-                    report_data = runner.run_session(
-                        input_dir=session_input_dir,
-                        output_dir=session_output_dir,
-                        keep_percents=keep_percents,
-                        margin=margin,
-                        align_box_width=align_box_width,
-                        align_search_width=align_search_width,
-                        stab_mode=stab_mode,
-                        timeout=timeout,
-                        progress_callback=on_progress,
-                    )
-                    progress_pct = 100.0
-                    current_phase_msg = "[green]Empilhamento concluído com sucesso![/green]"
-                    live.update(make_renderable())
+                    elapsed_sec = time.time() - t0
+                    report_data["elapsed_seconds"] = round(elapsed_sec, 2)
 
-                elapsed_sec = time.time() - t0
-                report_data["elapsed_seconds"] = round(elapsed_sec, 2)
+                    # Registra no SQLite do projeto
+                    record_db = {
+                        "session_dir": burst_key,
+                        "raw_count": len(burst_files),
+                        "keep_percents": keep_percents,
+                        "output_dir": str(session_output_dir),
+                        "output_tiff_paths_json": report_data.get("output_tiff_paths", {}),
+                        "crop_size": report_data.get("crop_size", 0),
+                        "shared_gain": report_data.get("shared_gain", 1.0),
+                        "status": "stacked",
+                        "metadata_json": report_data,
+                        "elapsed_seconds": round(elapsed_sec, 2),
+                    }
+                    project.add_astro_stack(record_db)
+                    stacked_count += 1
+                    total_raws_processed += len(burst_files)
+                    total_tiffs_generated += len(report_data.get("output_tiff_paths", {}))
 
-                # Registra no SQLite do projeto
-                record_db = {
-                    "session_dir": session_rel_dir,
-                    "raw_count": len(raw_files),
-                    "keep_percents": keep_percents,
-                    "output_dir": str(session_output_dir),
-                    "output_tiff_paths_json": report_data.get("output_tiff_paths", {}),
-                    "crop_size": report_data.get("crop_size", 0),
-                    "shared_gain": report_data.get("shared_gain", 1.0),
-                    "status": "stacked",
-                    "metadata_json": report_data,
-                    "elapsed_seconds": round(elapsed_sec, 2),
-                }
-                project.add_astro_stack(record_db)
-                stacked_count += 1
-                total_raws_processed += len(raw_files)
-                total_tiffs_generated += len(report_data.get("output_tiff_paths", {}))
+                    console.print(f"  [bold green]OK: {burst_display_name} empilhada em {session_output_dir}[/bold green]")
+                    for kp_val, out_p in report_data.get("output_tiff_paths", {}).items():
+                        console.print(f"    • TIFF {kp_val}%: [green]{Path(out_p).name}[/green]")
 
-                console.print(f"  [bold green]OK: Sessão empilhada em {session_output_dir}[/bold green]")
-                for kp_val, out_p in report_data.get("output_tiff_paths", {}).items():
-                    console.print(f"    • TIFF {kp_val}%: [green]{Path(out_p).name}[/green]")
+                except Exception as e:
+                    console.print(f"  [bold red]ERRO ao empilhar {burst_display_name}: {e}[/bold red]")
+                    log_event(f"Falha no empilhamento de {burst_display_name}: {e}", "error")
 
-            except Exception as e:
-                console.print(f"  [bold red]ERRO ao empilhar sessão {session_rel_dir}: {e}[/bold red]")
-                log_event(f"Falha no empilhamento da sessão {session_rel_dir}: {e}", "error")
-            finally:
-                # Se a pasta de saída ficou vazia (ex: falha do worker, cancelamento ou erro), faz o descarte limpo
-                if session_output_dir.exists() and not any(session_output_dir.iterdir()):
-                    _prune_empty_dirs_upward(session_output_dir, dest_root)
+            # Se a pasta de saída ficou vazia (ex: falha do worker, cancelamento ou erro), faz o descarte limpo
+            if session_output_dir.exists() and not any(session_output_dir.iterdir()):
+                _prune_empty_dirs_upward(session_output_dir, dest_root)
 
         total_batch_elapsed = time.time() - batch_t0
         console.print(f"\n[bold green]Concluído! {stacked_count} nova(s) sessão(ões) empilhada(s) ({total_tiffs_generated} TIFFs gerados) em {total_batch_elapsed:.1f}s.[/bold green]")

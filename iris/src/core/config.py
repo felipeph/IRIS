@@ -177,9 +177,22 @@ class ConfigManager:
                     "timeout_seconds": 600,
                     "venv_path": "auto",
                     "windows_toast": True,
-                    "ntfy_topic": "iris-alerts"
+                    "ntfy_topic": "iris-alerts",
+                    "discard_initial_frames": 1,
+                    "discard_final_frames": 1,
+                    "burst_interval_seconds": 4.0,
                 }
                 has_changes = True
+            else:
+                if "discard_initial_frames" not in mods["astro_stack"]:
+                    mods["astro_stack"]["discard_initial_frames"] = 1
+                    has_changes = True
+                if "discard_final_frames" not in mods["astro_stack"]:
+                    mods["astro_stack"]["discard_final_frames"] = 1
+                    has_changes = True
+                if "burst_interval_seconds" not in mods["astro_stack"]:
+                    mods["astro_stack"]["burst_interval_seconds"] = 4.0
+                    has_changes = True
 
             if "astro_sharpen" not in mods:
                 mods["astro_sharpen"] = {
@@ -271,6 +284,10 @@ class ConfigManager:
                 }
                 has_changes = True
 
+            if "astro_burst_interval_seconds" not in cls_cfg:
+                cls_cfg["astro_burst_interval_seconds"] = 4.0
+                has_changes = True
+
             if has_changes:
                 self.save()
         except Exception as e:
@@ -342,6 +359,7 @@ class ConfigManager:
                 "timelapse_sample_interval_minutes": 10.0,
                 "enable_burst_detection": True,
                 "burst_interval_seconds": 1.5,
+                "astro_burst_interval_seconds": 4.0,
                 "timelapse_normal": {
                     "min_photos": 200,
                     "min_interval_seconds": 0.3,
@@ -382,7 +400,10 @@ class ConfigManager:
                     "timeout_seconds": 600,
                     "venv_path": "auto",
                     "windows_toast": True,
-                    "ntfy_topic": "iris-alerts"
+                    "ntfy_topic": "iris-alerts",
+                    "discard_initial_frames": 1,
+                    "discard_final_frames": 1,
+                    "burst_interval_seconds": 4.0
                 },
                 "astro_sharpen": {
                     "enabled": True,

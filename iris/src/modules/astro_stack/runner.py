@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import uuid
 from typing import List, Dict, Any, Optional, Callable
 
 from src.core.config import config
@@ -103,6 +104,9 @@ class AstroStackRunner:
         align_search_width: int = 20,
         stab_mode: str = "Surface",
         timeout: int = 600,
+        discard_initial_frames: Optional[int] = None,
+        discard_final_frames: Optional[int] = None,
+        files: Optional[List[Path]] = None,
         progress_callback: Optional[Callable[[str, Optional[float]], None]] = None,
     ) -> Dict[str, Any]:
         """Executa o empilhamento para uma sessão lunar completa."""
@@ -119,6 +123,13 @@ class AstroStackRunner:
         kp_str = ",".join(str(p) for p in keep_percents)
         vendor_dir = MODULE_DIR.parents[2] / "vendor" / "PlanetarySystemStacker"
 
+        if discard_initial_frames is None:
+            val_ini = config.get("modules.astro_stack.discard_initial_frames", 1)
+            discard_initial_frames = int(val_ini) if val_ini is not None else 1
+        if discard_final_frames is None:
+            val_fin = config.get("modules.astro_stack.discard_final_frames", 1)
+            discard_final_frames = int(val_fin) if val_fin is not None else 1
+
         cmd = [
             str(self.python_path),
             "-u",
@@ -131,6 +142,8 @@ class AstroStackRunner:
             "--align-search-width", str(align_search_width),
             "--stab-mode", stab_mode,
             "--timeout", str(timeout),
+            "--discard-initial-frames", str(discard_initial_frames),
+            "--discard-final-frames", str(discard_final_frames),
         ]
         if crop_size is not None:
             cmd.extend(["--crop-size", str(crop_size)])
@@ -139,6 +152,12 @@ class AstroStackRunner:
             cmd.extend(["--workers", str(workers)])
         if vendor_dir.exists():
             cmd.extend(["--vendor-dir", str(vendor_dir)])
+
+        manifest_file: Optional[Path] = None
+        if files:
+            manifest_file = output_dir / f"manifest_{uuid.uuid4().hex[:8]}.json"
+            manifest_file.write_text(json.dumps([str(p.resolve()) for p in files], ensure_ascii=False), encoding="utf-8")
+            cmd.extend(["--manifest", str(manifest_file)])
 
         log_event(f"Iniciando empilhamento lunar para {input_dir.name} ({kp_str}%)", "info")
         if progress_callback:
@@ -222,6 +241,12 @@ class AstroStackRunner:
                     pass
             if report_data is None:
                 report_data = {"status": "success", "session_dir": str(input_dir), "output_dir": str(output_dir)}
+
+        if manifest_file and manifest_file.exists():
+            try:
+                manifest_file.unlink()
+            except Exception:
+                pass
 
         log_event(f"Empilhamento concluído com sucesso para {input_dir.name}", "info")
         return report_data

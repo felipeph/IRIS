@@ -703,5 +703,68 @@ def test_classify_burst_mixed_singles_and_bursts():
     assert items[4].burst_id == ""
     assert "rajada" not in str(items[4].relative_dest_dir)
 
+def test_classify_multiple_astro_bursts_split_into_separate_sessions():
+    """Valida que rajadas consecutivas da Lua separadas por mais de astro_burst_interval_seconds
+    são particionadas em sessões/pastas físicas distintas, preenchendo burst_id específico."""
+    photos = []
+    # Rajada 1: 15 fotos a cada 1 segundo (20:41:00 até 20:41:14)
+    base_time_1 = datetime(2026, 10, 18, 20, 41, 0)
+    for i in range(15):
+        dt = base_time_1 + timedelta(seconds=i * 1.0)
+        photos.append(MediaMetadata(
+            file_path=Path(f"IMG_{1000 + i}.CR2"),
+            is_video=False,
+            date_str="2026-10-18",
+            time_str=dt.strftime("%H-%M-%S"),
+            timestamp=dt,
+            camera_model="PowerShot-SX60-HS",
+            camera_make="Canon",
+            focal_length_equiv=1385.8,
+            focal_str="1386mm",
+            original_stem=f"IMG_{1000 + i}",
+            extension="CR2",
+            is_raw=True,
+        ))
 
+    # Intervalo de 20 segundos sem fotos (re-enquadramento / descanso de tripé)
+    # Rajada 2: 15 fotos a cada 1 segundo (20:41:34 até 20:41:48)
+    base_time_2 = datetime(2026, 10, 18, 20, 41, 34)
+    for i in range(15):
+        dt = base_time_2 + timedelta(seconds=i * 1.0)
+        photos.append(MediaMetadata(
+            file_path=Path(f"IMG_{2000 + i}.CR2"),
+            is_video=False,
+            date_str="2026-10-18",
+            time_str=dt.strftime("%H-%M-%S"),
+            timestamp=dt,
+            camera_model="PowerShot-SX60-HS",
+            camera_make="Canon",
+            focal_length_equiv=1385.8,
+            focal_str="1386mm",
+            original_stem=f"IMG_{2000 + i}",
+            extension="CR2",
+            is_raw=True,
+        ))
+
+    class_config = {
+        "moon_zoom_threshold_mm": 1000.0,
+        "astro_burst_interval_seconds": 4.0,
+    }
+
+    items = classify_media_batch(photos, class_config=class_config)
+    assert len(items) == 30
+    assert all(it.category == "astro_lua" for it in items)
+
+    # Primeira rajada (15 fotos)
+    burst_1 = items[:15]
+    assert all("sessao_20-41-00" in str(it.relative_dest_dir) for it in burst_1)
+    assert all(it.burst_id == "rajada_2026-10-18_20-41-00" for it in burst_1)
+
+    # Segunda rajada (15 fotos)
+    burst_2 = items[15:]
+    assert all("sessao_20-41-34" in str(it.relative_dest_dir) for it in burst_2)
+    assert all(it.burst_id == "rajada_2026-10-18_20-41-34" for it in burst_2)
+
+    # As pastas de destino relativo devem ser estritamente diferentes
+    assert str(burst_1[0].relative_dest_dir) != str(burst_2[0].relative_dest_dir)
 

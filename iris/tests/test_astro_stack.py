@@ -602,5 +602,88 @@ def test_worker_process_concurrency_initialization():
     assert os.environ.get("MKL_NUM_THREADS") == "1"
     assert os.environ.get("NUMEXPR_NUM_THREADS") == "1"
 
+def test_partition_astro_bursts():
+    from src.modules.astro_stack.stage import partition_astro_bursts
 
+    # Simula 5 arquivos da rajada 1 e 5 da rajada 2
+    b1_files = [
+        Path(f"2026-10-18_20-41-0{i}_Canon-SX60_IMG_{100+i}.CR2") for i in range(5)
+    ]
+    b2_files = [
+        Path(f"2026-10-18_20-41-{20+i}_Canon-SX60_IMG_{200+i}.CR2") for i in range(5)
+    ]
+    all_files = b1_files + b2_files
+
+    bursts = partition_astro_bursts(all_files, max_interval=4.0)
+    assert len(bursts) == 2
+    assert bursts[0] == b1_files
+    assert bursts[1] == b2_files
+
+
+def test_runner_run_session_with_discard_and_files(tmp_path: Path):
+    import sys
+    from src.modules.astro_stack.runner import AstroStackRunner
+
+    runner = AstroStackRunner(python_path=Path(sys.executable))
+    files = [tmp_path / f"frame_{i}.cr2" for i in range(5)]
+    for f in files:
+        f.write_bytes(b"\x00" * 10)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline.return_value = ""
+        mock_proc.poll.return_value = 0
+        mock_proc.wait.return_value = 0
+        mock_popen.return_value = mock_proc
+
+        runner.run_session(
+            input_dir=tmp_path,
+            output_dir=out_dir,
+            keep_percents=[50],
+            discard_initial_frames=2,
+            discard_final_frames=1,
+            files=files,
+        )
+
+        cmd = mock_popen.call_args[0][0]
+        assert "--discard-initial-frames" in cmd
+        assert cmd[cmd.index("--discard-initial-frames") + 1] == "2"
+        assert "--discard-final-frames" in cmd
+        assert cmd[cmd.index("--discard-final-frames") + 1] == "1"
+        assert "--manifest" in cmd
+
+
+def test_astro_stack_stage_multi_burst_partitioning(tmp_path: Path):
+    """Garante que sessões com múltiplos disparos sejam particionadas e empilhadas individualmente."""
+    dest_root = tmp_path / "dest"
+    sess_dir = tmp_path / "src" / "5_Astrofotografia" / "Lua" / "2026" / "10" / "18" / "sessao_20-41-00"
+    sess_dir.mkdir(parents=True, exist_ok=True)
+
+    # 3 frames às 20-41-00..02 e 3 frames às 20-41-30..32
+    f1 = [sess_dir / f"2026-10-18_20-41-0{i}_Canon_IMG_{i}.cr2" for i in range(3)]
+    f2 = [sess_dir / f"2026-10-18_20-41-{30+i}_Canon_IMG_{i+3}.cr2" for i in range(3)]
+    for f in f1 + f2:
+        f.write_bytes(b"\x00" * 100)
+
+    proj = Project("multi_burst_proj", str(sess_dir))
+    s_stack = get_stack_stage("astro_stack", "Empilhamento Lunar")
+
+    with patch("src.core.config.config.get", side_effect=lambda k, d=None: dest_root if "destination_root" in k else (4.0 if "burst_interval_seconds" in k else d)):
+        with patch("src.modules.astro_stack.stage.AstroStackRunner") as mock_runner_cls:
+            mock_runner = MagicMock()
+            mock_runner.is_available.return_value = True
+            mock_runner.run_session.return_value = {
+                "output_tiff_paths": {"50": str(dest_root / "out.tiff")},
+                "crop_size": 180,
+                "shared_gain": 1.2,
+            }
+            mock_runner_cls.return_value = mock_runner
+
+            res = s_stack.run(proj, force=True)
+            assert res is True
+            # Como haviam 2 rajadas, o runner deve ter sido chamado 2 vezes (uma para cada rajada)
+            assert mock_runner.run_session.call_count == 2
 
