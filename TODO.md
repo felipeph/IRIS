@@ -1,6 +1,7 @@
 # Projeto IRIS - TODO List
 
 ## 📌 Pendentes (A Fazer)
+- [ ] **feat**: Inserir capítulos automáticos na descrição do YouTube para vídeos concatenados (modo joined), calculando os timestamps acumulados de cada vídeo/tomada de origem (iniciando em 00:00) e formatando a minutagem na descrição para ativação dos capítulos nativos da plataforma. *(Adicionado em: 03/11/2026 13:27)*
 - [ ] **feat**: Implementar pipeline de filtragem espaço-temporal (spatiotemporal denoising) para processamento em lote de fotos/timelapses noturnos (ex: astrofotografia e céu estrelado), explorando filtros como `hqdn3d` via FFmpeg ou algoritmos via OpenCV/Python para eliminação de ruído/granulação do sensor com preservação de rastros suaves e movimento contínuo das estrelas. *(Adicionado em: 21/10/2026 09:30)*
 - [ ] **feat**: Identificação e ingestão de arquivos TIFF empilhados (ex: stacks lunares externos ou pré-processados), roteamento via módulo de organização (`OrganizeStage`) para a pasta de empilhamento (`8_Astro_Stack/YYYY/MM/DD/`) e encadeamento automático com o módulo de sharpening por wavelets (`AstroSharpenStage`). *(Adicionado em: 15/10/2026 15:41)*
 - [ ] **feat**: Implementar módulo local de visão computacional (GPU/on-device, via YOLO ou classificador leve) para inferência em amostragem de frames e extração automática de palavras-chave/tags da cena (ex: nuvens, sol, chuva, pássaros) sem custo de tokens ou dependência de APIs externas. *(Adicionado em: 22/09/2026 22:06)*
