@@ -126,6 +126,8 @@ def process_and_save_frame(
     gain: float,
     output_tiff_path: Union[str, Path],
     fast_demosaic: bool = True,
+    expected_dim: Optional[Tuple[float, float]] = None,
+    dim_tolerance: float = 0.08,
 ) -> Dict[str, Any]:
     """Processa um frame em passo único: decodifica, localiza bounds, recorta centrado,
     aplica ganho escalar e grava diretamente o TIFF final pronto para o PSS.
@@ -139,6 +141,15 @@ def process_and_save_frame(
     try:
         img = read_mono(path, fast_demosaic=fast_demosaic)
         bounds = moon_bounds(img)
+
+        if expected_dim is not None:
+            exp_w, exp_h = expected_dim
+            _, _, w, h = bounds
+            if abs(w - exp_w) > dim_tolerance * exp_w or abs(h - exp_h) > dim_tolerance * exp_h:
+                raise ValueError(
+                    f"Disco lunar deformado ou ocluído por nuvens: ({w}x{h}) diverge da dimensão nominal ({int(round(exp_w))}x{int(round(exp_h))})."
+                )
+
         peak = float(np.max(img))
         cropped = centred_crop(img, crop_size, bounds=bounds)
 
@@ -167,12 +178,13 @@ def process_and_save_frame(
         }
 
 
-
 def process_single_frame(
     file_path: Union[str, Path],
     crop_size: int,
     output_tiff_path: Union[str, Path],
     fast_demosaic: bool = True,
+    expected_dim: Optional[Tuple[float, float]] = None,
+    dim_tolerance: float = 0.08,
 ) -> Dict[str, Any]:
     """Processa um frame isolado: decodifica, localiza bounds, recorta e grava TIFF intermediário.
     
@@ -183,6 +195,15 @@ def process_single_frame(
 
     img = read_mono(path, fast_demosaic=fast_demosaic)
     bounds = moon_bounds(img)
+
+    if expected_dim is not None:
+        exp_w, exp_h = expected_dim
+        _, _, w, h = bounds
+        if abs(w - exp_w) > dim_tolerance * exp_w or abs(h - exp_h) > dim_tolerance * exp_h:
+            raise ValueError(
+                f"Disco lunar deformado ou ocluído por nuvens: ({w}x{h}) diverge da dimensão nominal ({int(round(exp_w))}x{int(round(exp_h))})."
+            )
+
     peak = float(np.max(img))
     cropped = centred_crop(img, crop_size, bounds=bounds)
 
@@ -196,6 +217,55 @@ def process_single_frame(
         "moon_bounds": list(bounds),
         "peak": peak,
     }
+
+
+def finalize_stacked_canvas(
+    stacked: np.ndarray,
+    target_size: int,
+) -> Tuple[np.ndarray, List[float]]:
+    """Acomoda a imagem empilhada pelo PSS em um canvas quadrado target_size x target_size.
+    
+    O PSS pode cortar as bordas devido ao drift de alinhamento, gerando uma imagem (H, W)
+    menor que o target_size. Esta função posiciona o resultado centrado em um canvas preto
+    sem executar chamadas frágeis a moon_bounds com verificação estrita de borda zero.
+    
+    Retorna tupla (canvas_final, [centro_erro_x, centro_erro_y]).
+    """
+    import cv2
+
+    h, w = stacked.shape[:2]
+    if h == target_size and w == target_size:
+        out = stacked.copy()
+    else:
+        out = np.zeros((target_size, target_size), dtype=stacked.dtype)
+        y_offset = max(0, (target_size - h) // 2)
+        x_offset = max(0, (target_size - w) // 2)
+        src_y0 = max(0, (h - target_size) // 2)
+        src_x0 = max(0, (w - target_size) // 2)
+        copy_h = min(h - src_y0, target_size - y_offset)
+        copy_w = min(w - src_x0, target_size - x_offset)
+        out[y_offset:y_offset + copy_h, x_offset:x_offset + copy_w] = stacked[src_y0:src_y0 + copy_h, src_x0:src_x0 + copy_w]
+
+    # Cálculo tolerante e não-fatal do erro residual de centralização para telemetria
+    centre_err = [0.0, 0.0]
+    try:
+        peak = float(np.percentile(out, 99.9))
+        if peak > 0:
+            scaled = np.uint8(np.clip(out.astype(np.float32) * (255.0 / peak), 0, 255))
+            blurred = cv2.GaussianBlur(scaled, (9, 9), 0)
+            _, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            M = cv2.moments(mask)
+            if M["m00"] > 0:
+                cx = M["m10"] / M["m00"]
+                cy = M["m01"] / M["m00"]
+                centre_err = [
+                    round(float(cx - (target_size - 1) / 2.0), 2),
+                    round(float(cy - (target_size - 1) / 2.0), 2),
+                ]
+    except Exception:
+        pass
+
+    return out, centre_err
 
 
 def scale_single_frame(
@@ -223,4 +293,3 @@ def scale_single_frame(
             src_p.unlink()
         except Exception:
             pass
-

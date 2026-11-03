@@ -181,6 +181,7 @@ class ConfigManager:
                     "discard_initial_frames": 1,
                     "discard_final_frames": 1,
                     "burst_interval_seconds": 4.0,
+                    "max_disk_dim_deviation": 0.08,
                 }
                 has_changes = True
             else:
@@ -192,6 +193,9 @@ class ConfigManager:
                     has_changes = True
                 if "burst_interval_seconds" not in mods["astro_stack"]:
                     mods["astro_stack"]["burst_interval_seconds"] = 4.0
+                    has_changes = True
+                if "max_disk_dim_deviation" not in mods["astro_stack"]:
+                    mods["astro_stack"]["max_disk_dim_deviation"] = 0.08
                     has_changes = True
 
             if "astro_sharpen" not in mods:
@@ -403,7 +407,8 @@ class ConfigManager:
                     "ntfy_topic": "iris-alerts",
                     "discard_initial_frames": 1,
                     "discard_final_frames": 1,
-                    "burst_interval_seconds": 4.0
+                    "burst_interval_seconds": 4.0,
+                    "max_disk_dim_deviation": 0.08
                 },
                 "astro_sharpen": {
                     "enabled": True,

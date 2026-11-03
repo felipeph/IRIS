@@ -42,6 +42,7 @@ from preprocessor import (
     process_and_save_frame,
     process_single_frame,
     scale_single_frame,
+    finalize_stacked_canvas,
 )
 from namer import build_stack_filename, build_preview_filename, build_report_filename
 
@@ -79,6 +80,7 @@ def parse_args():
     parser.add_argument("--discard-final-frames", "--discard_final_frames", type=int, default=0, help="Número de frames finais a descartar por rajada (vibração do obturador)")
     parser.add_argument("--manifest", type=Path, default=None, help="Caminho para arquivo JSON contendo lista explícita de frames para empilhar")
     parser.add_argument("--burst-interval", "--burst_interval", type=float, default=4.0, help="Intervalo máximo em segundos entre fotos da mesma rajada")
+    parser.add_argument("--max-disk-dim-deviation", "--max_disk_dim_deviation", type=float, default=0.08, help="Desvio máximo tolerado nas dimensões do disco lunar antes de descartar por nuvem/oclusão (padrão: 0.08)")
     return parser.parse_args()
 
 
@@ -172,20 +174,28 @@ def main():
     max_workers = args.workers if args.workers is not None and args.workers > 0 else min(os.cpu_count() or 4, 4)
     print(f"STATUS: Início da sessão. Encontrados {len(files)} arquivos. Workers paralelos: {max_workers}", flush=True)
 
-    # 1. Determinação da geometria (crop_size) e ganho linear comum antecipado
+    # 1. Determinação da geometria (crop_size), diâmetro nominal e ganho linear comum antecipado
     sample_peaks = []
+    expected_dim = None
     if args.crop_size is not None and args.crop_size > 0:
         crop_size = args.crop_size
         print(f"STATUS: Dimensão de corte pré-definida via argumento: {crop_size}x{crop_size}", flush=True)
         sample_count = min(5, len(files))
         sample_indices = np.linspace(0, len(files) - 1, sample_count, dtype=int).tolist()
+        sample_bounds = []
         for s_idx in sample_indices:
             sf = files[s_idx]
             try:
                 s_img = read_mono(sf, fast_demosaic=True)
+                sample_bounds.append(moon_bounds(s_img))
                 sample_peaks.append(float(np.max(s_img)))
             except Exception:
                 pass
+        if sample_bounds:
+            expected_dim = (
+                float(np.median([b[2] for b in sample_bounds])),
+                float(np.median([b[3] for b in sample_bounds])),
+            )
     else:
         # Amostragem representativa rápida de até 10 frames distribuídos
         sample_count = min(10, len(files))
@@ -204,10 +214,18 @@ def main():
         if not sample_bounds:
             raise ValueError("Não foi possível detectar a Lua nos frames de amostragem da sessão.")
 
+        # Dimensões nominais esperadas da Lua nesta sessão (mediana das amostras íntegras)
+        nominal_w = float(np.median([b[2] for b in sample_bounds]))
+        nominal_h = float(np.median([b[3] for b in sample_bounds]))
+        expected_dim = (nominal_w, nominal_h)
+
         max_dim = max(max(b[2:]) for b in sample_bounds)
         crop_size = int(math.ceil((max_dim + args.margin) / 16.0) * 16)
         if crop_size <= 0:
             raise ValueError(f"Dimensão de corte calculada inválida: {crop_size}")
+
+    if expected_dim:
+        print(f"STATUS: Diâmetro lunar nominal: {expected_dim[0]:.0f}x{expected_dim[1]:.0f} px (Tolerância: {args.max_disk_dim_deviation*100:.1f}%)", flush=True)
 
     # Ganho linear compartilhado calculado na mesma amostragem representativa
     max_sample_peak = max(sample_peaks) if sample_peaks else 0.0
@@ -236,6 +254,8 @@ def main():
                 gain,
                 prepared_dir / f"frame_{idx:04d}.tiff",
                 True,
+                expected_dim,
+                args.max_disk_dim_deviation,
             ): (idx, f)
             for idx, f in enumerate(files)
         }
@@ -258,7 +278,7 @@ def main():
 
             msg = f"Lendo e preparando {valid_count}/{len(files)} ({fps:.1f} fps)"
             if skipped_count > 0:
-                msg += f" [Descartados: {skipped_count}]"
+                msg += f" [Descartados por nuvem/borda: {skipped_count}]"
 
             print(
                 f"PROGRESS_JSON:{json.dumps({'phase': 'decode', 'current': completed_decode, 'valid': valid_count, 'skipped': skipped_count, 'total': len(files), 'fps': round(fps, 2), 'rem_seconds': round(rem_s, 1), 'item': f.name, 'crop_size': crop_size, 'gain': gain, 'progress_pct': pct, 'msg': msg})}",
@@ -276,13 +296,11 @@ def main():
         executor.shutdown(wait=False)
 
     if valid_count < 2:
-        print(f"ERRO: Menos de 2 imagens válidas após descarte de borda. Válidas: {valid_count}, Descartadas: {skipped_count}", file=sys.stderr)
+        print(f"ERRO: Menos de 2 imagens válidas após descarte por nuvens/borda. Válidas: {valid_count}, Descartadas: {skipped_count}", file=sys.stderr)
         sys.exit(2)
 
     if skipped_count > 0:
-        print(f"STATUS: Preparação concluída: {valid_count} frames válidos prontos para PSS ({skipped_count} fotos na borda descartadas).", flush=True)
-
-
+        print(f"STATUS: Preparação concluída: {valid_count} frames válidos prontos para PSS ({skipped_count} fotos com nuvens/borda descartadas).", flush=True)
 
     # Extrai metadados de câmera/data do primeiro arquivo
     first_file = files[0].stem
@@ -343,13 +361,8 @@ def main():
         if stacked is None or stacked.ndim != 2 or stacked.dtype != np.uint16:
             raise RuntimeError(f"TIFF inválido gerado pelo PSS: {stacked_raw_path}")
 
-        # Recorte centrado final e validação de centralização
-        final_mono = centred_crop(stacked, crop_size)
-        x_m, y_m, w_m, h_m = moon_bounds(final_mono)
-        centre_err = [
-            x_m + (w_m - 1) / 2.0 - (crop_size - 1) / 2.0,
-            y_m + (h_m - 1) / 2.0 - (crop_size - 1) / 2.0,
-        ]
+        # Acomodação centrada segura no canvas final e telemetria (sem chamadas frágeis a moon_bounds)
+        final_mono, centre_err = finalize_stacked_canvas(stacked, crop_size)
 
         # Nome oficial definitivo
         time_clean = time_str.replace(":", "-")

@@ -154,6 +154,8 @@ class AstroStackStage(PipelineStage):
         discard_final = int(val_fin) if val_fin is not None else 1
         val_intv = astro_config.get("burst_interval_seconds", 4.0)
         burst_interval = float(val_intv) if val_intv is not None else 4.0
+        val_dev = astro_config.get("max_disk_dim_deviation", 0.08)
+        max_disk_dim_deviation = float(val_dev) if val_dev is not None else 0.08
 
         stacked_count = 0
         total_raws_processed = 0
@@ -294,6 +296,7 @@ class AstroStackStage(PipelineStage):
                             discard_initial_frames=discard_initial,
                             discard_final_frames=discard_final,
                             files=burst_files,
+                            max_disk_dim_deviation=max_disk_dim_deviation,
                             progress_callback=on_progress,
                         )
                         progress_pct = 100.0

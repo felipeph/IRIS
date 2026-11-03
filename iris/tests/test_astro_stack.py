@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +23,7 @@ from src.modules.astro_stack.preprocessor import (
     process_and_save_frame,
     process_single_frame,
     scale_single_frame,
+    finalize_stacked_canvas,
 )
 from src.modules.astro_stack.runner import find_astro_python, AstroStackRunner
 from src.modules.astro_stack.stage import AstroStackStage, get_stage as get_stack_stage
@@ -687,3 +689,99 @@ def test_astro_stack_stage_multi_burst_partitioning(tmp_path: Path):
             # Como haviam 2 rajadas, o runner deve ter sido chamado 2 vezes (uma para cada rajada)
             assert mock_runner.run_session.call_count == 2
 
+
+
+def test_finalize_stacked_canvas():
+    """Valida que finalize_stacked_canvas acomoda imagens menores do PSS e com bordas tocadas."""
+    # Caso 1: Imagem exatamente do mesmo tamanho
+    img = np.zeros((180, 180), dtype=np.uint16)
+    img[80:100, 80:100] = 50000
+    res, err = finalize_stacked_canvas(img, 180)
+    assert res.shape == (180, 180)
+    assert res.dtype == np.uint16
+    assert res[90, 90] == 50000
+
+    # Caso 2: PSS cortou bordas por drift (150x160 para alvo 180x180)
+    cropped_pss = np.zeros((150, 160), dtype=np.uint16)
+    cropped_pss[0:50, 50:110] = 45000  # Objeto tocando y=0 na borda superior
+    res2, err2 = finalize_stacked_canvas(cropped_pss, 180)
+    assert res2.shape == (180, 180)
+    assert res2.dtype == np.uint16
+    # O topo (y=0 do cropped_pss) deve ficar em y_offset = (180-150)//2 = 15 no canvas final
+    assert res2[15, 80] == 45000
+    assert res2[0, 80] == 0  # Borda externa preenchida com preto
+
+
+def test_process_and_save_frame_cloud_rejection(tmp_path: Path):
+    """Valida descarte de frames ocluídos por nuvens quando divergem da dimensão nominal."""
+    from src.modules.astro_stack.preprocessor import _write_tiff
+
+    # 1. Frame perfeito (disco completo, diâmetro ~80)
+    img_ok = np.zeros((300, 300), dtype=np.uint16)
+    y, x = np.ogrid[:300, :300]
+    dist = np.sqrt((x - 150)**2 + (y - 150)**2)
+    img_ok[dist <= 40] = 40000
+    raw_ok = tmp_path / "moon_ok.tiff"
+    _write_tiff(raw_ok, img_ok)
+
+    out_ok = tmp_path / "frame_ok.tiff"
+    res_ok = process_and_save_frame(
+        raw_ok,
+        crop_size=160,
+        gain=1.0,
+        output_tiff_path=out_ok,
+        expected_dim=(80.0, 80.0),
+        dim_tolerance=0.08,
+    )
+    assert res_ok["success"] is True
+    assert out_ok.exists()
+
+    # 2. Frame ocluído por nuvens (metade do disco encoberta, largura cai para ~40)
+    img_cloud = img_ok.copy()
+    img_cloud[:, :150] = 0  # Escurece metade esquerda da imagem
+    raw_cloud = tmp_path / "moon_cloud.tiff"
+    _write_tiff(raw_cloud, img_cloud)
+
+    out_cloud = tmp_path / "frame_cloud.tiff"
+    res_cloud = process_and_save_frame(
+        raw_cloud,
+        crop_size=160,
+        gain=1.0,
+        output_tiff_path=out_cloud,
+        expected_dim=(80.0, 80.0),
+        dim_tolerance=0.08,
+    )
+    assert res_cloud["success"] is False
+    assert "Disco lunar deformado ou ocluído" in res_cloud["error"]
+
+
+def test_runner_passes_max_disk_dim_deviation(tmp_path: Path):
+    """Garante que o runner repassa o argumento --max-disk-dim-deviation para o worker."""
+    from src.modules.astro_stack.runner import AstroStackRunner
+
+    runner = AstroStackRunner(python_path=Path(sys.executable))
+    files = [tmp_path / f"test_{i}.tif" for i in range(3)]
+    for f in files:
+        f.write_bytes(b"\x00" * 10)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch("subprocess.Popen") as mock_popen:
+        mock_proc = MagicMock()
+        mock_proc.stdout.readline.return_value = ""
+        mock_proc.poll.return_value = 0
+        mock_proc.wait.return_value = 0
+        mock_popen.return_value = mock_proc
+
+        runner.run_session(
+            input_dir=tmp_path,
+            output_dir=out_dir,
+            keep_percents=[50],
+            files=files,
+            max_disk_dim_deviation=0.05,
+        )
+
+        cmd = mock_popen.call_args[0][0]
+        assert "--max-disk-dim-deviation" in cmd
+        assert cmd[cmd.index("--max-disk-dim-deviation") + 1] == "0.05"

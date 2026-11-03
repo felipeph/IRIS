@@ -107,6 +107,7 @@ class AstroStackRunner:
         discard_initial_frames: Optional[int] = None,
         discard_final_frames: Optional[int] = None,
         files: Optional[List[Path]] = None,
+        max_disk_dim_deviation: Optional[float] = None,
         progress_callback: Optional[Callable[[str, Optional[float]], None]] = None,
     ) -> Dict[str, Any]:
         """Executa o empilhamento para uma sessão lunar completa."""
@@ -130,6 +131,10 @@ class AstroStackRunner:
             val_fin = config.get("modules.astro_stack.discard_final_frames", 1)
             discard_final_frames = int(val_fin) if val_fin is not None else 1
 
+        if max_disk_dim_deviation is None:
+            val_dev = config.get("modules.astro_stack.max_disk_dim_deviation", 0.08)
+            max_disk_dim_deviation = float(val_dev) if val_dev is not None else 0.08
+
         cmd = [
             str(self.python_path),
             "-u",
@@ -144,6 +149,7 @@ class AstroStackRunner:
             "--timeout", str(timeout),
             "--discard-initial-frames", str(discard_initial_frames),
             "--discard-final-frames", str(discard_final_frames),
+            "--max-disk-dim-deviation", str(max_disk_dim_deviation),
         ]
         if crop_size is not None:
             cmd.extend(["--crop-size", str(crop_size)])
