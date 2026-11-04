@@ -228,6 +228,14 @@ def build_rich_youtube_description(
     else:
         deband_desc = "Desativado (Renderização Direta Lanczos)"
 
+    denoise_line = ""
+    if meta.get("spatiotemporal_denoise"):
+        d_stats = meta.get("denoise_stats") or {}
+        w_sz = d_stats.get("window_size", 7)
+        hp_cnt = d_stats.get("hot_pixels_detected", 0)
+        hp_info = f" e supressão de {hp_cnt} hot pixels fixos" if hp_cnt > 0 else " e supressão de hot pixels"
+        denoise_line = f"\n• Redução de Ruído Astrofotográfico: Filtro Bilateral Espaço-Temporal ({w_sz} frames) com proteção de estrelas{hp_info}"
+
     is_direct_crop = meta.get("is_direct_crop", False)
     tl_render_profile = meta.get("render_profile")
     if crop_mode.lower() == "full":
@@ -320,7 +328,7 @@ Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IR
 🎞️ PROCESSAMENTO E ENGENHARIA DE VÍDEO (IRIS):
 • Resolução Final: 4K UHD ({res}) • Proporção 16:9
 • Taxa de Quadros: {fps:.1f} FPS
-• Enquadramento: {framing_desc}
+• Enquadramento: {framing_desc}{denoise_line}
 • Otimização para YouTube: {deband_desc}
 • Encoder: {encoder} (Aceleração por Hardware)
 • Perfil de Cor: BT.709 Standard Broadcast (HD/UHD){compression_line}{render_perf_desc}
@@ -335,4 +343,3 @@ Capturado em {date_label}, produzido e renderizado de forma automatizada pelo IR
 """.replace("\r\n", "\n")
 
     return description[:5000]
-

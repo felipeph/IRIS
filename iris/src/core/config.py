@@ -76,6 +76,30 @@ class ConfigManager:
                 "enabled": True
             },
             {
+                "id": "bird_detect",
+                "name": "Detecção e Recorte de Aves (YOLOv8)",
+                "module": "src.modules.bird_id.detect_stage",
+                "enabled": True
+            },
+            {
+                "id": "bird_id",
+                "name": "Classificação Taxonômica de Aves (iNaturalist)",
+                "module": "src.modules.bird_id.classify_stage",
+                "enabled": True
+            },
+            {
+                "id": "bird_organize",
+                "name": "Organização Física de Aves (Subpastas e Nomes)",
+                "module": "src.modules.bird_id.organize_stage",
+                "enabled": True
+            },
+            {
+                "id": "bird_tag",
+                "name": "Injeção de Metadados de Aves (EXIF/IPTC)",
+                "module": "src.modules.bird_id.tag_stage",
+                "enabled": True
+            },
+            {
                 "id": "astro_stack",
                 "name": "Empilhamento Lunar (PSS -> 8_Astro_Stack)",
                 "module": "src.modules.astro_stack.stage",
@@ -85,6 +109,12 @@ class ConfigManager:
                 "id": "astro_sharpen",
                 "name": "Aprimoramento Wavelets (9_Astro_Sharpening)",
                 "module": "src.modules.astro_sharpen.stage",
+                "enabled": True
+            },
+            {
+                "id": "timelapse_denoise",
+                "name": "Redução de Ruído de Timelapse Noturno (4_Timelapses_LongaExposicao)",
+                "module": "src.modules.timelapse_denoise.stage",
                 "enabled": True
             },
             {
@@ -145,7 +175,12 @@ class ConfigManager:
                     def_id = def_s.get("id")
                     if def_id not in existing_ids:
                         insert_idx = len(pipe["stages"])
-                        if def_id in ("astro_stack", "astro_sharpen"):
+                        if def_id == "timelapse_denoise":
+                            for idx, s in enumerate(pipe["stages"]):
+                                if s.get("id") == "timelapse":
+                                    insert_idx = idx
+                                    break
+                        elif def_id in ("astro_stack", "astro_sharpen"):
                             for idx, s in enumerate(pipe["stages"]):
                                 if s.get("id") == "organize":
                                     insert_idx = idx + 1
@@ -206,6 +241,20 @@ class ConfigManager:
                     "use_limb_guard": True,
                     "windows_toast": True,
                     "ntfy_topic": "iris-alerts"
+                }
+                has_changes = True
+
+            if "timelapse_denoise" not in mods:
+                mods["timelapse_denoise"] = {
+                    "enabled": True,
+                    "output_subfolder": "denoised",
+                    "use_denoised_frames": True,
+                    "window_size": 7,
+                    "sigma_range": 4.5,
+                    "hot_pixel_threshold": 8,
+                    "chroma_denoise": True,
+                    "jpeg_quality": 96,
+                    "apply_to_normal_timelapse": False
                 }
                 has_changes = True
 
@@ -417,6 +466,17 @@ class ConfigManager:
                     "use_limb_guard": True,
                     "windows_toast": True,
                     "ntfy_topic": "iris-alerts"
+                },
+                "timelapse_denoise": {
+                    "enabled": True,
+                    "output_subfolder": "denoised",
+                    "use_denoised_frames": True,
+                    "window_size": 7,
+                    "sigma_range": 4.5,
+                    "hot_pixel_threshold": 8,
+                    "chroma_denoise": True,
+                    "jpeg_quality": 96,
+                    "apply_to_normal_timelapse": False
                 },
                 "timelapse": {
                     "enabled": True,

@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -114,6 +115,33 @@ class TimelapseStage(PipelineStage):
                 console.print(f"[red]Aviso: Nenhuma foto encontrada fisicamente para a sequência '{seq_rel}'.[/red]")
                 error_count += 1
                 continue
+
+            # Verificar se há subpasta de frames pré-filtrados (Spatiotemporal Denoise)
+            denoise_cfg = config.get("modules.timelapse_denoise", {})
+            denoised_subfolder = str(denoise_cfg.get("output_subfolder", "denoised")).strip() or "denoised"
+            use_denoised = bool(denoise_cfg.get("use_denoised_frames", True))
+            denoised_dir = seq_dir / denoised_subfolder
+            used_denoised_frames = False
+            denoise_stats = {}
+
+            if use_denoised and denoised_dir.exists():
+                valid_exts = {'.jpg', '.jpeg', '.png'}
+                denoised_candidates = sorted(
+                    [p for p in denoised_dir.iterdir() if p.is_file() and p.suffix.lower() in valid_exts],
+                    key=lambda p: p.name
+                )
+                if len(denoised_candidates) >= len(photo_paths):
+                    photo_paths = denoised_candidates
+                    used_denoised_frames = True
+                    manifest_file = denoised_dir / "denoise_manifest.json"
+                    if manifest_file.exists():
+                        try:
+                            denoise_stats = json.loads(manifest_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            denoise_stats = {}
+                    console.print(
+                        f"[bold green]✨ Utilizando {len(photo_paths)} frames pré-filtrados (Spatiotemporal Denoise) da subpasta '{denoised_subfolder}/'[/bold green]"
+                    )
 
             # Extrair datas e metadados da sequência
             first_item = items[0]
@@ -304,6 +332,8 @@ class TimelapseStage(PipelineStage):
                     "is_direct_crop": bool(render_stats.get("is_direct_crop", False)),
                     "deband_enabled": bool(render_stats.get("deband_enabled", False)),
                     "deband_grain": bool(render_stats.get("deband_grain", False)),
+                    "spatiotemporal_denoise": used_denoised_frames,
+                    "denoise_stats": denoise_stats,
                     "render_stats": render_stats
                 }
                 if seq_loc:

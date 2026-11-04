@@ -143,6 +143,12 @@ def _menu_timelapse_long_exposure(console: Console):
         pl_le = config.get("modules.youtube.timelapse_long_exposure_playlist", "Timelapses Longa Exposição")
         table.add_row("14", "Playlist YouTube Dedicada", "modules.youtube.timelapse_long_exposure_playlist", str(pl_le))
 
+        denoise_on = config.get("modules.timelapse_denoise.enabled", True)
+        table.add_row("15", "Denoise Espaço-Temporal (Estrelas)", "modules.timelapse_denoise.enabled", "[green]Ativado[/green]" if denoise_on else "[red]Desativado[/red]")
+        table.add_row("16", "Janela Temporal Denoise (frames)", "modules.timelapse_denoise.window_size", str(config.get("modules.timelapse_denoise.window_size", 7)))
+        table.add_row("17", "Limiar Fotométrico (Sigma Range)", "modules.timelapse_denoise.sigma_range", str(config.get("modules.timelapse_denoise.sigma_range", 4.5)))
+        table.add_row("18", "Subpasta de Frames Limpos", "modules.timelapse_denoise.output_subfolder", str(config.get("modules.timelapse_denoise.output_subfolder", "denoised")))
+
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
         
@@ -258,7 +264,37 @@ def _menu_timelapse_long_exposure(console: Console):
             config.set("modules.youtube.timelapse_long_exposure_playlist", new_val)
             console.print("[green]Salvo![/green]")
             time.sleep(1)
+        elif choice == "15":
+            curr = config.get("modules.timelapse_denoise.enabled", True)
+            new_val = Confirm.ask("Ativar Denoise Espaço-Temporal para limpeza individual de frames noturnos?", default=curr)
+            config.set("modules.timelapse_denoise.enabled", new_val)
+            console.print("[green]Salvo![/green]")
+            time.sleep(1)
+        elif choice == "16":
+            new_val = Prompt.ask("Tamanho da Janela Temporal (ímpar: 5, 7 ou 9 frames)", default=str(config.get("modules.timelapse_denoise.window_size", 7)))
+            try:
+                val_int = max(3, int(new_val))
+                if val_int % 2 == 0:
+                    val_int += 1
+                config.set("modules.timelapse_denoise.window_size", val_int)
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser um número inteiro![/red]")
+            time.sleep(1)
+        elif choice == "17":
+            new_val = Prompt.ask("Limiar fotométrico Sigma Range (ex: 4.5)", default=str(config.get("modules.timelapse_denoise.sigma_range", 4.5)))
+            try:
+                config.set("modules.timelapse_denoise.sigma_range", max(1.0, float(new_val)))
+                console.print("[green]Salvo![/green]")
+            except ValueError:
+                console.print("[red]Valor deve ser numérico![/red]")
+            time.sleep(1)
+        elif choice == "18":
+            new_val = Prompt.ask("Nome da subpasta para salvar os frames limpos", default=str(config.get("modules.timelapse_denoise.output_subfolder", "denoised"))).strip()
+            if new_val:
+                config.set("modules.timelapse_denoise.output_subfolder", new_val)
+                console.print("[green]Salvo![/green]")
+            time.sleep(1)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
-

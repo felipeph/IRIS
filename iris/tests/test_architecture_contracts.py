@@ -2,7 +2,7 @@
 Testes de Contrato Arquitetural do IRIS.
 Garante que:
 1. Os arquivos YAML (`config.example.yaml` e `config.yaml`) não possuam chaves duplicadas.
-2. Todas as 14 etapas do pipeline estejam sincronizadas no `config.example.yaml` e importem com `get_stage()`.
+2. Todas as 15 etapas do pipeline estejam sincronizadas no `config.example.yaml` e importem com `get_stage()`.
 3. As fachadas modulares (`config_menu.py`, `describer.py`, `project.py`) exponham todos os contratos públicos
    e permaneçam enxutas (prevenindo o retorno de monólitos).
 """
@@ -50,7 +50,7 @@ def test_config_example_yaml_has_no_duplicate_keys():
 
 
 def test_config_example_yaml_stages_match_canonical_pipeline():
-    """Valida que as 14 etapas canônicas estão declaradas na ordem correta e são instanciáveis."""
+    """Valida que as 15 etapas canônicas estão declaradas na ordem correta e são instanciáveis."""
     example_path = IRIS_ROOT / "config.example.yaml"
     data = yaml.safe_load(example_path.read_text(encoding="utf-8"))
     stages_cfg = data.get("pipeline", {}).get("stages", [])
@@ -67,6 +67,7 @@ def test_config_example_yaml_stages_match_canonical_pipeline():
         "bird_tag",
         "astro_stack",
         "astro_sharpen",
+        "timelapse_denoise",
         "timelapse",
         "video_edit",
         "youtube",
@@ -160,4 +161,3 @@ def test_modular_facades_export_all_contracts_and_stay_compact():
     assert cm_lines < 350, f"config_menu.py voltou a crescer demais ({cm_lines} linhas)"
     assert desc_lines < 350, f"describer.py voltou a crescer demais ({desc_lines} linhas)"
     assert proj_lines < 350, f"project.py voltou a crescer demais ({proj_lines} linhas)"
-

@@ -136,6 +136,16 @@ modules:
   ingestion:
     strategy: "move"          # "move" (rápido nativo) ou "copy" (cópia clássica segura)
     max_workers: 4            # número de threads para movimentação paralela
+  timelapse_denoise:
+    enabled: true                     # Ativa limpeza espaço-temporal individual de frames em timelapses noturnos
+    output_subfolder: "denoised"      # Subpasta separada dentro da sequência (mantém originais intactos)
+    use_denoised_frames: true         # Consome automaticamente a subpasta denoised/ na renderização 4K
+    window_size: 7                    # Janela deslizante temporal de frames consecutivos (ímpar: 5, 7 ou 9)
+    sigma_range: 4.5                  # Limiar fotométrico bilateral (protege estrelas contra borramento/apagamento)
+    hot_pixel_threshold: 8            # Limiar de supressão de hot/warm pixels fixos da câmera
+    chroma_denoise: true              # Suavização seletiva de ruído cromático (YCrCb)
+    jpeg_quality: 96                  # Qualidade JPEG dos frames limpos exportados
+    apply_to_normal_timelapse: false  # Aplica apenas em 4_Timelapses_LongaExposicao por padrão
   timelapse:
     enabled: true
     render_profile: fast            # Perfis: 'fast' (Intel QSV HW / Corte 1:1 Sensor), 'balanced' (Bicúbico), 'quality' (Lanczos/Deband)
@@ -250,6 +260,10 @@ pipeline:
     id: astro_sharpen
     module: src.modules.astro_sharpen.stage
     name: Aprimoramento Wavelets (9_Astro_Sharpening)
+  - enabled: true
+    id: timelapse_denoise
+    module: src.modules.timelapse_denoise.stage
+    name: Redução de Ruído de Timelapse Noturno (4_Timelapses_LongaExposicao)
   - enabled: true
     id: timelapse
     module: src.modules.timelapse.stage
