@@ -291,6 +291,11 @@ def test_no_white_saturation_on_dark_sky_cpu_and_gpu(tmp_path: Path):
         )
         assert ok is True
         assert stats["processed_photos"] == 7
+        if use_gpu_flag and stats["use_gpu"]:
+            assert stats["gpu_frames"] == 7
+            assert stats["cpu_frames"] == 0
+        else:
+            assert stats["cpu_frames"] == 7
         for p in photo_paths:
             out_img = cv2.imread(str(out_dir / p.name))
             assert out_img is not None
