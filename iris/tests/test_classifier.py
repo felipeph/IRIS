@@ -768,3 +768,65 @@ def test_classify_multiple_astro_bursts_split_into_separate_sessions():
     # As pastas de destino relativo devem ser estritamente diferentes
     assert str(burst_1[0].relative_dest_dir) != str(burst_2[0].relative_dest_dir)
 
+
+
+def test_classify_fractional_cadence_quantized_timelapse():
+    """
+    Valida detecção de timelapse com cadência fracionária (~1.75s) quantizada em segundos
+    inteiros no EXIF (alternando deltas de 1s e 2s, sem SubSecTimeOriginal).
+    """
+    base_time = datetime(2018, 1, 20, 19, 22, 12)
+    photos = []
+    for i in range(250):
+        # Cadência de 1.75s arredondada para segundos inteiros
+        dt = base_time + timedelta(seconds=int(round(i * 1.75)))
+        photos.append(MediaMetadata(
+            file_path=Path(f"IMG_{i:04d}.JPG"),
+            is_video=False,
+            date_str="2018-01-20",
+            time_str=dt.strftime("%H-%M-%S"),
+            timestamp=dt,
+            camera_model="PowerShot SX510 HS",
+            camera_make="Canon",
+            shutter_str="1/60",
+            original_stem=f"IMG_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 250
+    assert all(it.category == "timelapse" for it in items)
+    assert "4_Timelapses" in str(items[0].relative_dest_dir)
+
+
+def test_classify_quantized_timelapse_with_isolated_buffer_stalls():
+    """
+    Valida timelapse com cadência de 1.75s (deltas 1s e 2s) e travadas isoladas de buffer (3s).
+    """
+    base_time = datetime(2018, 1, 20, 19, 22, 12)
+    photos = []
+    curr = base_time
+    for i in range(250):
+        if i in (50, 120, 180):
+            curr += timedelta(seconds=3.0)
+        elif i > 0:
+            curr += timedelta(seconds=2 if (i % 4 != 0) else 1)
+        photos.append(MediaMetadata(
+            file_path=Path(f"IMG_{i:04d}.JPG"),
+            is_video=False,
+            date_str="2018-01-20",
+            time_str=curr.strftime("%H-%M-%S"),
+            timestamp=curr,
+            camera_model="PowerShot SX510 HS",
+            camera_make="Canon",
+            shutter_str="1/60",
+            original_stem=f"IMG_{i:04d}",
+            extension="JPG",
+            is_raw=False,
+        ))
+
+    items = classify_media_batch(photos)
+    assert len(items) == 250
+    assert all(it.category == "timelapse" for it in items)
+    assert "4_Timelapses" in str(items[0].relative_dest_dir)

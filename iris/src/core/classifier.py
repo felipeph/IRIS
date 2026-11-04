@@ -119,20 +119,33 @@ def is_timelapse_folder_name(folder_name: str) -> bool:
     clean = folder_name.lower().replace("_", " ").replace("-", " ")
     return "timelapse" in clean or "time lapse" in clean
 
-def _is_fast_cadence_window(window: list[float], profile: TimelapseProfile) -> bool:
+def _is_quantized_cadence_window(window: list[float], profile: TimelapseProfile) -> tuple[bool, int]:
     """
-    Verifica se a janela corresponde a uma cadência rápida / sub-segundo quantizada
-    em segundos inteiros (ex: 0.5s, 0.67s ou 1s com deltas 0s e 1s).
+    Verifica se a janela corresponde a uma cadência quantizada em segundos inteiros
+    pelo relógio da câmera (ex: 0.5s gerando deltas 0s e 1s, ou 1.75s gerando deltas 1s e 2s,
+    ou 2.5s gerando deltas 2s e 3s).
+    Retorna (is_quantized, k) onde os deltas regulares esperados são k e k+1.
     """
     if not window:
-        return False
-    if any(d > 2.0 or d < 0.0 for d in window):
-        return False
-    fast_count = sum(1 for d in window if d in (0.0, 1.0))
-    if fast_count < int(len(window) * 0.75):
-        return False
+        return False, 0
+    if any(d < 0.0 for d in window):
+        return False, 0
     mean_d = sum(window) / len(window)
-    return profile.min_interval <= mean_d <= 1.0
+    # Aplica-se a cadências onde o jitter de quantização de segundo inteiro afeta a tolerância (mean_d <= 4.0s)
+    if not (profile.min_interval <= mean_d <= min(4.0, profile.max_interval)):
+        return False, 0
+    k = int(mean_d)
+    allowed = {float(k), float(k + 1)}
+
+    match_count = sum(1 for d in window if d in allowed)
+    if match_count < int(len(window) * 0.75):
+        return False, 0
+    return True, k
+
+def _is_fast_cadence_window(window: list[float], profile: TimelapseProfile) -> bool:
+    """Compatibilidade retroativa: checa se janela é cadência rápida subsegundo."""
+    is_quant, k = _is_quantized_cadence_window(window, profile)
+    return is_quant and k == 0
 
 def _is_isolated_stall(deltas: list[float], j: int, anchor: float, tol: float, profile: TimelapseProfile) -> bool:
     d = deltas[j]
@@ -210,8 +223,11 @@ def _scan_segments(
             i += 1
             continue
 
-        # Caso A: Cadência Rápida / Sub-segundo quantizada em segundos inteiros (0.0s e 1.0s)
-        if profile.name == "normal" and _is_fast_cadence_window(window, profile):
+        # Caso A: Cadência Quantizada em segundos inteiros (ex: 0s/1s, 1s/2s, 2s/3s)
+        is_quant, k = _is_quantized_cadence_window(window, profile) if profile.name == "normal" else (False, 0)
+        if is_quant:
+            allowed = {float(k), float(k + 1)}
+            stall_max = max(float(k + 2), float(k + 1) * profile.stall_factor_max)
             j = i
             ok_deltas = []
             stalls = 0
@@ -220,10 +236,14 @@ def _scan_segments(
                 if next_photo_idx in skip or not profile.eligible(shutters[next_photo_idx]):
                     break
                 d = deltas[j]
-                if d in (0.0, 1.0):
+                if d in allowed:
                     ok_deltas.append(d)
                     j += 1
-                elif d == 2.0 and j + 1 < n_deltas and deltas[j + 1] in (0.0, 1.0):
+                elif k >= 1 and d == 0.0 and (j + 1 >= n_deltas or deltas[j + 1] in allowed):
+                    # Foto duplicada ou colisão no mesmo segundo em cadência >= 1s
+                    ok_deltas.append(d)
+                    j += 1
+                elif float(k + 1) < d <= stall_max and (j + 1 >= n_deltas or deltas[j + 1] in allowed):
                     stalls += 1
                     if stalls > max(2, int(profile.max_stall_fraction * (j - i + 1))):
                         break
@@ -238,9 +258,10 @@ def _scan_segments(
                 stall_fraction = stalls / total_deltas
                 mean_d = sum(ok_deltas) / len(ok_deltas) if ok_deltas else 0.0
                 
+                max_bound = float(k + 1) if k > 0 else 1.0
                 if (reg_fraction >= profile.min_regular_fraction and 
                     stall_fraction <= profile.max_stall_fraction and 
-                    profile.min_interval <= mean_d <= 1.0):
+                    profile.min_interval <= mean_d <= max_bound):
                     segments.append(TimelapseSegment(i, j, profile))
                     i = j + 1
                     continue
