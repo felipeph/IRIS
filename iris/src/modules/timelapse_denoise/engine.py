@@ -1,8 +1,6 @@
 import os
 import time
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor, Future
-from datetime import datetime
 from pathlib import Path
 import threading
 from typing import List, Tuple, Dict, Any, Optional, Callable
@@ -99,11 +97,31 @@ def write_image_bgr_with_app1(
         return False
 
 
+def build_q5_shrinkage_lut(sigma_range: float = 4.5, window_size: int = 7, scale: int = 32) -> np.ndarray:
+    """
+    Constrói tabela de busca (LUT uint8 de 256 posições) em ponto fixo Q5 (scale=32)
+    para encolhimento espaço-temporal sem risco de underflow/overflow:
+        lut[idx] = round(128 + scale * (d * exp(-0.5 * (d / (2 * sigma))^2)) / E[sum_w]), onde d = (idx - 128) * 2.
+
+    O fator 2*sigma compensa a variância dobrada da diferença direta entre dois frames ruidosos
+    sem pré-suavização espacial (Var(Y_i - Y_ref) = 2 * Var(Y)), e norm_denom = 1 + (N - 1) * 0.72
+    representa o peso total esperado E[sum_w] em regiões estacionárias.
+    """
+    sigma_eff = max(1.0, float(sigma_range) * 2.0)
+    n = max(1, int(window_size))
+    s = max(1, int(scale))
+    norm_denom = 1.0 + max(0, n - 1) * 0.72
+    lut = np.zeros(256, dtype=np.uint8)
+    for idx in range(256):
+        d = (idx - 128.0) * 2.0
+        w = np.exp(-0.5 * ((d / sigma_eff) ** 2))
+        val = 128.0 + (s * d * w) / norm_denom
+        lut[idx] = int(np.clip(np.round(val), 0, 255))
+    return lut
+
+
 def build_bilateral_lut(sigma_range: float = 4.5, scale: int = 32) -> np.ndarray:
-    """
-    Constrói tabela de busca (LUT uint8 de 256 posições) para pesos fotométricos bilaterais
-    escalados em ponto fixo (0..scale).
-    """
+    """Compatibilidade retroativa: constrói LUT tradicional de pesos gaussianos."""
     sigma = max(0.5, float(sigma_range))
     d = np.arange(256, dtype=np.float32)
     weights = np.exp(-0.5 * (d / sigma) ** 2) * float(scale)
@@ -124,17 +142,20 @@ def compute_hot_pixel_map(
     if len(frames) < 3:
         return np.zeros_like(frames[0]), 0
 
-    # Streaming 2nd-minimum accumulator com SIMD C++ (7.4x mais rápido que np.partition)
     min1 = frames[0].copy()
-    min2 = np.full_like(min1, 255)
-    tmp_max = np.empty_like(min1)
+    if len(frames) >= 5:
+        min2 = np.full_like(min1, 255)
+        tmp_max = np.empty_like(min1)
+        for f in frames[1:]:
+            cv2.max(min1, f, dst=tmp_max)
+            cv2.min(min2, tmp_max, dst=min2)
+            cv2.min(min1, f, dst=min1)
+        p_low = min2
+    else:
+        for f in frames[1:]:
+            cv2.min(min1, f, dst=min1)
+        p_low = min1
 
-    for f in frames[1:]:
-        cv2.max(min1, f, dst=tmp_max)
-        cv2.min(min2, tmp_max, dst=min2)
-        cv2.min(min1, f, dst=min1)
-
-    p_low = min2
     med_spatial = cv2.medianBlur(p_low, 3)
     hot_excess = cv2.subtract(p_low, med_spatial)
 
@@ -196,7 +217,7 @@ def remove_hot_pixels(
 def _prepare_frame_features(
     raw_bgr: np.ndarray,
     hot_coords: Tuple[np.ndarray, np.ndarray],
-    hot_defect: Optional[np.ndarray]
+    hot_defect: Optional[np.ndarray] = None
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Aplica correção esparsa de hot pixels e desacopla canais:
@@ -217,42 +238,79 @@ _tls = threading.local()
 
 def _get_cpu_scratch(h: int, w: int):
     """Retorna buffers thread-local pré-alocados para reutilização zero-alocação (dst=...)."""
-    if not hasattr(_tls, "acc") or _tls.acc.shape != (h, w):
-        _tls.acc = np.empty((h, w), dtype=np.uint16)
-        _tls.w_sum = np.empty((h, w), dtype=np.uint16)
-        _tls.ad = np.empty((h, w), dtype=np.uint8)
-        _tls.weight = np.empty((h, w), dtype=np.uint8)
-        _tls.prod = np.empty((h, w), dtype=np.uint16)
+    if not hasattr(_tls, "acc16") or _tls.acc16.shape != (h, w):
+        _tls.acc16 = np.empty((h, w), dtype=np.uint16)
+        _tls.diff = np.empty((h, w), dtype=np.uint8)
+        _tls.mapped = np.empty((h, w), dtype=np.uint8)
+        _tls.y_out = np.empty((h, w), dtype=np.uint8)
         _tls.cr_acc = np.empty((h // 2, w // 2), dtype=np.uint16)
         _tls.cb_acc = np.empty((h // 2, w // 2), dtype=np.uint16)
         _tls.cr_u8 = np.empty((h // 2, w // 2), dtype=np.uint8)
         _tls.cb_u8 = np.empty((h // 2, w // 2), dtype=np.uint8)
         _tls.cr_full = np.empty((h, w), dtype=np.uint8)
         _tls.cb_full = np.empty((h, w), dtype=np.uint8)
-        _tls.y_out = np.empty((h, w), dtype=np.uint8)
         _tls.ycrcb = np.empty((h, w, 3), dtype=np.uint8)
         _tls.bgr = np.empty((h, w, 3), dtype=np.uint8)
     return _tls
 
 
+class _GpuOpenCLScratch:
+    """Gerencia buffers cv2.UMat na VRAM da GPU (ex: NVIDIA GeForce MX110) com cache de janela deslizante."""
+
+    def __init__(self, h: int, w: int):
+        self.h = h
+        self.w = w
+        self.u_acc16 = cv2.UMat(h, w, cv2.CV_16UC1)
+        self.u_diff = cv2.UMat(h, w, cv2.CV_8UC1)
+        self.u_mapped = cv2.UMat(h, w, cv2.CV_8UC1)
+        self.u_y_out = cv2.UMat(h, w, cv2.CV_8UC1)
+        self.u_cr_acc = cv2.UMat(h // 2, w // 2, cv2.CV_16UC1)
+        self.u_cb_acc = cv2.UMat(h // 2, w // 2, cv2.CV_16UC1)
+        self.u_cr_u8 = cv2.UMat(h // 2, w // 2, cv2.CV_8UC1)
+        self.u_cb_u8 = cv2.UMat(h // 2, w // 2, cv2.CV_8UC1)
+        self.u_cr_full = cv2.UMat(h, w, cv2.CV_8UC1)
+        self.u_cb_full = cv2.UMat(h, w, cv2.CV_8UC1)
+        self.u_ycrcb = cv2.UMat(h, w, cv2.CV_8UC3)
+        self.u_bgr = cv2.UMat(h, w, cv2.CV_8UC3)
+        self.lut_cache: Dict[Tuple[float, int, int], cv2.UMat] = {}
+        self.feat_cache: Dict[int, Tuple[cv2.UMat, cv2.UMat, cv2.UMat]] = {}
+
+    def get_gpu_lut(self, sigma_range: float, window_size: int, scale: int = 32) -> cv2.UMat:
+        key = (round(sigma_range, 2), window_size, scale)
+        if key not in self.lut_cache:
+            self.lut_cache[key] = cv2.UMat(build_q5_shrinkage_lut(sigma_range, window_size, scale))
+        return self.lut_cache[key]
+
+    def get_gpu_feat(self, idx: int, cpu_feat: Tuple[np.ndarray, np.ndarray, np.ndarray]) -> Tuple[cv2.UMat, cv2.UMat, cv2.UMat]:
+        if idx not in self.feat_cache:
+            y, cr, cb = cpu_feat
+            self.feat_cache[idx] = (cv2.UMat(y), cv2.UMat(cr), cv2.UMat(cb))
+            if len(self.feat_cache) > 20:
+                oldest = min(self.feat_cache.keys())
+                del self.feat_cache[oldest]
+        return self.feat_cache[idx]
+
+
 def denoise_frame_temporal_cpu(
     center_idx: int,
     window_feats: List[Tuple[np.ndarray, np.ndarray, np.ndarray]],
-    lut_w: np.ndarray,
+    sigma_range: float = 4.5,
     scale: int = 32,
-    chroma_denoise: bool = True
+    chroma_denoise: bool = True,
+    lut_q5: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
-    Filtragem bilateral temporal desacoplada (Y 1-canal full-res + Cr/Cb half-res).
-    Executa 4.7x mais rápido que 3-canais BGR com buffers pré-alocados zero-alocação.
+    Filtragem bilateral temporal desacoplada (Y 1-canal full-res + Cr/Cb half-res) em CPU.
+    Usa acumulador uint16 em ponto fixo Q5 (scale=32) imune a saturação/underflow.
     """
     n = len(window_feats)
     ref_y, ref_cr, ref_cb = window_feats[center_idx]
     h, w = ref_y.shape
     s = _get_cpu_scratch(h, w)
 
-    cv2.multiply(ref_y, scale, dst=s.acc, dtype=cv2.CV_16U)
-    s.w_sum.fill(scale)
+    lut = build_q5_shrinkage_lut(sigma_range, n, scale) if lut_q5 is None else lut_q5
+
+    cv2.multiply(ref_y, scale, dst=s.acc16, dtype=cv2.CV_16U)
     s.cr_acc.fill(0)
     s.cb_acc.fill(0)
     cv2.add(s.cr_acc, ref_cr, dst=s.cr_acc, dtype=cv2.CV_16U)
@@ -261,18 +319,18 @@ def denoise_frame_temporal_cpu(
     for i, (yi, cri, cbi) in enumerate(window_feats):
         if i == center_idx:
             continue
-        cv2.absdiff(yi, ref_y, dst=s.ad)
-        cv2.LUT(s.ad, lut_w, dst=s.weight)
-        cv2.add(s.w_sum, s.weight, dst=s.w_sum, dtype=cv2.CV_16U)
-        cv2.multiply(yi, s.weight, dst=s.prod, dtype=cv2.CV_16U)
-        cv2.add(s.acc, s.prod, dst=s.acc)
+        cv2.addWeighted(yi, 0.5, ref_y, -0.5, 128.0, dst=s.diff)
+        cv2.LUT(s.diff, lut, dst=s.mapped)
+        cv2.add(s.acc16, s.mapped, dst=s.acc16, dtype=cv2.CV_16U)
         cv2.add(s.cr_acc, cri, dst=s.cr_acc, dtype=cv2.CV_16U)
         cv2.add(s.cb_acc, cbi, dst=s.cb_acc, dtype=cv2.CV_16U)
 
-    cv2.divide(s.acc, s.w_sum, dst=s.y_out, dtype=cv2.CV_8U)
+    if n > 1:
+        cv2.subtract(s.acc16, (n - 1) * 128, dst=s.acc16, dtype=cv2.CV_16U)
+    cv2.divide(s.acc16, scale, dst=s.y_out, dtype=cv2.CV_8U)
+
     cv2.divide(s.cr_acc, n, dst=s.cr_u8, dtype=cv2.CV_8U)
     cv2.divide(s.cb_acc, n, dst=s.cb_u8, dtype=cv2.CV_8U)
-
     if chroma_denoise:
         cv2.GaussianBlur(s.cr_u8, (3, 3), 0, dst=s.cr_u8)
         cv2.GaussianBlur(s.cb_u8, (3, 3), 0, dst=s.cb_u8)
@@ -282,6 +340,55 @@ def denoise_frame_temporal_cpu(
     cv2.merge([s.y_out, s.cr_full, s.cb_full], dst=s.ycrcb)
     cv2.cvtColor(s.ycrcb, cv2.COLOR_YCrCb2BGR, dst=s.bgr)
     return s.bgr.copy()
+
+
+def denoise_frame_temporal_gpu(
+    gpu_s: _GpuOpenCLScratch,
+    window_indices: List[int],
+    window_feats: List[Tuple[np.ndarray, np.ndarray, np.ndarray]],
+    center_idx: int,
+    sigma_range: float = 4.5,
+    scale: int = 32,
+    chroma_denoise: bool = True,
+) -> np.ndarray:
+    """
+    Filtragem bilateral temporal acelerada via OpenCL cv2.UMat na GPU (NVIDIA GeForce MX110)
+    com acumulador uint16 em ponto fixo Q5 (scale=32) imune a saturação/underflow.
+    """
+    n = len(window_feats)
+    g_feats = [gpu_s.get_gpu_feat(idx, f) for idx, f in zip(window_indices, window_feats)]
+    ref_y, ref_cr, ref_cb = g_feats[center_idx]
+    h, w = window_feats[center_idx][0].shape
+
+    u_lut = gpu_s.get_gpu_lut(sigma_range, n, scale)
+    cv2.multiply(ref_y, scale, dst=gpu_s.u_acc16, dtype=cv2.CV_16U)
+    cv2.add(ref_cr, 0, dst=gpu_s.u_cr_acc, dtype=cv2.CV_16U)
+    cv2.add(ref_cb, 0, dst=gpu_s.u_cb_acc, dtype=cv2.CV_16U)
+
+    for i, (yi, cri, cbi) in enumerate(g_feats):
+        if i == center_idx:
+            continue
+        cv2.addWeighted(yi, 0.5, ref_y, -0.5, 128.0, dst=gpu_s.u_diff)
+        cv2.LUT(gpu_s.u_diff, u_lut, dst=gpu_s.u_mapped)
+        cv2.add(gpu_s.u_acc16, gpu_s.u_mapped, dst=gpu_s.u_acc16, dtype=cv2.CV_16U)
+        cv2.add(gpu_s.u_cr_acc, cri, dst=gpu_s.u_cr_acc, dtype=cv2.CV_16U)
+        cv2.add(gpu_s.u_cb_acc, cbi, dst=gpu_s.u_cb_acc, dtype=cv2.CV_16U)
+
+    if n > 1:
+        cv2.subtract(gpu_s.u_acc16, (n - 1) * 128, dst=gpu_s.u_acc16, dtype=cv2.CV_16U)
+    cv2.divide(gpu_s.u_acc16, scale, dst=gpu_s.u_y_out, dtype=cv2.CV_8U)
+
+    cv2.divide(gpu_s.u_cr_acc, n, dst=gpu_s.u_cr_u8, dtype=cv2.CV_8U)
+    cv2.divide(gpu_s.u_cb_acc, n, dst=gpu_s.u_cb_u8, dtype=cv2.CV_8U)
+    if chroma_denoise:
+        cv2.GaussianBlur(gpu_s.u_cr_u8, (3, 3), 0, dst=gpu_s.u_cr_u8)
+        cv2.GaussianBlur(gpu_s.u_cb_u8, (3, 3), 0, dst=gpu_s.u_cb_u8)
+
+    cv2.resize(gpu_s.u_cr_u8, (w, h), dst=gpu_s.u_cr_full, interpolation=cv2.INTER_LINEAR)
+    cv2.resize(gpu_s.u_cb_u8, (w, h), dst=gpu_s.u_cb_full, interpolation=cv2.INTER_LINEAR)
+    cv2.merge([gpu_s.u_y_out, gpu_s.u_cr_full, gpu_s.u_cb_full], dst=gpu_s.u_ycrcb)
+    cv2.cvtColor(gpu_s.u_ycrcb, cv2.COLOR_YCrCb2BGR, dst=gpu_s.u_bgr)
+    return gpu_s.u_bgr.get()
 
 
 def denoise_frame_temporal(
@@ -294,15 +401,19 @@ def denoise_frame_temporal(
     chroma_denoise: bool = True,
     sigma_range: float = 4.5,
 ) -> np.ndarray:
-    """Wrapper de compatibilidade retroativa para denoise temporal de um frame."""
+    """Wrapper de alto nível para denoise temporal de um frame (aceita lista BGR ou tuplas YCrCb)."""
     n = len(cleaned_frames)
     if n <= 1:
         return cleaned_frames[0].copy()
 
-    lut = build_bilateral_lut(sigma_range, scale) if lut_u8 is None else lut_u8
-
     if isinstance(cleaned_frames[0], tuple):
-        return denoise_frame_temporal_cpu(center_idx, cleaned_frames, lut, scale, chroma_denoise)
+        return denoise_frame_temporal_cpu(
+            center_idx=center_idx,
+            window_feats=cleaned_frames,
+            sigma_range=sigma_range,
+            scale=scale,
+            chroma_denoise=chroma_denoise,
+        )
 
     feats = []
     for f in cleaned_frames:
@@ -313,7 +424,13 @@ def denoise_frame_temporal(
         cb_s = cv2.resize(cb, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
         feats.append((y, cr_s, cb_s))
 
-    return denoise_frame_temporal_cpu(center_idx, feats, lut, scale, chroma_denoise)
+    return denoise_frame_temporal_cpu(
+        center_idx=center_idx,
+        window_feats=feats,
+        sigma_range=sigma_range,
+        scale=scale,
+        chroma_denoise=chroma_denoise,
+    )
 
 
 def get_available_gpu_info() -> Dict[str, Any]:
@@ -344,16 +461,17 @@ def process_sequence_denoise(
     chroma_denoise: bool = True,
     jpeg_quality: int = 96,
     recalibrate_interval: int = 250,
-    use_gpu: bool = False,
+    use_gpu: bool = True,
     num_workers: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int, str, int], None]] = None
 ) -> Tuple[bool, Dict[str, Any]]:
     """
-    Processa uma sequência de fotos de timelapse noturno usando pipeline paralelo multi-worker:
-    - Domínio YCrCb desacoplado (Y 1-canal full-res com LUT + Cr/Cb half-res).
+    Processa uma sequência de fotos de timelapse noturno usando pipeline paralelo híbrido:
+    - Work-Stealing Híbrido Real em Lotes: GPU (NVIDIA MX110 OpenCL) + Pool Multi-Worker CPU SIMD.
+    - Acumulador uint16 em ponto fixo Q5 (scale=32) imune a saturação/underflow.
+    - Domínio YCrCb desacoplado (Y 1-canal full-res + Cr/Cb half-res).
     - Reparo esparso de hot pixels por coordenadas.
     - Preservação bit-perfect de metadados binários EXIF/GPS.
-    - Execução multi-thread em CPU com buffers thread-local zero-alocação.
     """
     total = len(photo_paths)
     if total == 0:
@@ -364,18 +482,17 @@ def process_sequence_denoise(
     if w_size % 2 == 0:
         w_size += 1
     radius = w_size // 2
+    scale = 32
 
-    # Configuração de concorrência: 6 workers no CPU Intel i5/i7 (8 threads) oferecem máximo throughput
     cpu_cores = os.cpu_count() or 4
     workers = max(2, min(6, cpu_cores)) if num_workers is None else max(1, int(num_workers))
-    cv2.setNumThreads(1)  # Desativa contenção interna do OpenCV entre threads do pool
+    cv2.setNumThreads(1)
 
     gpu_info = get_available_gpu_info()
-    scale = 32
-    lut_w = build_bilateral_lut(sigma_range=sigma_range, scale=scale)
+    enable_gpu = bool(use_gpu and gpu_info.get("available", False))
     t0 = time.time()
 
-    # Leitura dos frames iniciais para calibração de hot pixels
+    # Leitura inicial para calibração de hot pixels
     init_count = min(total, max(w_size, 9))
     init_raws: List[np.ndarray] = []
     init_app1s: Dict[int, bytes] = {}
@@ -392,110 +509,154 @@ def process_sequence_denoise(
     hot_defect, hot_pixels_detected = compute_hot_pixel_map(init_raws, threshold=hot_pixel_threshold)
     hot_coords = extract_hot_pixel_coords(hot_defect)
 
+    first_h, first_w = init_raws[0].shape[:2]
+    gpu_s: Optional[_GpuOpenCLScratch] = None
+    gpu_lock = threading.Lock()
+    if enable_gpu:
+        try:
+            cv2.ocl.setUseOpenCL(True)
+            gpu_s = _GpuOpenCLScratch(first_h, first_w)
+        except Exception:
+            gpu_s = None
+            enable_gpu = False
+
     # Cache deslizante: idx -> (app1_bytes, (y, cr_s, cb_s))
     feat_cache: Dict[int, Tuple[bytes, Tuple[np.ndarray, np.ndarray, np.ndarray]]] = {}
     raw_cache: Dict[int, np.ndarray] = {}
 
-    def load_frame(idx: int) -> Tuple[bytes, Tuple[np.ndarray, np.ndarray, np.ndarray], np.ndarray]:
-        if idx in init_app1s and idx < len(init_raws):
-            raw = init_raws[idx]
-            app1 = init_app1s[idx]
-        else:
-            raw, app1 = read_image_bgr_and_app1(photo_paths[idx])
-            if raw is None:
-                raise RuntimeError(f"Falha ao ler {photo_paths[idx].name}")
-        feat = _prepare_frame_features(raw, hot_coords, hot_defect)
-        return app1, feat, raw
-
-    for i in range(init_count):
+    for i in range(len(init_raws)):
         raw = init_raws[i]
-        app1 = init_app1s[i]
+        app1 = init_app1s.get(i, b"")
         feat = _prepare_frame_features(raw, hot_coords, hot_defect)
         feat_cache[i] = (app1, feat)
         raw_cache[i] = raw
 
-    processed_count = 0
-    errors = 0
+    def load_and_prep_one(idx: int) -> Tuple[int, Optional[bytes], Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]], Optional[np.ndarray]]:
+        raw, app1 = read_image_bgr_and_app1(photo_paths[idx])
+        if raw is None:
+            return idx, None, None, None
+        feat = _prepare_frame_features(raw, hot_coords, hot_defect)
+        return idx, app1, feat, raw
 
-    pool = ThreadPoolExecutor(max_workers=workers)
-    write_futures: deque[Future] = deque()
+    def denoise_and_write_worker(
+        center_idx: int,
+        win_indices: List[int],
+        window_feats: List[Tuple[np.ndarray, np.ndarray, np.ndarray]],
+        rel_center: int,
+        app1_bytes: bytes,
+    ) -> Tuple[int, bool, str]:
+        used_device = "cpu"
+        denoised_bgr: Optional[np.ndarray] = None
 
-    try:
-        for center_idx in range(total):
-            start_i = max(0, center_idx - radius)
-            end_i = min(total - 1, center_idx + radius)
+        if enable_gpu and gpu_s is not None and gpu_lock.acquire(blocking=False):
+            try:
+                denoised_bgr = denoise_frame_temporal_gpu(
+                    gpu_s=gpu_s,
+                    window_indices=win_indices,
+                    window_feats=window_feats,
+                    center_idx=rel_center,
+                    sigma_range=sigma_range,
+                    scale=scale,
+                    chroma_denoise=chroma_denoise,
+                )
+                used_device = "gpu"
+            except Exception:
+                denoised_bgr = None
+            finally:
+                gpu_lock.release()
 
-            # Preencher novos frames que entraram na janela
-            for i in range(start_i, end_i + 1):
-                if i not in feat_cache:
-                    try:
-                        app1, feat, raw = load_frame(i)
-                        feat_cache[i] = (app1, feat)
-                        raw_cache[i] = raw
-                    except Exception:
-                        errors += 1
-
-            # Recalibração periódica esparsa do mapa de hot pixels
-            if (
-                recalibrate_interval > 0
-                and center_idx > 0
-                and center_idx % recalibrate_interval == 0
-                and (end_i - start_i + 1) >= 5
-            ):
-                window_raws = [raw_cache[i] for i in range(start_i, end_i + 1) if i in raw_cache]
-                if len(window_raws) >= 5:
-                    new_defect, new_hp_count = compute_hot_pixel_map(window_raws, threshold=hot_pixel_threshold)
-                    hot_defect = new_defect
-                    hot_coords = extract_hot_pixel_coords(hot_defect)
-                    hot_pixels_detected = max(hot_pixels_detected, new_hp_count)
-                    for i in list(feat_cache.keys()):
-                        if i in raw_cache:
-                            new_feat = _prepare_frame_features(raw_cache[i], hot_coords, hot_defect)
-                            feat_cache[i] = (feat_cache[i][0], new_feat)
-
-            if center_idx not in feat_cache:
-                continue
-
-            win_indices = [i for i in range(start_i, end_i + 1) if i in feat_cache]
-            rel_center = win_indices.index(center_idx)
-            window_feats = [feat_cache[i][1] for i in win_indices]
-            app1_bytes = feat_cache[center_idx][0]
-
+        if denoised_bgr is None:
             denoised_bgr = denoise_frame_temporal_cpu(
                 center_idx=rel_center,
                 window_feats=window_feats,
-                lut_w=lut_w,
+                sigma_range=sigma_range,
                 scale=scale,
                 chroma_denoise=chroma_denoise,
             )
+            used_device = "cpu"
 
-            out_path = output_dir / photo_paths[center_idx].name
+        out_path = output_dir / photo_paths[center_idx].name
+        ok_write = write_image_bgr_with_app1(out_path, denoised_bgr, app1_bytes, jpeg_quality)
+        return center_idx, ok_write, used_device
 
-            # Fila de gravação assíncrona
-            while len(write_futures) >= (workers * 2):
-                done_fut = write_futures.popleft()
-                if not done_fut.result():
+    gpu_frame_count = 0
+    cpu_frame_count = 0
+    processed_count = 0
+    errors = 0
+    batch_size = max(workers * 2, 12)
+
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        for batch_start in range(0, total, batch_size):
+            batch_end = min(total - 1, batch_start + batch_size - 1)
+            win_start = max(0, batch_start - radius)
+            win_end = min(total - 1, batch_end + radius)
+
+            # 1. Carregar e preparar em paralelo todos os frames novos necessários para este lote
+            missing_indices = [i for i in range(win_start, win_end + 1) if i not in feat_cache]
+            if missing_indices:
+                for idx, app1, feat, raw in pool.map(load_and_prep_one, missing_indices):
+                    if feat is not None and app1 is not None and raw is not None:
+                        feat_cache[idx] = (app1, feat)
+                        raw_cache[idx] = raw
+                    else:
+                        errors += 1
+
+            # 2. Recalibração periódica de hot pixels
+            if (
+                recalibrate_interval > 0
+                and batch_start > 0
+                and (batch_start // recalibrate_interval) > ((batch_start - batch_size) // recalibrate_interval)
+            ):
+                sample_raws = [raw_cache[i] for i in sorted(raw_cache.keys())[:w_size]]
+                if len(sample_raws) >= 5:
+                    new_defect, new_hp_count = compute_hot_pixel_map(sample_raws, threshold=hot_pixel_threshold)
+                    hot_defect = new_defect
+                    hot_coords = extract_hot_pixel_coords(hot_defect)
+                    hot_pixels_detected = max(hot_pixels_detected, new_hp_count)
+
+            # 3. Submeter todos os frames do lote para execução paralela real (Work-Stealing GPU MX110 + CPU)
+            batch_futures: List[Future] = []
+            for center_idx in range(batch_start, batch_end + 1):
+                if center_idx not in feat_cache:
+                    continue
+                s_i = max(0, center_idx - radius)
+                e_i = min(total - 1, center_idx + radius)
+                win_indices = [i for i in range(s_i, e_i + 1) if i in feat_cache]
+                rel_center = win_indices.index(center_idx)
+                window_feats = [feat_cache[i][1] for i in win_indices]
+                app1_bytes = feat_cache[center_idx][0]
+
+                batch_futures.append(
+                    pool.submit(
+                        denoise_and_write_worker,
+                        center_idx,
+                        win_indices,
+                        window_feats,
+                        rel_center,
+                        app1_bytes,
+                    )
+                )
+
+            for fut in batch_futures:
+                c_idx, ok_w, dev_used = fut.result()
+                if not ok_w:
                     errors += 1
+                else:
+                    if dev_used == "gpu":
+                        gpu_frame_count += 1
+                    else:
+                        cpu_frame_count += 1
+                    processed_count += 1
+                    if progress_callback:
+                        progress_callback(processed_count, total, photo_paths[c_idx].name, hot_pixels_detected)
 
-            write_futures.append(
-                pool.submit(write_image_bgr_with_app1, out_path, denoised_bgr, app1_bytes, jpeg_quality)
-            )
-
-            # Descartar frames fora do raio deslizante
-            evict_before = start_i - 1
-            for old_k in [k for k in list(feat_cache.keys()) if k <= evict_before]:
+            # 4. Descartar frames antigos que não serão mais usados pelos próximos lotes
+            evict_before = max(0, (batch_end + 1) - radius - 1)
+            for old_k in [k for k in list(feat_cache.keys()) if k < evict_before]:
                 del feat_cache[old_k]
-            for old_k in [k for k in list(raw_cache.keys()) if k <= evict_before]:
+            for old_k in [k for k in list(raw_cache.keys()) if k < evict_before]:
                 del raw_cache[old_k]
-
-            processed_count += 1
-            if progress_callback:
-                progress_callback(processed_count, total, photo_paths[center_idx].name, hot_pixels_detected)
-
-        while write_futures:
-            done_fut = write_futures.popleft()
-            if not done_fut.result():
-                errors += 1
 
     finally:
         pool.shutdown(wait=True)
@@ -511,8 +672,10 @@ def process_sequence_denoise(
         "hot_pixels_detected": hot_pixels_detected,
         "chroma_denoise": chroma_denoise,
         "jpeg_quality": jpeg_quality,
-        "use_gpu": False,
-        "gpu_device": gpu_info.get("device_name", "None"),
+        "use_gpu": enable_gpu,
+        "gpu_device": gpu_info.get("device_name") if enable_gpu else "None",
+        "gpu_frames": gpu_frame_count,
+        "cpu_frames": cpu_frame_count,
         "num_workers": workers,
         "elapsed_seconds": elapsed,
         "avg_fps": round(processed_count / max(0.001, elapsed), 2),

@@ -261,3 +261,40 @@ def test_hot_pixel_sparse_coords_and_sparse_removal_parity():
     assert cleaned[12, 18, 1] == 30
     assert cleaned[12, 18, 2] == 30
 
+
+def test_no_white_saturation_on_dark_sky_cpu_and_gpu(tmp_path: Path):
+    """
+    Garante que o acumulador Q5 16-bit preserva o brilho medio de frames escuros (~28 ADU)
+    sem sofrer underflow/overflow (bug de imagens brancas ~251 ADU), tanto em CPU quanto em GPU OpenCL.
+    """
+    rng = np.random.default_rng(123)
+    seq_dir = tmp_path / "dark_sky"
+    seq_dir.mkdir(parents=True)
+
+    photo_paths = []
+    for t in range(7):
+        base = np.full((80, 100, 3), 28.0, dtype=np.float32)
+        noise = rng.normal(0.0, 3.5, size=base.shape).astype(np.float32)
+        frame = np.clip(base + noise, 0, 255).astype(np.uint8)
+        f_path = seq_dir / f"dark_{t:03d}.jpg"
+        f_path.write_bytes(_build_dummy_jpeg_with_app1(frame))
+        photo_paths.append(f_path)
+
+    for use_gpu_flag in (False, True):
+        out_dir = seq_dir / ("denoised_gpu" if use_gpu_flag else "denoised_cpu")
+        ok, stats = process_sequence_denoise(
+            photo_paths=photo_paths,
+            output_dir=out_dir,
+            window_size=7,
+            sigma_range=4.5,
+            use_gpu=use_gpu_flag,
+        )
+        assert ok is True
+        assert stats["processed_photos"] == 7
+        for p in photo_paths:
+            out_img = cv2.imread(str(out_dir / p.name))
+            assert out_img is not None
+            mean_val = float(out_img.mean())
+            assert 24.0 <= mean_val <= 32.0, f"Saturacao detectada (use_gpu={use_gpu_flag}): mean={mean_val}"
+
+
