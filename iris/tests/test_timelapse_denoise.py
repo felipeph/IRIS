@@ -239,3 +239,25 @@ def test_timelapse_denoise_stage_and_timelapse_stage_integration(tmp_path: Path,
 
     desc = build_rich_youtube_description(tl_records[0], project_name=proj.name)
     assert "Filtro Bilateral Espaço-Temporal" in desc
+
+def test_hot_pixel_sparse_coords_and_sparse_removal_parity():
+    from src.modules.timelapse_denoise.engine import extract_hot_pixel_coords, remove_hot_pixels
+
+    frames = [np.full((50, 50, 3), 30, dtype=np.uint8) for _ in range(5)]
+    frames[0][12, 18] = [210, 210, 210]
+    frames[1][12, 18] = [215, 215, 215]
+    frames[2][12, 18] = [212, 212, 212]
+    frames[3][12, 18] = [211, 211, 211]
+    frames[4][12, 18] = [213, 213, 213]
+
+    defect_map, count = compute_hot_pixel_map(frames, threshold=10)
+    assert count == 1
+    coords = extract_hot_pixel_coords(defect_map)
+    assert len(coords[0]) == 1
+    assert coords[0][0] == 12 and coords[1][0] == 18
+
+    cleaned = remove_hot_pixels(frames[0], coords, defect_map)
+    assert cleaned[12, 18, 0] == 30
+    assert cleaned[12, 18, 1] == 30
+    assert cleaned[12, 18, 2] == 30
+
