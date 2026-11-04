@@ -18,13 +18,37 @@ from src.modules.timelapse_denoise.engine import process_sequence_denoise
 console = Console()
 
 
+def resolve_denoised_relative_dir(seq_rel: str, denoise_cfg: dict | None = None) -> Path:
+    """
+    Resolve o caminho relativo da pasta de saída do denoise mantendo a mesma
+    hierarquia de câmera e datas, substituindo o primeiro segmento de diretório
+    (ex: '4_Timelapses_LongaExposicao' ou '4_Timelapses') pela pasta raiz
+    configurada (padrão: '4_Timelapses_LongaExposicao_Denoised').
+
+    Exemplo:
+        seq_rel: '4_Timelapses_LongaExposicao/GoPro/2026/11/03/timelapse_20-46-48'
+        retorna: Path('4_Timelapses_LongaExposicao_Denoised/GoPro/2026/11/03/timelapse_20-46-48')
+    """
+    if denoise_cfg is None:
+        denoise_cfg = config.get("modules.timelapse_denoise", {})
+    root_folder = str(
+        denoise_cfg.get("output_root_folder", "4_Timelapses_LongaExposicao_Denoised")
+    ).strip() or "4_Timelapses_LongaExposicao_Denoised"
+
+    parts = Path(seq_rel).parts
+    if len(parts) > 1:
+        return Path(root_folder, *parts[1:])
+    return Path(root_folder, seq_rel)
+
+
 class TimelapseDenoiseStage(PipelineStage):
     """
     Etapa dedicada de Filtragem Espaço-Temporal Inteligente para Timelapses Noturnos
     (4_Timelapses_LongaExposicao).
     Remove hot pixels fixos de exposição longa, ruído temporal de leitura/ISO (filtro bilateral
     temporal guiado com proteção de estrelas) e manchas de crominância (YCrCb), salvando
-    cada imagem limpa na subpasta 'denoised/' com preservação bit-perfect do EXIF/GPS.
+    cada imagem limpa em pasta dedicada na raiz do IRIS (4_Timelapses_LongaExposicao_Denoised)
+    preservando exatamente a estrutura hierárquica de câmera e datas, com metadados EXIF/GPS intactos.
     """
 
     def run(self, project: Project, **kwargs) -> bool:
@@ -35,7 +59,11 @@ class TimelapseDenoiseStage(PipelineStage):
             console.print("[yellow]Módulo timelapse_denoise está desativado nas configurações. Pulando etapa.[/yellow]")
             return True
 
-        subfolder_name = str(denoise_cfg.get("output_subfolder", "denoised")).strip() or "denoised"
+        root_folder_name = (
+            str(denoise_cfg.get("output_root_folder", "4_Timelapses_LongaExposicao_Denoised")).strip()
+            or "4_Timelapses_LongaExposicao_Denoised"
+        )
+        legacy_subfolder = str(denoise_cfg.get("output_subfolder", "denoised")).strip() or "denoised"
         window_size = int(denoise_cfg.get("window_size", 7))
         sigma_range = float(denoise_cfg.get("sigma_range", 4.5))
         hot_pixel_threshold = int(denoise_cfg.get("hot_pixel_threshold", 8))
@@ -75,22 +103,28 @@ class TimelapseDenoiseStage(PipelineStage):
         )
         summary_table.add_column("Sequência", style="cyan")
         summary_table.add_column("Fotos", justify="right", style="green")
-        summary_table.add_column("Subpasta Saída", style="magenta")
+        summary_table.add_column("Destino Raiz", style="magenta")
         summary_table.add_column("Status Denoise", style="yellow")
 
         seq_status_map: Dict[str, bool] = {}
         for seq_rel, items in groups.items():
-            seq_dir = dest_root / Path(seq_rel)
-            out_dir = seq_dir / subfolder_name
+            out_rel = resolve_denoised_relative_dir(seq_rel, denoise_cfg)
+            out_dir = dest_root / out_rel
             existing_jpgs = list(out_dir.glob("*.jpg")) if out_dir.exists() else []
-            is_done = len(existing_jpgs) >= len(items) and len(items) > 0
+
+            legacy_dir = (dest_root / Path(seq_rel)) / legacy_subfolder
+            legacy_jpgs = list(legacy_dir.glob("*.jpg")) if legacy_dir.exists() else []
+
+            is_done = (len(existing_jpgs) >= len(items) and len(items) > 0) or (
+                len(legacy_jpgs) >= len(items) and len(items) > 0
+            )
             seq_status_map[seq_rel] = is_done
             status_desc = (
-                f"[green]Concluído ({len(existing_jpgs)} fotos)[/green]"
+                f"[green]Concluído ({len(existing_jpgs) or len(legacy_jpgs)} fotos)[/green]"
                 if is_done
                 else "[yellow]Pendente[/yellow]"
             )
-            summary_table.add_row(seq_rel, str(len(items)), f"{subfolder_name}/", status_desc)
+            summary_table.add_row(seq_rel, str(len(items)), f"{out_rel}/", status_desc)
 
         console.print(summary_table)
 
@@ -99,7 +133,7 @@ class TimelapseDenoiseStage(PipelineStage):
             already_done = sum(1 for done in seq_status_map.values() if done)
             if already_done > 0:
                 force_denoise = Confirm.ask(
-                    f"\n[yellow]{already_done} sequência(s) já possuem frames limpos em '{subfolder_name}/'. Deseja reprocessar e sobrescrever?[/yellow]",
+                    f"\n[yellow]{already_done} sequência(s) já possuem frames limpos. Deseja reprocessar e sobrescrever?[/yellow]",
                     default=False,
                 )
 
@@ -108,8 +142,10 @@ class TimelapseDenoiseStage(PipelineStage):
 
         for seq_idx, (seq_rel, items) in enumerate(groups.items(), 1):
             seq_dir = dest_root / Path(seq_rel)
-            out_dir = seq_dir / subfolder_name
+            out_rel = resolve_denoised_relative_dir(seq_rel, denoise_cfg)
+            out_dir = dest_root / out_rel
             console.print(f"\n[bold blue]-> Sequência [{seq_idx}/{total_sequences}]: {seq_rel}[/bold blue]")
+            console.print(f"[cyan]   Pasta de Destino Denoise: {out_dir}[/cyan]")
 
             photo_paths: List[Path] = []
             for it in items:
@@ -131,8 +167,13 @@ class TimelapseDenoiseStage(PipelineStage):
             photo_paths = sorted(photo_paths, key=lambda p: p.name)
 
             if seq_status_map.get(seq_rel, False) and not force_denoise:
+                out_count = len(list(out_dir.glob("*.jpg"))) if out_dir.exists() else 0
+                legacy_dir = seq_dir / legacy_subfolder
+                leg_count = len(list(legacy_dir.glob("*.jpg"))) if legacy_dir.exists() else 0
+                done_path = out_dir if out_count >= len(photo_paths) else legacy_dir
+                done_count = out_count if out_count >= len(photo_paths) else leg_count
                 console.print(
-                    f"[green]✔ Frames já limpos na subpasta '{out_dir.name}/' ({len(photo_paths)} arquivos).[/green]"
+                    f"[green]✔ Frames já limpos em '{done_path}' ({done_count} arquivos).[/green]"
                 )
                 success_count += 1
                 continue
@@ -192,6 +233,8 @@ class TimelapseDenoiseStage(PipelineStage):
                         **stats,
                         "project_name": project.name,
                         "sequence_rel": seq_rel,
+                        "output_root_folder": root_folder_name,
+                        "output_relative_dir": str(out_rel),
                         "completed_at": datetime.now().isoformat(),
                     }
                     manifest_path.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")

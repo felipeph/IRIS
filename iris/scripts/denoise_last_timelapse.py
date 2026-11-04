@@ -1,8 +1,9 @@
 """
 Utilitário CLI para executar a Filtragem Espaço-Temporal Inteligente (TimelapseDenoiseStage)
 diretamente sobre o último projeto executado (ex: 2026-11-04_10-03_DCIM) ou sobre uma pasta
-de sequência específica, salvando os frames limpos na subpasta 'denoised/' (preservando os
-JPEGs originais intactos e copiando o EXIF/GPS binário original).
+de sequência específica, salvando os frames limpos na pasta dedicada na raiz do IRIS
+(4_Timelapses_LongaExposicao_Denoised) preservando exatamente a estrutura hierárquica de pastas
+e mantendo os JPEGs originais intactos com metadados EXIF/GPS preservados.
 
 Uso:
   python iris/scripts/denoise_last_timelapse.py
@@ -34,7 +35,8 @@ console = Console()
 
 def denoise_directory(
     seq_dir: Path,
-    subfolder: str = "denoised",
+    out_dir: Path | None = None,
+    subfolder: str | None = None,
     window_size: int = 7,
     sigma_range: float = 4.5,
     hot_pixel_threshold: int = 8,
@@ -50,7 +52,25 @@ def denoise_directory(
         console.print(f"[red]Nenhuma foto JPEG encontrada em: {seq_dir}[/red]")
         return False
 
-    out_dir = seq_dir / subfolder
+    dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
+    denoise_cfg = config.get("modules.timelapse_denoise", {})
+    root_folder = str(
+        denoise_cfg.get("output_root_folder", "4_Timelapses_LongaExposicao_Denoised")
+    ).strip() or "4_Timelapses_LongaExposicao_Denoised"
+
+    if out_dir is None:
+        try:
+            rel = seq_dir.resolve().relative_to(dest_root.resolve())
+            parts = rel.parts
+            if len(parts) > 1:
+                out_dir = dest_root / root_folder / Path(*parts[1:])
+            else:
+                out_dir = dest_root / root_folder / rel
+        except ValueError:
+            # seq_dir não está dentro de dest_root, usa subfolder como fallback
+            fallback_sub = subfolder or str(denoise_cfg.get("output_subfolder", "denoised")).strip() or "denoised"
+            out_dir = seq_dir / fallback_sub
+
     total_gb = sum(p.stat().st_size for p in photos) / (1024 ** 3)
     tracker = ProgressTracker(total_units=float(len(photos)), mode="items")
     start_str = datetime.now().strftime("%H:%M:%S")
@@ -111,17 +131,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Executa o Denoise Espaço-Temporal de Timelapse Noturno.")
     parser.add_argument("--project", type=str, default="", help="Nome do projeto (default: último projeto aberto)")
     parser.add_argument("--dir", type=str, default="", help="Caminho direto de uma pasta de sequência de fotos")
-    parser.add_argument("--subfolder", type=str, default=str(config.get("modules.timelapse_denoise.output_subfolder", "denoised")))
+    parser.add_argument("--out-dir", type=str, default="", help="Caminho direto para salvar os frames limpos (opcional)")
+    parser.add_argument("--subfolder", type=str, default="", help="Subpasta para salvar frames (fallback legado)")
     parser.add_argument("--window", type=int, default=int(config.get("modules.timelapse_denoise.window_size", 7)))
     parser.add_argument("--sigma", type=float, default=float(config.get("modules.timelapse_denoise.sigma_range", 4.5)))
-    parser.add_argument("--force", action="store_true", help="Força reprocessamento mesmo que a subpasta denoised/ já exista")
+    parser.add_argument("--force", action="store_true", help="Força reprocessamento mesmo que os frames limpos já existam")
     parser.add_argument("--render", action="store_true", help="Re-renderiza o vídeo Timelapse 4K UHD após limpar os frames")
     args = parser.parse_args()
 
     if args.dir:
+        custom_out = Path(args.out_dir) if args.out_dir else None
         ok = denoise_directory(
             seq_dir=Path(args.dir),
-            subfolder=args.subfolder,
+            out_dir=custom_out,
+            subfolder=args.subfolder if args.subfolder else None,
             window_size=args.window,
             sigma_range=args.sigma,
         )

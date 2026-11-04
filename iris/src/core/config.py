@@ -247,6 +247,7 @@ class ConfigManager:
             if "timelapse_denoise" not in mods:
                 mods["timelapse_denoise"] = {
                     "enabled": True,
+                    "output_root_folder": "4_Timelapses_LongaExposicao_Denoised",
                     "output_subfolder": "denoised",
                     "use_denoised_frames": True,
                     "window_size": 7,
@@ -469,6 +470,7 @@ class ConfigManager:
                 },
                 "timelapse_denoise": {
                     "enabled": True,
+                    "output_root_folder": "4_Timelapses_LongaExposicao_Denoised",
                     "output_subfolder": "denoised",
                     "use_denoised_frames": True,
                     "window_size": 7,

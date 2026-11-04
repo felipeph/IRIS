@@ -138,7 +138,8 @@ modules:
     max_workers: 4            # número de threads para movimentação paralela
   timelapse_denoise:
     enabled: true                     # Ativa limpeza espaço-temporal individual de frames em timelapses noturnos
-    output_subfolder: "denoised"      # Subpasta separada dentro da sequência (mantém originais intactos)
+    output_root_folder: "4_Timelapses_LongaExposicao_Denoised" # Pasta dedicada na raiz do IRIS para frames limpos
+    output_subfolder: "denoised"      # Subpasta legada/fallback (mantida para compatibilidade)      # Subpasta separada dentro da sequência (mantém originais intactos)
     use_denoised_frames: true         # Consome automaticamente a subpasta denoised/ na renderização 4K
     window_size: 7                    # Janela deslizante temporal de frames consecutivos (ímpar: 5, 7 ou 9)
     sigma_range: 4.5                  # Limiar fotométrico bilateral (protege estrelas contra borramento/apagamento)

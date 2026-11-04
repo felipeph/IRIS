@@ -116,32 +116,43 @@ class TimelapseStage(PipelineStage):
                 error_count += 1
                 continue
 
-            # Verificar se há subpasta de frames pré-filtrados (Spatiotemporal Denoise)
+            # Verificar se há pasta de frames pré-filtrados (Spatiotemporal Denoise)
             denoise_cfg = config.get("modules.timelapse_denoise", {})
-            denoised_subfolder = str(denoise_cfg.get("output_subfolder", "denoised")).strip() or "denoised"
             use_denoised = bool(denoise_cfg.get("use_denoised_frames", True))
-            denoised_dir = seq_dir / denoised_subfolder
             used_denoised_frames = False
             denoise_stats = {}
 
-            if use_denoised and denoised_dir.exists():
-                valid_exts = {'.jpg', '.jpeg', '.png'}
-                denoised_candidates = sorted(
-                    [p for p in denoised_dir.iterdir() if p.is_file() and p.suffix.lower() in valid_exts],
-                    key=lambda p: p.name
-                )
-                if len(denoised_candidates) >= len(photo_paths):
-                    photo_paths = denoised_candidates
-                    used_denoised_frames = True
-                    manifest_file = denoised_dir / "denoise_manifest.json"
-                    if manifest_file.exists():
-                        try:
-                            denoise_stats = json.loads(manifest_file.read_text(encoding="utf-8"))
-                        except Exception:
-                            denoise_stats = {}
-                    console.print(
-                        f"[bold green]✨ Utilizando {len(photo_paths)} frames pré-filtrados (Spatiotemporal Denoise) da subpasta '{denoised_subfolder}/'[/bold green]"
+            if use_denoised:
+                from src.modules.timelapse_denoise.stage import resolve_denoised_relative_dir
+                denoised_rel = resolve_denoised_relative_dir(seq_rel, denoise_cfg)
+                denoised_root_dir = dest_root / denoised_rel
+                legacy_subfolder = str(denoise_cfg.get("output_subfolder", "denoised")).strip() or "denoised"
+                legacy_dir = seq_dir / legacy_subfolder
+
+                target_denoised_dir = None
+                if denoised_root_dir.exists():
+                    target_denoised_dir = denoised_root_dir
+                elif legacy_dir.exists():
+                    target_denoised_dir = legacy_dir
+
+                if target_denoised_dir:
+                    valid_exts = {'.jpg', '.jpeg', '.png'}
+                    denoised_candidates = sorted(
+                        [p for p in target_denoised_dir.iterdir() if p.is_file() and p.suffix.lower() in valid_exts],
+                        key=lambda p: p.name
                     )
+                    if len(denoised_candidates) >= len(photo_paths):
+                        photo_paths = denoised_candidates
+                        used_denoised_frames = True
+                        manifest_file = target_denoised_dir / "denoise_manifest.json"
+                        if manifest_file.exists():
+                            try:
+                                denoise_stats = json.loads(manifest_file.read_text(encoding="utf-8"))
+                            except Exception:
+                                denoise_stats = {}
+                        console.print(
+                            f"[bold green]✨ Utilizando {len(photo_paths)} frames pré-filtrados (Spatiotemporal Denoise) da pasta '{target_denoised_dir}'[/bold green]"
+                        )
 
             # Extrair datas e metadados da sequência
             first_item = items[0]

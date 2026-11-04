@@ -13,7 +13,7 @@ from src.modules.timelapse_denoise.engine import (
     compute_hot_pixel_map,
     process_sequence_denoise,
 )
-from src.modules.timelapse_denoise.stage import TimelapseDenoiseStage
+from src.modules.timelapse_denoise.stage import TimelapseDenoiseStage, resolve_denoised_relative_dir
 from src.modules.timelapse.stage import TimelapseStage
 from src.modules.youtube.describers.timelapse import build_rich_youtube_description
 
@@ -139,10 +139,21 @@ def test_process_sequence_denoise_reduces_noise_and_preserves_stars(tmp_path: Pa
     assert b"FRAME=3" in extract_jpeg_app1_segments(clean_mid_path.read_bytes())
 
 
+def test_resolve_denoised_relative_dir():
+    """Valida resolução do caminho relativo para pasta dedicada na raiz do IRIS."""
+    res = resolve_denoised_relative_dir("4_Timelapses_LongaExposicao/GoPro/2026/11/03/timelapse_20-46-48")
+    assert res == Path("4_Timelapses_LongaExposicao_Denoised/GoPro/2026/11/03/timelapse_20-46-48")
+
+    custom_cfg = {"output_root_folder": "MinhaPastaLimpa"}
+    res2 = resolve_denoised_relative_dir("4_Timelapses_LongaExposicao/DJI/2026/11/04/timelapse_01-02-03", custom_cfg)
+    assert res2 == Path("MinhaPastaLimpa/DJI/2026/11/04/timelapse_01-02-03")
+
+
 def test_timelapse_denoise_stage_and_timelapse_stage_integration(tmp_path: Path, monkeypatch):
     """
-    Valida que TimelapseDenoiseStage salva na subpasta 'denoised/' mantendo originais intactos,
-    e que TimelapseStage consome automaticamente a subpasta 'denoised/' e documenta na descrição do YouTube.
+    Valida que TimelapseDenoiseStage salva em pasta própria na raiz de destino
+    (4_Timelapses_LongaExposicao_Denoised) mantendo a estrutura de pastas e originais intactos,
+    e que TimelapseStage consome automaticamente essa pasta raiz e documenta na descrição do YouTube.
     """
     dest_root = Path(config.get("general.destination_root"))
     monkeypatch.setitem(
@@ -150,6 +161,7 @@ def test_timelapse_denoise_stage_and_timelapse_stage_integration(tmp_path: Path,
         "timelapse_denoise",
         {
             "enabled": True,
+            "output_root_folder": "4_Timelapses_LongaExposicao_Denoised",
             "output_subfolder": "denoised",
             "use_denoised_frames": True,
             "window_size": 5,
@@ -197,17 +209,21 @@ def test_timelapse_denoise_stage_and_timelapse_stage_integration(tmp_path: Path,
     denoise_stage = TimelapseDenoiseStage("timelapse_denoise", "Denoise")
     assert denoise_stage.run(proj, interactive=False) is True
 
-    denoised_dir = seq_dir / "denoised"
-    assert denoised_dir.exists()
-    assert len(list(denoised_dir.glob("*.jpg"))) == 5
-    assert (denoised_dir / "denoise_manifest.json").exists()
+    # Nova pasta dedicada na raiz do IRIS
+    expected_denoised_dir = dest_root / "4_Timelapses_LongaExposicao_Denoised" / "GoPro" / "2026" / "11" / "03" / "timelapse_20-46-48"
+    assert expected_denoised_dir.exists()
+    assert len(list(expected_denoised_dir.glob("*.jpg"))) == 5
+    assert (expected_denoised_dir / "denoise_manifest.json").exists()
+
+    # Pasta original de captura NÃO deve conter subpasta 'denoised/'
+    assert not (seq_dir / "denoised").exists()
 
     # Originais devem permanecer 100% idênticos byte a byte
     for i in range(5):
         p_orig = seq_dir / f"2026-11-03_20-46-{10+i:02d}_GoPro.jpg"
         assert p_orig.read_bytes() == orig_bytes_before[i]
 
-    # Agora testa TimelapseStage consumindo automaticamente os frames de denoised/
+    # Agora testa TimelapseStage consumindo automaticamente os frames de 4_Timelapses_LongaExposicao_Denoised
     captured_photo_paths = []
 
     def fake_prepare_sequence(photo_paths, target_dir, is_test=False, test_sample_size=120):
@@ -228,7 +244,7 @@ def test_timelapse_denoise_stage_and_timelapse_stage_integration(tmp_path: Path,
         assert tl_stage.run(proj, interactive=False) is True
 
     assert len(captured_photo_paths) == 5
-    assert all(p.parent.name == "denoised" for p in captured_photo_paths)
+    assert all(p.parent == expected_denoised_dir for p in captured_photo_paths)
 
     tl_records = proj.get_timelapses()
     assert len(tl_records) == 1
@@ -239,6 +255,75 @@ def test_timelapse_denoise_stage_and_timelapse_stage_integration(tmp_path: Path,
 
     desc = build_rich_youtube_description(tl_records[0], project_name=proj.name)
     assert "Filtro Bilateral Espaço-Temporal" in desc
+
+
+def test_timelapse_stage_fallback_to_legacy_subfolder(tmp_path: Path, monkeypatch):
+    """
+    Garante retrocompatibilidade: se os frames limpos estiverem apenas na subpasta legada
+    'seq_dir / denoised', TimelapseStage ainda os detecta e utiliza na renderização.
+    """
+    dest_root = Path(config.get("general.destination_root"))
+    monkeypatch.setitem(
+        config.config.setdefault("modules", {}),
+        "timelapse_denoise",
+        {
+            "enabled": True,
+            "output_root_folder": "4_Timelapses_LongaExposicao_Denoised",
+            "output_subfolder": "denoised",
+            "use_denoised_frames": True,
+        },
+    )
+
+    rel_dir = "4_Timelapses_LongaExposicao/GoPro/2026/11/04/timelapse_legacy"
+    seq_dir = dest_root / Path(rel_dir)
+    seq_dir.mkdir(parents=True)
+    legacy_denoised = seq_dir / "denoised"
+    legacy_denoised.mkdir(parents=True)
+
+    proj = create_project("test_legacy_fallback", str(tmp_path))
+    items = []
+    for i in range(3):
+        img = np.full((60, 80, 3), 30, dtype=np.uint8)
+        p_orig = seq_dir / f"frame_{i}.jpg"
+        p_orig.write_bytes(_build_dummy_jpeg_with_app1(img))
+        p_clean = legacy_denoised / f"frame_{i}.jpg"
+        p_clean.write_bytes(_build_dummy_jpeg_with_app1(img))
+        items.append(
+            ProjectItem(
+                original_path=str(p_orig),
+                staging_path=str(p_orig),
+                organized_path=str(p_orig),
+                status="organized",
+                verified=True,
+                file_size_bytes=p_orig.stat().st_size,
+                category="timelapse_long_exposure",
+                relative_dest_dir=rel_dir,
+            )
+        )
+    proj.save_items_batch(items)
+
+    captured = []
+
+    def fake_prepare(photo_paths, target_dir, **kw):
+        captured.extend(photo_paths)
+        temp_dir = target_dir / ".temp_seq"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        return True, temp_dir, list(photo_paths)
+
+    def fake_render(sequence_dir, output_video_path, photo_count, config, **kw):
+        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+        output_video_path.write_bytes(b"FAKE_MP4")
+        return True, "libx264", "", {}
+
+    with patch("src.modules.timelapse.stage.prepare_numbered_sequence", side_effect=fake_prepare), \
+         patch("src.modules.timelapse.stage.render_timelapse_video", side_effect=fake_render), \
+         patch("src.modules.timelapse.stage.notify_timelapse_render_done"):
+        tl_stage = TimelapseStage("timelapse", "Timelapse")
+        assert tl_stage.run(proj, interactive=False) is True
+
+    assert len(captured) == 3
+    assert all(p.parent == legacy_denoised for p in captured)
+
 
 def test_hot_pixel_sparse_coords_and_sparse_removal_parity():
     from src.modules.timelapse_denoise.engine import extract_hot_pixel_coords, remove_hot_pixels
@@ -301,5 +386,3 @@ def test_no_white_saturation_on_dark_sky_cpu_and_gpu(tmp_path: Path):
             assert out_img is not None
             mean_val = float(out_img.mean())
             assert 24.0 <= mean_val <= 32.0, f"Saturacao detectada (use_gpu={use_gpu_flag}): mean={mean_val}"
-
-

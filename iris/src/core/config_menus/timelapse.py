@@ -147,7 +147,7 @@ def _menu_timelapse_long_exposure(console: Console):
         table.add_row("15", "Denoise Espaço-Temporal (Estrelas)", "modules.timelapse_denoise.enabled", "[green]Ativado[/green]" if denoise_on else "[red]Desativado[/red]")
         table.add_row("16", "Janela Temporal Denoise (frames)", "modules.timelapse_denoise.window_size", str(config.get("modules.timelapse_denoise.window_size", 7)))
         table.add_row("17", "Limiar Fotométrico (Sigma Range)", "modules.timelapse_denoise.sigma_range", str(config.get("modules.timelapse_denoise.sigma_range", 4.5)))
-        table.add_row("18", "Subpasta de Frames Limpos", "modules.timelapse_denoise.output_subfolder", str(config.get("modules.timelapse_denoise.output_subfolder", "denoised")))
+        table.add_row("18", "Pasta Raiz Frames Limpos", "modules.timelapse_denoise.output_root_folder", str(config.get("modules.timelapse_denoise.output_root_folder", "4_Timelapses_LongaExposicao_Denoised")))
 
         console.print(table)
         console.print("\n[cyan][0][/cyan] Voltar ao Menu de Categorias")
@@ -290,9 +290,9 @@ def _menu_timelapse_long_exposure(console: Console):
                 console.print("[red]Valor deve ser numérico![/red]")
             time.sleep(1)
         elif choice == "18":
-            new_val = Prompt.ask("Nome da subpasta para salvar os frames limpos", default=str(config.get("modules.timelapse_denoise.output_subfolder", "denoised"))).strip()
+            new_val = Prompt.ask("Pasta raiz de destino para frames limpos (em C:\\IRIS)", default=str(config.get("modules.timelapse_denoise.output_root_folder", "4_Timelapses_LongaExposicao_Denoised"))).strip()
             if new_val:
-                config.set("modules.timelapse_denoise.output_subfolder", new_val)
+                config.set("modules.timelapse_denoise.output_root_folder", new_val)
                 console.print("[green]Salvo![/green]")
             time.sleep(1)
         else:
