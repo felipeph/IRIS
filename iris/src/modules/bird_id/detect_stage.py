@@ -25,6 +25,9 @@ from .video_processor import VideoBirdProcessor, calculate_sharpness
 
 console = Console()
 
+EXCLUDED_BIRD_CATEGORIES = {"timelapse", "timelapse_long_exposure", "astro_lua"}
+EXCLUDED_BIRD_FOLDERS = {"4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia"}
+
 
 class BirdDetectStage(PipelineStage):
     """Estágio atômico de detecção de aves via YOLOv8 e extração de recortes."""
@@ -51,13 +54,24 @@ class BirdDetectStage(PipelineStage):
         iris_crops_folder = module_cfg.get("iris_crops_folder", "10_Aves/Recortes")
         dest_root = Path(config.get("general.destination_root", "C:\\IRIS"))
         crops_dest_dir = dest_root / iris_crops_folder / project.name
-        crops_dest_dir.mkdir(parents=True, exist_ok=True)
 
-        # Selecionar itens elegíveis no projeto
+        # Selecionar itens elegíveis no projeto (exclui timelapses e astrofotografia)
         eligible_items = []
         raw_exts = {".cr2", ".cr3", ".arw", ".dng", ".nef", ".raw"}
         for item in project.get_items():
+            cat = getattr(item, "category", "") or ""
+            rel_dest = (getattr(item, "relative_dest_dir", "") or "").replace("\\", "/")
+
+            if cat in EXCLUDED_BIRD_CATEGORIES:
+                continue
+            if any(folder in rel_dest for folder in EXCLUDED_BIRD_FOLDERS):
+                continue
+
             file_path = Path(item.organized_path or item.staging_path or item.original_path)
+            p_norm = str(file_path.resolve()).replace("\\", "/")
+            if any(folder in p_norm for folder in EXCLUDED_BIRD_FOLDERS):
+                continue
+
             ext = file_path.suffix.lower()
 
             focal = getattr(item, "meta_focal_length_equiv", None)
@@ -70,8 +84,10 @@ class BirdDetectStage(PipelineStage):
                     eligible_items.append((item, file_path, False))
 
         if not eligible_items:
-            console.print("[dim]Nenhum arquivo com perfil de teleobjetiva/aves encontrado no projeto.[/dim]")
+            console.print("[dim]Nenhum arquivo elegível para detecção de aves (avulsas, rajadas ou vídeos) encontrado no projeto.[/dim]")
             return True
+
+        crops_dest_dir.mkdir(parents=True, exist_ok=True)
 
         console.print(f"[bold cyan]Iniciando detecção de aves (YOLOv8) em {len(eligible_items)} arquivo(s)...[/bold cyan]")
         console.print(f"[dim]Recortes serão salvos exclusivamente na raiz do IRIS:[/dim] [cyan]{crops_dest_dir}[/cyan]")

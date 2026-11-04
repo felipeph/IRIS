@@ -1525,8 +1525,182 @@ def test_bird_organize_stage_burst_siblings_renamed(tmp_path, monkeypatch):
     assert updated_it2.organized_path == str(expected_file2.resolve())
     assert updated_it2.target_filename == expected_file2.name
 
+def test_bird_detect_skips_timelapse_and_astro_items(tmp_path, monkeypatch):
+    """Garante que BirdDetectStage ignora rigorosamente itens de timelapses e astrofotografia."""
+    from src.modules.bird_id.detect_stage import BirdDetectStage
+    from src.core.config import config
+    from src.core.project import Project, ProjectItem
+    import cv2
+    import numpy as np
+
+    iris_dest_root = tmp_path / "IRIS_ROOT"
+    iris_dest_root.mkdir(parents=True, exist_ok=True)
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: str(iris_dest_root) if k in ("general.destination_root", "storage.destination_root") else orig_get(k, d))
+
+    # Cria fotos dummy de timelapse e astrofotografia com teleobjetiva (ex: 400mm)
+    tl_file = tmp_path / "timelapse_photo.jpg"
+    tl_le_file = tmp_path / "timelapse_le_photo.jpg"
+    astro_file = tmp_path / "astro_photo.cr2"
+    bird_file = tmp_path / "bird_photo.jpg"
+
+    dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
+    cv2.imwrite(str(tl_file), dummy_img)
+    cv2.imwrite(str(tl_le_file), dummy_img)
+    astro_file.write_bytes(b'dummy raw bytes')
+    cv2.imwrite(str(bird_file), dummy_img)
+
+    proj = Project("test_tl_skip_proj")
+    proj.save()
+
+    it_tl = ProjectItem(
+        original_path=str(tl_file),
+        staging_path=str(tl_file),
+        organized_path=str(tl_file),
+        relative_dest_dir="4_Timelapses/Canon/2026/02/14/timelapse_12-00-00",
+        category="timelapse",
+        meta_focal_length_equiv=400.0,
+        meta_is_video=False,
+    )
+    it_tl_le = ProjectItem(
+        original_path=str(tl_le_file),
+        staging_path=str(tl_le_file),
+        organized_path=str(tl_le_file),
+        relative_dest_dir="4_Timelapses_LongaExposicao/Canon/2026/02/14/timelapse_12-00-00",
+        category="timelapse_long_exposure",
+        meta_focal_length_equiv=400.0,
+        meta_is_video=False,
+    )
+    it_astro = ProjectItem(
+        original_path=str(astro_file),
+        staging_path=str(astro_file),
+        organized_path=str(astro_file),
+        relative_dest_dir="5_Astrofotografia/Lua/2026-02-14",
+        category="astro_lua",
+        meta_focal_length_equiv=1200.0,
+        meta_is_video=False,
+    )
+    it_bird = ProjectItem(
+        original_path=str(bird_file),
+        staging_path=str(bird_file),
+        organized_path=str(bird_file),
+        relative_dest_dir="2_AlbunsDatas/2026/02/14",
+        category="avulsa",
+        meta_focal_length_equiv=400.0,
+        meta_is_video=False,
+    )
+
+    proj.save_items_batch([it_tl, it_tl_le, it_astro, it_bird])
+
+    with patch("src.modules.bird_id.detect_stage.BirdDetector") as mock_det_cls:
+        mock_det = MagicMock()
+        mock_det_cls.return_value = mock_det
+        mock_det.detect_and_crop.return_value = (None, None, False, 0.0, None)
+
+        stage = BirdDetectStage("bird_detect", "Detecção de Aves")
+        success = stage.run(proj)
+        assert success is True
+
+        # O detector deve ter sido invocado APENAS para a foto de ave (it_bird),
+        # pulando completamente os itens de timelapse e astrofotografia!
+        assert mock_det.detect_and_crop.call_count == 1
 
 
+def test_bird_detect_skips_pure_timelapse_project(tmp_path, monkeypatch):
+    """Garante que em um projeto puramente de timelapse o BirdDetectStage conclui sem criar pastas nem invocar detector."""
+    from src.modules.bird_id.detect_stage import BirdDetectStage
+    from src.core.config import config
+    from src.core.project import Project, ProjectItem
+    import cv2
+    import numpy as np
+
+    iris_dest_root = tmp_path / "IRIS_ROOT"
+    iris_dest_root.mkdir(parents=True, exist_ok=True)
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: str(iris_dest_root) if k in ("general.destination_root", "storage.destination_root") else orig_get(k, d))
+
+    tl_file = tmp_path / "timelapse_frame.jpg"
+    dummy_img = np.zeros((100, 100, 3), dtype=np.uint8)
+    cv2.imwrite(str(tl_file), dummy_img)
+
+    proj = Project("test_pure_tl_proj")
+    proj.save()
+
+    it_tl = ProjectItem(
+        original_path=str(tl_file),
+        staging_path=str(tl_file),
+        organized_path=str(tl_file),
+        relative_dest_dir="4_Timelapses/GoPro/2026/02/14/timelapse_10-00-00",
+        category="timelapse",
+        meta_focal_length_equiv=350.0,
+        meta_is_video=False,
+    )
+    proj.save_item(it_tl)
+
+    with patch("src.modules.bird_id.detect_stage.BirdDetector") as mock_det_cls:
+        stage = BirdDetectStage("bird_detect", "Detecção de Aves")
+        success = stage.run(proj)
+        assert success is True
+        mock_det_cls.assert_not_called()
+
+    # Garante que nenhuma pasta de recortes foi criada para este projeto
+    crops_dir = iris_dest_root / "10_Aves" / "Recortes" / proj.name
+    assert not crops_dir.exists()
 
 
+def test_bird_organize_refuses_to_move_timelapse_frames(tmp_path, monkeypatch):
+    """Garante que BirdOrganizeStage e apply_bird_physical_move nunca movem ou renomeiam frames de timelapses."""
+    from src.modules.bird_id.organize_stage import BirdOrganizeStage
+    from src.modules.bird_id.action import apply_bird_physical_move
+    from src.core.config import config
+    from src.core.project import Project, ProjectItem
+    import cv2
+    import numpy as np
+
+    iris_dest_root = tmp_path / "IRIS_ROOT"
+    iris_dest_root.mkdir(parents=True, exist_ok=True)
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: str(iris_dest_root) if k in ("general.destination_root", "storage.destination_root") else orig_get(k, d))
+
+    tl_dir = iris_dest_root / "4_Timelapses" / "Canon" / "2026" / "02" / "14" / "timelapse_10-00-00"
+    tl_dir.mkdir(parents=True, exist_ok=True)
+    tl_file = tl_dir / "2026-02-14_10-00-00_Canon_IMG_0001.JPG"
+    cv2.imwrite(str(tl_file), np.zeros((100, 100, 3), dtype=np.uint8))
+
+    proj = Project("test_tl_organize_refuse")
+    proj.save()
+
+    it_tl = ProjectItem(
+        original_path=str(tl_file),
+        staging_path=str(tl_file),
+        organized_path=str(tl_file),
+        relative_dest_dir="4_Timelapses/Canon/2026/02/14/timelapse_10-00-00",
+        category="timelapse",
+        meta_focal_length_equiv=372.0,
+        meta_is_video=False,
+    )
+    proj.save_item(it_tl)
+
+    rec = {
+        "item_path": str(tl_file),
+        "is_video": False,
+        "species_common": "Besourinho-de-bico-vermelho",
+        "species_scientific": "Chlorostilbon lucidus",
+        "confidence": 0.95,
+        "needs_review": False,
+        "crop_saved_path": str(tl_file),
+        "metadata_json": {}
+    }
+    proj.add_bird_identification(rec)
+
+    # Testa função direta
+    res_path = apply_bird_physical_move(it_tl, proj, rec, {"min_species_confidence": 0.70, "organize_in_subfolders": True, "rename_files": True})
+    assert res_path == tl_file
+    assert tl_file.exists()
+
+    # Testa estágio
+    stage = BirdOrganizeStage("bird_organize", "Organização de Aves")
+    assert stage.run(proj) is True
+    assert tl_file.exists()
+    assert not (iris_dest_root / "2_AlbunsDatas").exists()
 

@@ -95,6 +95,11 @@ class BirdTagStage(PipelineStage):
                     item = None
 
             if item:
+                cat = getattr(item, "category", "") or ""
+                rel_dest = (getattr(item, "relative_dest_dir", "") or "").replace("\\", "/")
+                p_norm = str(item.organized_path or item_path_str).replace("\\", "/")
+                if cat in ("timelapse", "timelapse_long_exposure", "astro_lua") or any(f in rel_dest for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")) or any(f in p_norm for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")):
+                    continue
                 p = Path(item.organized_path or item.staging_path or item.original_path)
                 if p.exists():
                     files_to_tag[p] = rec
@@ -106,7 +111,12 @@ class BirdTagStage(PipelineStage):
         for b_id, rec in burst_records.items():
             siblings = project.get_items(burst_id=b_id)
             for sib in siblings:
+                cat_s = getattr(sib, "category", "") or ""
+                rel_s = (getattr(sib, "relative_dest_dir", "") or "").replace("\\", "/")
                 sib_p = Path(sib.organized_path or sib.staging_path or sib.original_path)
+                p_s_norm = str(sib_p).replace("\\", "/")
+                if cat_s in ("timelapse", "timelapse_long_exposure", "astro_lua") or any(f in rel_s for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")) or any(f in p_s_norm for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")):
+                    continue
                 if sib_p.exists() and sib_p not in files_to_tag:
                     files_to_tag[sib_p] = rec
 

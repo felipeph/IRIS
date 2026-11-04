@@ -108,6 +108,14 @@ class BirdOrganizeStage(PipelineStage):
                     tracker.update(1)
                     continue
 
+                cat = getattr(item, "category", "") or ""
+                rel_dest = (getattr(item, "relative_dest_dir", "") or "").replace("\\", "/")
+                p_norm = str(item.organized_path or item_path_str).replace("\\", "/")
+                if cat in ("timelapse", "timelapse_long_exposure", "astro_lua") or any(f in rel_dest for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")) or any(f in p_norm for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")):
+                    skipped_review_count += 1
+                    tracker.update(1)
+                    continue
+
                 try:
                     current_p = Path(item.organized_path or item.staging_path or item.original_path)
                     if not current_p.exists():
@@ -147,7 +155,12 @@ class BirdOrganizeStage(PipelineStage):
 
                     siblings = project.get_items(burst_id=b_id)
                     for sib in siblings:
+                        cat_s = getattr(sib, "category", "") or ""
+                        rel_s = (getattr(sib, "relative_dest_dir", "") or "").replace("\\", "/")
                         sib_p = Path(sib.organized_path or sib.staging_path or sib.original_path)
+                        p_s_norm = str(sib_p).replace("\\", "/")
+                        if cat_s in ("timelapse", "timelapse_long_exposure", "astro_lua") or any(f in rel_s for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")) or any(f in p_s_norm for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")):
+                            continue
                         if not sib_p.exists():
                             continue
 

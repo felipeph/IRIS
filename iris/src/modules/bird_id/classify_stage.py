@@ -113,8 +113,43 @@ class BirdClassifyStage(PipelineStage):
                             "metadata_json": {"detection_status": "detected"}
                         })
 
+        # Mapeamento rápido de ProjectItem por item_path para resolução de GPS/EXIF
+        items_by_path = {}
+        for it in project.get_items():
+            for p_str in [it.organized_path, it.staging_path, it.original_path]:
+                if p_str:
+                    items_by_path[p_str] = it
+                    try:
+                        items_by_path[str(Path(p_str).resolve())] = it
+                    except Exception:
+                        pass
+
+        # Filtrar registros elegíveis excluindo timelapses e astrofotografia
+        EXCLUDED_CATEGORIES = {"timelapse", "timelapse_long_exposure", "astro_lua"}
+        EXCLUDED_FOLDERS = {"4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia"}
+        filtered_records = []
+        for r in records_with_crops:
+            item_p = r.get("item_path", "")
+            item_match = items_by_path.get(item_p)
+            if not item_match and item_p:
+                try:
+                    item_match = items_by_path.get(str(Path(item_p).resolve()))
+                except Exception:
+                    item_match = None
+            cat = getattr(item_match, "category", "") or ""
+            rel_dest = (getattr(item_match, "relative_dest_dir", "") or "").replace("\\", "/")
+            p_norm = item_p.replace("\\", "/")
+            if cat in EXCLUDED_CATEGORIES:
+                continue
+            if any(folder in rel_dest for folder in EXCLUDED_FOLDERS):
+                continue
+            if any(folder in p_norm for folder in EXCLUDED_FOLDERS):
+                continue
+            filtered_records.append(r)
+        records_with_crops = filtered_records
+
         if not records_with_crops:
-            console.print("[yellow]⚠ Nenhum recorte de ave registrado no banco ou encontrado em disco.[/yellow]")
+            console.print("[yellow]⚠ Nenhum recorte de ave elegível registrado no banco ou encontrado em disco.[/yellow]")
             console.print("[dim]Dica: Execute a etapa anterior de Detecção (bird_detect) para gerar os recortes das aves primeiro.[/dim]")
             return True
 
@@ -132,14 +167,6 @@ class BirdClassifyStage(PipelineStage):
         except Exception as e:
             console.print(f"[bold red]Erro ao inicializar classificador ({classifier_type}): {e}[/bold red]")
             return False
-
-        # Mapeamento rápido de ProjectItem por item_path para resolução de GPS/EXIF
-        items_by_path = {}
-        for it in project.get_items():
-            for p_str in [it.organized_path, it.staging_path, it.original_path]:
-                if p_str:
-                    items_by_path[p_str] = it
-                    items_by_path[str(Path(p_str).resolve())] = it
 
         classified_records: List[Dict[str, Any]] = []
         total_files = len(records_with_crops)

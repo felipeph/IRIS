@@ -242,6 +242,12 @@ def apply_bird_physical_move(
     if confidence < min_confidence and not is_early_exit:
         return current_path
 
+    cat = getattr(item, "category", "") or ""
+    rel_dest = (getattr(item, "relative_dest_dir", "") or "").replace("\\", "/")
+    p_norm = str(current_path.resolve()).replace("\\", "/")
+    if cat in ("timelapse", "timelapse_long_exposure", "astro_lua") or any(f in rel_dest for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")) or any(f in p_norm for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")):
+        return current_path
+
     rename_files = bool(bird_cfg.get("rename_files", True))
     organize_subfolder = bool(bird_cfg.get("organize_in_subfolders", True))
 
