@@ -4,7 +4,7 @@ import shutil
 import re
 import os
 import tempfile
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
@@ -94,14 +94,23 @@ class MediaMetadata:
                 return f"{mp:.1f}MP"
         return self.resolution_str or ""
 
-def parse_camera_generic(raw_make: str, raw_model: str) -> tuple[str, str, str]:
+def parse_camera_generic(raw_make: Any, raw_model: Any) -> tuple[str, str, str]:
     """
     Separa e normaliza fabricante (Make) e modelo (Model) de forma totalmente genérica.
     Retorna: (clean_make, clean_model, combined_camera)
     """
+    if isinstance(raw_make, (list, tuple)) and raw_make:
+        raw_make = raw_make[0]
+    if isinstance(raw_model, (list, tuple)) and raw_model:
+        raw_model = raw_model[0]
+
+    str_make = str(raw_make).strip() if raw_make is not None else ""
+    str_model = str(raw_model).strip() if raw_model is not None else ""
+
     # 1. Pega o primeiro termo do Make (ignora sufixos corporativos como CORP, INC, etc.)
-    make = (raw_make or "").split()[0].strip() if raw_make else "Cam"
-    model = (raw_model or "").strip() or make
+    make_parts = str_make.split()
+    make = make_parts[0].strip() if make_parts else "Cam"
+    model = str_model or make
 
     # 2. Se o modelo já começa com a marca (case-insensitive), remove para não duplicar
     if make.lower() != "cam" and model.lower().startswith(make.lower()):
@@ -122,7 +131,7 @@ def parse_camera_generic(raw_make: str, raw_model: str) -> tuple[str, str, str]:
 
     return clean_make, clean_model, combined
 
-def sanitize_camera_name(raw_model: str) -> str:
+def sanitize_camera_name(raw_model: Any) -> str:
     _, model, _ = parse_camera_generic("", raw_model)
     return model
 
@@ -541,6 +550,8 @@ def extract_metadata_batch(
 
         # ISO
         iso_raw = raw_exif.get("ISO")
+        if isinstance(iso_raw, (list, tuple)) and iso_raw:
+            iso_raw = iso_raw[0]
         iso_str = f"ISO{iso_raw}" if iso_raw else "auto"
 
         # Resolution / Duration / FPS

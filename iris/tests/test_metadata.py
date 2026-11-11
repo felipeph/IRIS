@@ -207,3 +207,62 @@ def test_extract_metadata_batch_with_gps(tmp_path):
         cmd = mock_run.call_args[0][0]
         assert "-GPSLatitude#" in cmd
         assert "-GPSLongitude#" in cmd
+
+def test_parse_camera_generic_numeric_and_composite():
+    from src.core.metadata import parse_camera_generic, sanitize_camera_name
+
+    # Modelo numérico vindo como int do JSON (caso Nokia 110)
+    make, model, combined = parse_camera_generic("Nokia", 110)
+    assert make == "Nokia"
+    assert model == "110"
+    assert combined == "Nokia_110"
+
+    # Fabricante e modelo numéricos
+    make, model, combined = parse_camera_generic(123, 456)
+    assert make == "123"
+    assert model == "456"
+    assert combined == "123_456"
+
+    # Make ou model em listas/tuplas
+    make, model, combined = parse_camera_generic(["Sony"], [640])
+    assert make == "Sony"
+    assert model == "640"
+    assert combined == "Sony_640"
+
+    # Make nulo com model numérico
+    make, model, combined = parse_camera_generic(None, 110)
+    assert make == "Cam"
+    assert model == "110"
+    assert combined == "Cam_110"
+
+    # sanitize_camera_name aceitando int
+    assert sanitize_camera_name(110) == "110"
+
+def test_extract_metadata_batch_numeric_camera_model_and_list_iso(tmp_path):
+    dummy_jpg = tmp_path / "Foto0001.jpg"
+    dummy_jpg.write_bytes(b"dummy_jpeg_bytes")
+
+    fake_exif = [
+        {
+            "SourceFile": str(dummy_jpg.resolve()),
+            "DateTimeOriginal": "2012:11:11 20:39:48",
+            "Make": "Nokia",
+            "Model": 110,
+            "ISO": [100, 100],
+            "ImageWidth": 480,
+            "ImageHeight": 600,
+        }
+    ]
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = json.dumps(fake_exif)
+
+    with patch("src.core.metadata.shutil.which", return_value="exiftool"), \
+         patch("subprocess.run", return_value=mock_proc):
+        results = extract_metadata_batch([dummy_jpg])
+        assert len(results) == 1
+        meta = results[0]
+        assert meta.camera_make == "Nokia"
+        assert meta.camera_model == "110"
+        assert meta.iso_str == "ISO100"

@@ -114,9 +114,10 @@ def is_timelapse_folder_name(folder_name: str) -> bool:
     """Verifica se o nome de uma pasta indica explicitamente ser um timelapse manual do usuário."""
     if not folder_name:
         return False
-    if IRIS_TIMELAPSE_AUTO_PATTERN.match(folder_name.strip()):
+    folder_str = str(folder_name).strip()
+    if IRIS_TIMELAPSE_AUTO_PATTERN.match(folder_str):
         return False
-    clean = folder_name.lower().replace("_", " ").replace("-", " ")
+    clean = folder_str.lower().replace("_", " ").replace("-", " ")
     return "timelapse" in clean or "time lapse" in clean
 
 def _is_quantized_cadence_window(window: list[float], profile: TimelapseProfile) -> tuple[bool, int]:

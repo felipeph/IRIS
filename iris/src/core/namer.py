@@ -59,8 +59,8 @@ def generate_target_filename(meta: MediaMetadata, config: dict | None = None) ->
     # Strip any separators that formed at the ends after stripping
     original_clean = original_clean.strip("-_")
 
-    make = getattr(meta, "camera_make", "Cam") or "Cam"
-    model = meta.camera_model or "Cam"
+    make = str(getattr(meta, "camera_make", "Cam") or "Cam")
+    model = str(meta.camera_model or "Cam")
     if make == "Cam" or make.lower() == model.lower() or make.lower() in model.lower():
         camera_str = model
     else:
