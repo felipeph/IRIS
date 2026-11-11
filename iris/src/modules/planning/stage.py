@@ -164,7 +164,11 @@ class PlanningStage(PipelineStage):
             name_config["project_geo_lat"] = loc.lat
             name_config["project_geo_lng"] = loc.lng
 
-        classified_items = classify_media_batch(all_metadatas, class_config, name_config)
+        classified_items = classify_media_batch(
+            all_metadatas, class_config, name_config,
+            album_mode=bool(getattr(project, "is_event", False)),
+            event_name=getattr(project, "event_name", ""),
+        )
         
         with project.transaction():
             for c_item in classified_items:

@@ -14,6 +14,7 @@ from src.core.project import Project, ProjectItem
 from src.core.ui import ProgressTracker, PipelineUI
 from src.core.config import config
 from src.core.geo import GeoService, GEO_WRITABLE_EXTS, build_exiftool_geo_args
+from src.core.event import project_event, build_exiftool_event_args
 from src.core.metadata import read_gps_batch, VIDEO_EXTENSIONS, RAW_EXTENSIONS
 from src.modules.ingestion.strategies.base import compute_file_hash
 
@@ -57,6 +58,11 @@ class SanitizationStage(PipelineStage):
             loc = GeoService.get_default_location()
 
         tag_media = bool(config.get("geo.tag_media", True))
+
+        # Tags de evento/álbum (somente projetos marcados como evento)
+        event_info = project_event(project) if getattr(project, "is_event", False) else None
+        event_args_jpeg = build_exiftool_event_args(event_info, ext=".jpg") if event_info else []
+        event_args_other = build_exiftool_event_args(event_info, ext=".png") if event_info else []
 
         # Coleta de itens: prioriza itens organizados
         organized_items = [it for it in project.get_items(status="organized")]
@@ -175,6 +181,7 @@ class SanitizationStage(PipelineStage):
                 items_sanitize_only_jpeg: List[Tuple[Path, Optional[ProjectItem]]] = []
                 items_write_geo_jpeg: List[Tuple[Path, Optional[ProjectItem]]] = []
                 items_write_geo_other: List[Tuple[Path, Optional[ProjectItem]]] = []
+                items_event_only_other: List[Tuple[Path, Optional[ProjectItem]]] = []
 
                 for p, it in chunk_targets:
                     p_res_str = str(p.resolve())
@@ -196,6 +203,8 @@ class SanitizationStage(PipelineStage):
 
                         if ext in [".jpg", ".jpeg"]:
                             items_sanitize_only_jpeg.append((p, it))
+                        elif event_args_other and not is_video and not is_raw and ext in GEO_WRITABLE_EXTS:
+                            items_event_only_other.append((p, it))
                     else:
                         # Não possui GPS nativo
                         if loc and tag_media:
@@ -236,6 +245,8 @@ class SanitizationStage(PipelineStage):
                         f.write("-P\n")
                         f.write("-charset\nUTF8\n")
                         f.write("-charset\nfilename=UTF8\n")
+                        for arg in event_args_jpeg:
+                            f.write(f"{arg}\n")
                         for p, _ in items_sanitize_only_jpeg:
                             f.write(f"{p.resolve()}\n")
                         argfile_a = f.name
@@ -264,7 +275,7 @@ class SanitizationStage(PipelineStage):
                         f.write("-PreviewImage=\n")
                         f.write("-overwrite_original\n")
                         f.write("-P\n")
-                        for arg in geo_args:
+                        for arg in geo_args + event_args_jpeg:
                             f.write(f"{arg}\n")
                         for p, _ in items_write_geo_jpeg:
                             f.write(f"{p.resolve()}\n")
@@ -290,7 +301,7 @@ class SanitizationStage(PipelineStage):
                     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
                         f.write("-overwrite_original\n")
                         f.write("-P\n")
-                        for arg in geo_args:
+                        for arg in geo_args + event_args_other:
                             f.write(f"{arg}\n")
                         for p, _ in items_write_geo_other:
                             f.write(f"{p.resolve()}\n")
@@ -309,8 +320,26 @@ class SanitizationStage(PipelineStage):
                         except OSError:
                             pass
 
+                # Execução 4: Outros formatos graváveis com GPS nativo -> apenas tags de evento
+                if items_event_only_other and event_args_other:
+                    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+                        f.write("-overwrite_original\n")
+                        f.write("-P\n")
+                        for arg in event_args_other:
+                            f.write(f"{arg}\n")
+                        for p, _ in items_event_only_other:
+                            f.write(f"{p.resolve()}\n")
+                        argfile_d = f.name
+                    try:
+                        subprocess.run([exiftool_bin, "-charset", "UTF8", "-@", argfile_d], capture_output=True, text=True, encoding="utf-8", errors="replace")
+                    finally:
+                        try:
+                            os.unlink(argfile_d)
+                        except OSError:
+                            pass
+
                 # Atualiza tamanhos, hashes e metadados no SQLite para os alvos processados
-                modified_physical_paths = {p.resolve() for p, _ in (items_sanitize_only_jpeg + items_write_geo_jpeg + items_write_geo_other)}
+                modified_physical_paths = {p.resolve() for p, _ in (items_sanitize_only_jpeg + items_write_geo_jpeg + items_write_geo_other + items_event_only_other)}
                 seen_saved_ids = set()
 
                 with project.transaction():
@@ -339,6 +368,8 @@ class SanitizationStage(PipelineStage):
         console.print(f"  [dim]• Fotos de álbum com metadados GPS/IPTC injetados via ExifTool:[/dim] [cyan]{count_geo_written}[/cyan]")
         console.print(f"  [dim]• RAWs/Vídeos preservados intactos (GPS apenas no nome):[/dim] [cyan]{count_geo_named_only}[/cyan]")
         console.print(f"  [dim]• JPEGs de álbum sanitizados (MPF/MakerNotes):[/dim] [cyan]{count_sanitized_jpeg}[/cyan]")
+        if event_info and event_info.name:
+            console.print(f"  [dim]• Tags de evento '{event_info.name}' aplicadas em fotos graváveis do álbum.[/dim]")
 
         return True
 

@@ -8,6 +8,7 @@ from .timelapse import _menu_timelapse, _menu_timelapse_long_exposure
 from .video_youtube import _menu_video_edit, _menu_youtube_notifications
 from .astro import _menu_astro
 from .bird_id import _menu_bird_id
+from .events import _menu_events, prompt_event_dialog
 from .geolocation import (
     _add_location_flow,
     _edit_location_flow,
@@ -25,6 +26,8 @@ __all__ = [
     "_menu_youtube_notifications",
     "_menu_astro",
     "_menu_bird_id",
+    "_menu_events",
+    "prompt_event_dialog",
     "_add_location_flow",
     "_edit_location_flow",
     "_set_default_location_flow",

@@ -5,6 +5,7 @@ from pathlib import Path
 from src.core.project import Project
 from src.core.config import config
 from src.core.cleanup import clean_empty_directories
+from src.core.event import ALBUM_SKIPPED_STAGE_IDS
 from rich.console import Console
 
 console = Console()
@@ -89,6 +90,9 @@ class PipelineRunner:
             kwargs.setdefault("auto_clean", getattr(project, "auto_cleanup", False))
         for stage in self.stages:
             if stage.stage_id == target_stage_id:
+                if getattr(project, "is_event", False) and stage.stage_id in ALBUM_SKIPPED_STAGE_IDS:
+                    console.print(f"[dim]↷ Etapa pulada (projeto de álbum): {stage.name}[/dim]")
+                    return True
                 console.print(f"\n[bold blue]--- Executando Etapa: '{stage.name}' ---[/bold blue]")
                 try:
                     success = _invoke_stage(stage, project, kwargs)
@@ -134,6 +138,11 @@ class PipelineRunner:
             return
 
         for stage in stages_to_run:
+            if getattr(project, "is_event", False) and stage.stage_id in ALBUM_SKIPPED_STAGE_IDS:
+                console.print(f"\n[dim]↷ Etapa pulada (projeto de álbum): {stage.name}[/dim]")
+                project.current_stage_id = stage.stage_id
+                project.save()
+                continue
             if stage.stage_id == "cleanup":
                 if not getattr(project, "auto_cleanup", False):
                     console.print(f"\n[dim]-> Pulando etapa: {stage.name} (Limpeza automática desativada no projeto)[/dim]")

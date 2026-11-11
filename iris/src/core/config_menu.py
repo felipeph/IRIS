@@ -32,6 +32,8 @@ from src.core.config_menus import (
     _menu_youtube_notifications,
     _menu_astro,
     _menu_bird_id,
+    _menu_events,
+    prompt_event_dialog,
     _add_location_flow,
     _edit_location_flow,
     _set_default_location_flow,
@@ -64,9 +66,10 @@ def show_config_menu(console: Console = None):
         console.print("  [cyan]7.[/cyan] 🌌 Timelapse Longa Exposição [dim](Mín Fotos, Shutter Mín, Gaps Buffer, Render)[/dim]")
         console.print("  [cyan]8.[/cyan] 🦜 Identificação de Aves [dim](YOLOv8 + iNaturalist, Geo-Prior, Vídeo)[/dim]")
         console.print("  [cyan]9.[/cyan] 📍 Geolocalizações & Metadados GPS [dim](Pontos pré-definidos, GPS em Tags e Nomes)[/dim]")
+        console.print("  [cyan]A.[/cyan] 🎉 Eventos & Álbuns [dim](Nome do evento, participantes, reaplicar tags)[/dim]")
         console.print("  [cyan]0.[/cyan] ↩ Voltar")
         
-        choice = Prompt.ask("\nSelecione uma opção", default="0")
+        choice = Prompt.ask("\nSelecione uma opção", default="0").strip().upper()
         if choice == "0":
             break
         elif choice == "1":
@@ -87,6 +90,8 @@ def show_config_menu(console: Console = None):
             _menu_bird_id(console)
         elif choice == "9":
             _menu_geolocation(console)
+        elif choice == "A":
+            _menu_events(console)
         else:
             console.print("[red]Opção inválida.[/red]")
             time.sleep(1)
@@ -102,6 +107,8 @@ __all__ = [
     "_menu_youtube_notifications",
     "_menu_astro",
     "_menu_bird_id",
+    "_menu_events",
+    "prompt_event_dialog",
     "_add_location_flow",
     "_edit_location_flow",
     "_set_default_location_flow",

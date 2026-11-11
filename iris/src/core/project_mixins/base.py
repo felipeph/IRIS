@@ -5,6 +5,7 @@ transações aninhadas e dual-write atômico.
 """
 
 import sqlite3
+import json
 import threading
 from pathlib import Path
 from typing import Optional, Any
@@ -81,6 +82,9 @@ class ProjectBase:
         self.total_source_size_bytes = 0
         self.auto_cleanup: bool = False
         self.geo_location_id: str = ""
+        self.is_event: bool = False
+        self.event_name: str = ""
+        self.event_participants: list = []
         self._db_initialized: bool = False
         self._tx_local = threading.local()
 
@@ -220,9 +224,12 @@ class ProjectBase:
         with p_mod.get_db_connection(p_mod.CENTRAL_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO projects (name, source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup, geo_location_id, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+                INSERT INTO projects (name, source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup, geo_location_id, is_event, event_name, event_participants, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
                 ON CONFLICT(name) DO UPDATE SET
+                    is_event=excluded.is_event,
+                    event_name=excluded.event_name,
+                    event_participants=excluded.event_participants,
                     source_path=excluded.source_path,
                     current_stage_id=excluded.current_stage_id,
                     total_source_files=excluded.total_source_files,
@@ -230,7 +237,7 @@ class ProjectBase:
                     auto_cleanup=excluded.auto_cleanup,
                     geo_location_id=excluded.geo_location_id,
                     updated_at=strftime('%Y-%m-%d %H:%M:%f', 'now')
-            """, (self.name, self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes, int(self.auto_cleanup), str(self.geo_location_id)))
+            """, (self.name, self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes, int(self.auto_cleanup), str(self.geo_location_id), int(bool(self.is_event)), str(self.event_name or ""), json.dumps(list(self.event_participants or []), ensure_ascii=False)))
             conn.commit()
 
     def load_metadata(self) -> bool:
@@ -240,9 +247,16 @@ class ProjectBase:
             return False
         with p_mod.get_db_connection(p_mod.CENTRAL_DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup, geo_location_id FROM projects WHERE name=?", (self.name,))
+            cursor.execute("SELECT source_path, current_stage_id, total_source_files, total_source_size_bytes, auto_cleanup, geo_location_id, is_event, event_name, event_participants FROM projects WHERE name=?", (self.name,))
             row = cursor.fetchone()
             if row:
+                self.is_event = bool(row[6]) if row[6] is not None else False
+                self.event_name = str(row[7] or "")
+                try:
+                    parts = json.loads(row[8] or "[]")
+                    self.event_participants = [str(x) for x in parts] if isinstance(parts, list) else []
+                except (ValueError, TypeError):
+                    self.event_participants = []
                 self.source_path, self.current_stage_id, self.total_source_files, self.total_source_size_bytes = row[0], row[1], row[2], row[3]
                 self.auto_cleanup = bool(row[4]) if len(row) > 4 and row[4] is not None else False
                 self.geo_location_id = str(row[5]) if len(row) > 5 and row[5] is not None else ""

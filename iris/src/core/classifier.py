@@ -471,7 +471,24 @@ def _classify_timelapse(
             extra_dest_dirs=extra_dirs,
         ))
 
-def classify_media_batch(items: list[MediaMetadata], class_config: dict | None = None, name_config: dict | None = None) -> list[ClassifiedItem]:
+def classify_album_batch(items: list[MediaMetadata], name_config: dict, event_name: str) -> list[ClassifiedItem]:
+    """Modo álbum: todas as mídias viram avulsas em 2_AlbunsDatas/<evento>/ (sem timelapse/rajada/astro)."""
+    from src.core.namer import sanitize_filename
+    folder = sanitize_filename(event_name) or "Evento"
+    bdir = Path("2_AlbunsDatas") / folder
+    classified: list[ClassifiedItem] = []
+    for it in sorted(items, key=lambda x: x.timestamp):
+        classified.append(ClassifiedItem(
+            metadata=it,
+            category="album_video" if it.is_video else "avulsa",
+            relative_dest_dir=bdir,
+            target_filename=generate_target_filename(it, name_config),
+            burst_id="",
+        ))
+    return classified
+
+
+def classify_media_batch(items: list[MediaMetadata], class_config: dict | None = None, name_config: dict | None = None, album_mode: bool = False, event_name: str = "") -> list[ClassifiedItem]:
     if not items:
         return []
 
@@ -479,6 +496,9 @@ def classify_media_batch(items: list[MediaMetadata], class_config: dict | None =
         class_config = {}
     if name_config is None:
         name_config = {}
+
+    if album_mode:
+        return classify_album_batch(items, name_config, event_name)
 
     # Ordenar itens cronologicamente
     sorted_items = sorted(items, key=lambda x: x.timestamp)

@@ -266,6 +266,9 @@ def run_pipeline_for_project(active_project):
                 console.print("Até logo!")
                 sys.exit(0)
             elif choice == "B":
+                if getattr(active_project, "is_event", False):
+                    console.print("[yellow]Projeto de álbum: correção de aves indisponível.[/yellow]")
+                    continue
                 from src.modules.bird_id.correction import interactive_bird_correction_flow
                 interactive_bird_correction_flow(active_project)
             elif choice == "G":
@@ -353,7 +356,17 @@ def start_new_project_flow():
         
     console.print("\n[bold cyan]📍 Defina a localização geográfica do projeto:[/bold cyan]")
     loc = select_location_dialog(console)
-    active_project = create_project(proj_name, source_path, geo_location_id=loc.id if loc else None)
+
+    event = None
+    if Confirm.ask("\n[bold cyan]🎉 Este projeto é de um evento/álbum?[/bold cyan]", default=False):
+        from src.core.config_menus.events import prompt_event_dialog
+        from src.core.event import PeopleCatalog
+        event = prompt_event_dialog(console)
+        if event:
+            PeopleCatalog.register(event.participants)
+            console.print("[dim]Modo álbum: tudo será tratado como fotos avulsas (sem timelapse, rajadas, astro, aves ou edição 4K).[/dim]")
+
+    active_project = create_project(proj_name, source_path, geo_location_id=loc.id if loc else None, event=event)
     console.print(f"[green]Projeto '{proj_name}' criado com sucesso (Localização: {loc.label if loc else 'Padrão'}).[/green]")
     
     run_pipeline_for_project(active_project)

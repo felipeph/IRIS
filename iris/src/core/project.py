@@ -67,6 +67,15 @@ def init_central_db(force: bool = False):
             cursor.execute("ALTER TABLE projects ADD COLUMN geo_location_id TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+        for _col_ddl in (
+            "is_event INTEGER DEFAULT 0",
+            "event_name TEXT DEFAULT ''",
+            "event_participants TEXT DEFAULT '[]'",
+        ):
+            try:
+                cursor.execute(f"ALTER TABLE projects ADD COLUMN {_col_ddl}")
+            except sqlite3.OperationalError:
+                pass
 
         for ddl in SHARED_TABLES_DDL:
             cursor.execute(ddl)
@@ -268,9 +277,13 @@ def get_project(name: str) -> Optional[Project]:
     return None
 
 
-def create_project(name: str, source_path: str, auto_cleanup: Optional[bool] = None, geo_location_id: Optional[str] = None) -> Project:
-    """Cria e salva um novo projeto."""
+def create_project(name: str, source_path: str, auto_cleanup: Optional[bool] = None, geo_location_id: Optional[str] = None, event: Optional[Any] = None) -> Project:
+    """Cria e salva um novo projeto. `event` (EventInfo) marca o projeto como álbum/evento."""
     p = Project(name, source_path)
+    if event is not None and getattr(event, "name", ""):
+        p.is_event = True
+        p.event_name = event.name
+        p.event_participants = list(event.participants)
     if auto_cleanup is None:
         p.auto_cleanup = bool(config.get("modules.cleanup.auto_clean", False))
     else:
