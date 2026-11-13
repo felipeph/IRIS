@@ -472,12 +472,18 @@ def _classify_timelapse(
         ))
 
 def classify_album_batch(items: list[MediaMetadata], name_config: dict, event_name: str) -> list[ClassifiedItem]:
-    """Modo álbum: todas as mídias viram avulsas em 2_AlbunsDatas/<evento>/ (sem timelapse/rajada/astro)."""
+    """Modo álbum: todas as mídias viram avulsas em 2_AlbunsDatas/<evento>/<YYYY>/<MM>/<DD>/ (sem timelapse/rajada/astro)."""
     from src.core.namer import sanitize_filename
     folder = sanitize_filename(event_name) or "Evento"
-    bdir = Path("2_AlbunsDatas") / folder
+    base_dir = Path("2_AlbunsDatas") / folder
     classified: list[ClassifiedItem] = []
     for it in sorted(items, key=lambda x: x.timestamp):
+        parts = (it.date_str or "").split("-")
+        if len(parts) == 3 and all(parts):
+            y, m, d = parts
+        else:
+            y, m, d = "SemData", "00", "00"
+        bdir = base_dir / y / m / d
         classified.append(ClassifiedItem(
             metadata=it,
             category="album_video" if it.is_video else "avulsa",

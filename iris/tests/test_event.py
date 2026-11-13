@@ -57,8 +57,21 @@ def test_album_mode_treats_everything_as_avulsa():
     assert {c.category for c in out} == {"avulsa", "album_video"}
     assert all(c.burst_id == "" for c in out)
     dirs = {str(c.relative_dest_dir).replace("\\", "/") for c in out}
-    assert len(dirs) == 1 and next(iter(dirs)).startswith("2_AlbunsDatas/")
-    assert "5_Astrofotografia" not in next(iter(dirs))
+    assert len(dirs) == 1
+    only_dir = next(iter(dirs))
+    assert only_dir.startswith("2_AlbunsDatas/") and only_dir.endswith("/2026/09/06")
+    assert "5_Astrofotografia" not in only_dir
+
+
+def test_album_mode_splits_multiple_days():
+    day1 = _meta(1, seconds=0)
+    day2 = _meta(2, seconds=86400)  # 2026-09-07
+    out = classify_media_batch([day2, day1], album_mode=True, event_name="Viagem")
+    dirs = [str(c.relative_dest_dir).replace("\\", "/") for c in out]
+    assert dirs == [
+        "2_AlbunsDatas/Viagem/2026/09/06",
+        "2_AlbunsDatas/Viagem/2026/09/07",
+    ]
 
 
 def test_normal_mode_unchanged_for_bursts():
