@@ -160,6 +160,10 @@ def calculate_aspect_ratio(width: Optional[int], height: Optional[int]) -> str:
         return "16:10"
     elif abs(ratio_val - 5/4) < 0.05:
         return "5:4"
+    elif abs(ratio_val - 9/16) < 0.05:
+        return "9:16"
+    elif abs(ratio_val - 3/4) < 0.05:
+        return "3:4"
 
     return f"{rx}:{ry}"
 

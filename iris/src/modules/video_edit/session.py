@@ -146,6 +146,46 @@ def resolve_item_bird_info(
 
     return None
 
+def summarize_session_cameras(items: List[ProjectItem]) -> Dict[str, Any]:
+    """
+    Resume as câmeras presentes em uma sessão de vídeos.
+    Se houver apenas 1 modelo único de câmera, mantém o nome desse modelo.
+    Se houver > 1 modelo distinto, retorna camera_token = 'Multi-Camera' e lista completa.
+    """
+    short_models: List[str] = []
+    full_names: List[str] = []
+    makes: List[str] = []
+
+    for it in items:
+        make = (it.meta_camera_make or "").strip()
+        model = (it.meta_camera_model or "").strip()
+        short_cam = model or make or "Camera"
+        if short_cam not in short_models:
+            short_models.append(short_cam)
+
+        if make and model and not model.lower().startswith(make.lower()):
+            full_cam = f"{make} {model}".strip()
+        else:
+            full_cam = model or make or "Câmera"
+        if full_cam not in full_names:
+            full_names.append(full_cam)
+
+        if make and make not in makes:
+            makes.append(make)
+
+    is_multi = len(short_models) > 1
+    first_make = (items[0].meta_camera_make if items else None) or "Cam"
+    first_model = (items[0].meta_camera_model or items[0].meta_camera_make if items else None) or "Camera"
+
+    return {
+        "is_multi_camera": is_multi,
+        "camera_token": "Multi-Camera" if is_multi else first_model,
+        "camera_make": first_make,
+        "camera_models_short": short_models if short_models else ["Camera"],
+        "camera_names_full": full_names if full_names else ["Câmera"],
+        "camera_makes": makes if makes else [first_make],
+    }
+
 def group_videos_into_sessions(
     items: List[ProjectItem],
     mode: str = "individual",
@@ -159,12 +199,12 @@ def group_videos_into_sessions(
     Agrupa vídeos em sessões de trabalho para renderização.
     - Se auto_join_birds == True:
         Vídeos com ave identificada gravados no mesmo dia são automaticamente
-        agrupados por (data, espécie, câmera) em sessões contínuas.
+        agrupados por (data, espécie) em sessões contínuas (suporte multi-câmera).
     - Se mode == 'individual':
         Vídeos restantes (sem espécie de ave) formam grupos unitários 1:1.
     - Se mode == 'joined':
-        Concatena todos os vídeos restantes que vieram da mesma pasta de origem (e mesma câmera)
-        em um único vídeo, ordenados cronologicamente.
+        Concatena todos os vídeos restantes que vieram da mesma pasta de origem
+        em um único vídeo (mesmo de múltiplas câmeras), ordenados cronologicamente.
     """
     if not items:
         return []
@@ -175,22 +215,21 @@ def group_videos_into_sessions(
             sorted_items = sorted(items, key=lambda it: parse_item_datetime(it))
             return [[it] for it in sorted_items]
 
-        groups: Dict[Tuple[str, Tuple[str, str]], List[ProjectItem]] = defaultdict(list)
+        groups: Dict[str, List[ProjectItem]] = defaultdict(list)
         for it in items:
             folder_key = get_item_source_folder(it)
-            cam_key = (it.meta_camera_make or "Cam", it.meta_camera_model or "Model")
-            groups[(folder_key, cam_key)].append(it)
+            groups[folder_key].append(it)
 
         all_sessions: List[List[ProjectItem]] = []
-        for (folder_key, cam_key), group_items in groups.items():
+        for group_items in groups.values():
             group_items.sort(key=lambda it: parse_item_datetime(it))
             all_sessions.append(group_items)
 
         all_sessions.sort(key=lambda s: parse_item_datetime(s[0]))
         return all_sessions
 
-    # Modo inteligente com Auto-Join de Aves por Espécie e Dia
-    bird_groups: Dict[Tuple[str, str, Tuple[str, str]], List[ProjectItem]] = defaultdict(list)
+    # Modo inteligente com Auto-Join de Aves por Espécie e Dia (suporte multi-câmera)
+    bird_groups: Dict[Tuple[str, str], List[ProjectItem]] = defaultdict(list)
     remaining_items: List[ProjectItem] = []
 
     for it in items:
@@ -207,8 +246,7 @@ def group_videos_into_sessions(
             if spec_token:
                 dt = parse_item_datetime(it)
                 date_str = dt.strftime("%Y-%m-%d")
-                cam_key = (it.meta_camera_make or "Cam", it.meta_camera_model or "Model")
-                group_key = (date_str, spec_token.lower(), cam_key)
+                group_key = (date_str, spec_token.lower())
                 bird_groups[group_key].append(it)
                 continue
 
@@ -217,7 +255,7 @@ def group_videos_into_sessions(
     all_sessions: List[List[ProjectItem]] = []
 
     # Adiciona grupos de aves (ordenados internamente por datetime)
-    for (date_str, spec_token, cam_key), group_items in bird_groups.items():
+    for group_items in bird_groups.values():
         group_items.sort(key=lambda it: parse_item_datetime(it))
         all_sessions.append(group_items)
 
@@ -227,14 +265,13 @@ def group_videos_into_sessions(
             for it in remaining_items:
                 all_sessions.append([it])
         else:
-            # mode == "joined": agrupa por pasta e câmera
-            folder_groups: Dict[Tuple[str, Tuple[str, str]], List[ProjectItem]] = defaultdict(list)
+            # mode == "joined": agrupa por pasta de origem (suporte multi-câmera)
+            folder_groups: Dict[str, List[ProjectItem]] = defaultdict(list)
             for it in remaining_items:
                 folder_key = get_item_source_folder(it)
-                cam_key = (it.meta_camera_make or "Cam", it.meta_camera_model or "Model")
-                folder_groups[(folder_key, cam_key)].append(it)
+                folder_groups[folder_key].append(it)
 
-            for (folder_key, cam_key), group_items in folder_groups.items():
+            for group_items in folder_groups.values():
                 group_items.sort(key=lambda it: parse_item_datetime(it))
                 all_sessions.append(group_items)
 

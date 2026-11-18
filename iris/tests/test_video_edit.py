@@ -20,9 +20,18 @@ from src.modules.video_edit.session import (
     group_videos_into_sessions,
     parse_item_datetime,
     parse_duration_seconds,
-    get_item_source_folder
+    get_item_source_folder,
+    summarize_session_cameras,
 )
-from src.modules.video_edit.renderer import build_atempo_chain, build_render_cmd, render_edited_video
+from src.modules.video_edit.renderer import (
+    build_atempo_chain,
+    build_render_cmd,
+    build_concat_demuxer_cmd,
+    render_edited_video,
+    is_same_aspect_ratio,
+    build_scale_pad_filter,
+    get_video_stream_info,
+)
 from src.modules.video_edit.stage import get_stage as get_video_edit_stage
 from src.modules.youtube.describer import (
     build_edited_video_youtube_metadata,
@@ -221,7 +230,7 @@ def test_session_grouping_joined_source_folder_and_camera():
         meta_timestamp="2026-08-17T15:00:00",
         meta_duration_str="60s"
     )
-    # 1 clipe na mesma pasta A, mas câmera diferente (GoPro) -> sessão separada para proteger concat
+    # 1 clipe na mesma pasta A, mas câmera diferente (GoPro) -> agora unificado na mesma sessão da pasta!
     c4 = ProjectItem(
         original_path="/orig/folder_a/c4.mp4",
         staging_path="/orig/folder_a/c4.mp4",
@@ -243,23 +252,20 @@ def test_session_grouping_joined_source_folder_and_camera():
     )
 
     sessions = group_videos_into_sessions([c1, c2, c3, c4, c5], mode="joined")
-    assert len(sessions) == 3
+    assert len(sessions) == 2
     
-    # Sessão 1: folder_a Canon SX60 (c1, c2, c3 juntos, mesmo com 6 horas de diferença)
-    assert len(sessions[0]) == 3
+    # Sessão 1: folder_a unifica Canon SX60 e GoPro Hero 11 ordenados cronologicamente
+    assert len(sessions[0]) == 4
     assert sessions[0][0].original_path == "/orig/folder_a/c1.mp4"
     assert sessions[0][1].original_path == "/orig/folder_a/c2.mp4"
-    assert sessions[0][2].original_path == "/orig/folder_a/c3.mp4"
+    assert sessions[0][2].original_path == "/orig/folder_a/c4.mp4"
+    assert sessions[0][3].original_path == "/orig/folder_a/c3.mp4"
     assert sessions[0][0].meta_camera_model == "SX60"
+    assert sessions[0][2].meta_camera_model == "Hero 11"
     
     # Sessão 2: folder_b Canon SX60 (c5 isolado pela pasta de origem)
     assert len(sessions[1]) == 1
     assert sessions[1][0].original_path == "/orig/folder_b/c5.mp4"
-    
-    # Sessão 3: folder_a GoPro (c4 isolado pela câmera)
-    assert len(sessions[2]) == 1
-    assert sessions[2][0].original_path == "/orig/folder_a/c4.mp4"
-    assert sessions[2][0].meta_camera_model == "Hero 11"
 
 
 def test_build_atempo_chain():
@@ -857,7 +863,7 @@ def test_group_videos_auto_join_birds_same_species_same_day():
 
 
 def test_group_videos_auto_join_birds_different_cameras():
-    """Vídeos da mesma ave e mesmo dia, mas gravados com câmeras diferentes, não devem ser misturados."""
+    """Vídeos da mesma ave e mesmo dia gravados com câmeras diferentes são unificados em ordem cronológica."""
     b_canon1 = ProjectItem(
         original_path="/c1.mp4", staging_path="/staging/c1.mp4", category="video",
         meta_camera_make="Canon", meta_camera_model="SX60",
@@ -881,13 +887,8 @@ def test_group_videos_auto_join_birds_different_cameras():
     }
 
     sessions = group_videos_into_sessions([b_canon1, b_canon2, b_gopro], mode="individual", bird_ident_map=bird_map, auto_join_birds=True)
-    assert len(sessions) == 2
-    # Sessão Canon: 2 clipes
-    assert len(sessions[0]) == 2
-    assert sessions[0][0].meta_camera_model == "SX60"
-    # Sessão GoPro: 1 clipe
-    assert len(sessions[1]) == 1
-    assert sessions[1][0].meta_camera_model == "Hero 11"
+    assert len(sessions) == 1
+    assert [it.original_path for it in sessions[0]] == ["/c1.mp4", "/g1.mp4", "/c2.mp4"]
 
 
 def test_group_videos_auto_join_birds_disabled():
@@ -1025,5 +1026,340 @@ def test_video_edit_stage_with_bird_auto_join(tmp_path, monkeypatch):
     assert "Bem-te-vi" in rec["output_video_path"]
     assert "2clipes" in rec["output_video_path"]
     assert rec["metadata_json"]["bird_identification"]["species_common"] == "Bem-te-vi"
+
+
+def test_summarize_session_cameras_single_and_multi():
+    c1 = ProjectItem(original_path="/c1.mp4", staging_path="/c1.mp4", meta_camera_make="Canon", meta_camera_model="SX60")
+    c2 = ProjectItem(original_path="/c2.mp4", staging_path="/c2.mp4", meta_camera_make="Canon", meta_camera_model="SX60")
+    g1 = ProjectItem(original_path="/g1.mp4", staging_path="/g1.mp4", meta_camera_make="GoPro", meta_camera_model="Hero 11")
+
+    single_summary = summarize_session_cameras([c1, c2])
+    assert single_summary["is_multi_camera"] is False
+    assert single_summary["camera_token"] == "SX60"
+    assert single_summary["camera_names_full"] == ["Canon SX60"]
+
+    multi_summary = summarize_session_cameras([c1, g1, c2])
+    assert multi_summary["is_multi_camera"] is True
+    assert multi_summary["camera_token"] == "Multi-Camera"
+    assert multi_summary["camera_names_full"] == ["Canon SX60", "GoPro Hero 11"]
+
+    fname = generate_edited_video_name(
+        first_dt=datetime(2026, 11, 13, 10, 0, 0),
+        camera_model=multi_summary["camera_token"],
+        clip_count=3,
+    )
+    assert "_Multi-Camera_" in fname
+    assert "3clipes" in fname
+
+
+def test_build_concat_demuxer_cmd(tmp_path):
+    lst = tmp_path / "concat_list.txt"
+    lst.write_text("file 'part_0001.mp4'\n", encoding="utf-8")
+    out = tmp_path / "final.mp4"
+
+    cmd = build_concat_demuxer_cmd(lst, out)
+    cmd_str = " ".join(cmd)
+    assert "-f concat" in cmd_str
+    assert "-safe 0" in cmd_str
+    assert "-c copy" in cmd_str
+    assert "-movflags +faststart" in cmd_str
+    assert str(out.resolve()) == cmd[-1]
+
+
+def test_build_render_cmd_single_clip_silent_audio_injection(tmp_path):
+    clip = tmp_path / "mudo.mp4"
+    clip.write_bytes(b"dummy")
+    out = tmp_path / "out.mp4"
+
+    cmd, _, _ = build_render_cmd(
+        clip_paths=[clip],
+        clip_infos=[{"duration": 10.0, "has_audio": False}],
+        output_video_path=out,
+        trim_starts=[0.0],
+        trimmed_durs=[10.0],
+        speed=1.0,
+        target_fps=60,
+        target_w=3840,
+        target_h=2160,
+        render_profile="quality",
+        encoder_name="libx264 (CPU)",
+        encoder_args=["-c:v", "libx264"],
+        has_any_audio=True,
+    )
+    cmd_str = " ".join(cmd)
+    assert "anullsrc=channel_layout=stereo:sample_rate=48000" in cmd_str
+    assert "-shortest" in cmd_str
+    assert "-c:a aac" in cmd_str
+    assert "-video_track_timescale 90000" in cmd_str
+
+
+def test_render_edited_video_two_step_individual_then_concat(tmp_path, monkeypatch):
+    import io
+    import subprocess
+
+    c1 = tmp_path / "cam1.mp4"
+    c2 = tmp_path / "cam2.mp4"
+    c1.write_bytes(b"dummy1")
+    c2.write_bytes(b"dummy2")
+    out_video = tmp_path / "out_final.mp4"
+
+    monkeypatch.setattr(
+        "src.modules.video_edit.renderer.get_video_stream_info",
+        lambda p: {"duration": 5.0, "has_audio": True}
+    )
+    monkeypatch.setattr(
+        "src.modules.video_edit.renderer.detect_ffmpeg_encoder",
+        lambda preset="slow", crf=16, force_cpu=False: ("libx264 (CPU)", ["-c:v", "libx264"])
+    )
+
+    calls = []
+
+    class MockPopen:
+        def __init__(self, cmd, *args, **kwargs):
+            self.cmd = cmd
+            self.stdout = []
+            self.stderr = io.StringIO("")
+            self.returncode = 0
+            calls.append(cmd)
+            Path(cmd[-1]).write_bytes(b"0" * 2000)
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self):
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", MockPopen)
+
+    ok, enc_used, err, stats = render_edited_video(
+        clip_paths=[c1, c2],
+        output_video_path=out_video,
+        config={"speed": 1.0, "target_fps": 60, "render_profile": "quality"}
+    )
+
+    assert ok is True
+    assert err == ""
+    assert len(calls) == 3  # Etapa 1 (c1), Etapa 1 (c2), Etapa 2 (concat demuxer)
+    assert "-filter_complex" not in " ".join(calls[0])
+    assert "-filter_complex" not in " ".join(calls[1])
+    assert "-f concat" in " ".join(calls[2])
+    assert "-c copy" in " ".join(calls[2])
+    assert stats["two_step_concat"] is True
+    assert stats["parts_rendered"] == 2
+    assert out_video.exists()
+    # Garante que os arquivos e pasta temporários foram limpos
+    tmp_dirs = [p for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith(".tmp_concat_")]
+    assert tmp_dirs == []
+
+
+def test_build_edited_video_youtube_metadata_multi_camera(tmp_path):
+    vid_path = tmp_path / "2026-11-13_10-00_Multi-Camera_2clipes_1920x1080-to-3840x2160_fps-30-to-60_1-0x_trim2-0s_audio_01m00s.mp4"
+    vid_path.write_bytes(b"dummy")
+    rec = {
+        "output_video_path": str(vid_path),
+        "camera_model": "Multi-Camera",
+        "clip_count": 2,
+        "mode": "joined",
+        "metadata_json": {
+            "camera_model": "Multi-Camera",
+            "camera_models": ["Canon PowerShot SX60 HS", "GoPro Hero 11"],
+            "camera_makes": ["Canon", "GoPro"],
+            "orig_resolutions": ["1920x1080", "2704x1520"],
+            "first_dt_formatted": "13/11/2026 às 10:00:00",
+        }
+    }
+    meta = build_edited_video_youtube_metadata(vid_path, rec, {})
+    assert "Canon PowerShot SX60 HS / GoPro Hero 11" in meta["description"]
+    assert "1920x1080 / 2704x1520" in meta["description"]
+    assert "Canon PowerShot SX60 HS" in meta["tags"]
+    assert "GoPro Hero 11" in meta["tags"]
+
+
+def test_is_same_aspect_ratio():
+    assert is_same_aspect_ratio(1920, 1080) is True
+    assert is_same_aspect_ratio(1280, 720) is True
+    assert is_same_aspect_ratio(2704, 1520) is True
+    assert is_same_aspect_ratio(3840, 2160) is True
+
+    assert is_same_aspect_ratio(1440, 1080) is False  # 4:3
+    assert is_same_aspect_ratio(640, 480) is False    # 4:3
+    assert is_same_aspect_ratio(1080, 1920) is False  # 9:16
+    assert is_same_aspect_ratio(1080, 1080) is False  # 1:1
+
+
+def test_build_render_cmd_aspect_ratio_pillarbox_fast_qsv(tmp_path):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"dummy")
+    out = tmp_path / "out.mp4"
+
+    # 16:9 mantém vpp_qsv 100% em hardware
+    cmd_16_9, _, _ = build_render_cmd(
+        clip_paths=[clip],
+        clip_infos=[{"duration": 10.0, "width": 1920, "height": 1080, "has_audio": False}],
+        output_video_path=out,
+        trim_starts=[0.0],
+        trimmed_durs=[10.0],
+        speed=1.0,
+        target_fps=60,
+        target_w=3840,
+        target_h=2160,
+        render_profile="fast",
+        encoder_name="h264_qsv (Intel Quick Sync)",
+        encoder_args=["-c:v", "h264_qsv"],
+        has_any_audio=False,
+    )
+    cmd_16_9_str = " ".join(cmd_16_9)
+    assert "-hwaccel qsv" in cmd_16_9_str
+    assert "vpp_qsv=w=3840:h=2160" in cmd_16_9_str
+
+    # 4:3 (1440x1080) e 9:16 (1080x1920) usam scale+pad preservando o encoder h264_qsv
+    for w, h in [(1440, 1080), (1080, 1920)]:
+        cmd_non_16_9, _, _ = build_render_cmd(
+            clip_paths=[clip],
+            clip_infos=[{"duration": 10.0, "width": w, "height": h, "has_audio": False}],
+            output_video_path=out,
+            trim_starts=[0.0],
+            trimmed_durs=[10.0],
+            speed=1.0,
+            target_fps=60,
+            target_w=3840,
+            target_h=2160,
+            render_profile="fast",
+            encoder_name="h264_qsv (Intel Quick Sync)",
+            encoder_args=["-c:v", "h264_qsv"],
+            has_any_audio=False,
+        )
+        cmd_str = " ".join(cmd_non_16_9)
+        assert "vpp_qsv" not in cmd_str
+        assert "-c:v h264_qsv" in cmd_str
+        assert "scale=3840:2160:flags=bicubic:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=3840:2160:(ow-iw)/2:(oh-ih)/2:black,setsar=1" in cmd_str
+
+
+def test_build_render_cmd_aspect_ratio_balanced_and_quality(tmp_path):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"dummy")
+    out = tmp_path / "out.mp4"
+
+    for profile, expected_flags in [
+        ("balanced", "bicubic+accurate_rnd"),
+        ("quality", "lanczos+accurate_rnd+full_chroma_int"),
+    ]:
+        cmd, _, _ = build_render_cmd(
+            clip_paths=[clip],
+            clip_infos=[{"duration": 10.0, "width": 640, "height": 480, "has_audio": False}],
+            output_video_path=out,
+            trim_starts=[0.0],
+            trimmed_durs=[10.0],
+            speed=1.0,
+            target_fps=60,
+            target_w=3840,
+            target_h=2160,
+            render_profile=profile,
+            encoder_name="libx264 (CPU)",
+            encoder_args=["-c:v", "libx264"],
+            has_any_audio=False,
+        )
+        cmd_str = " ".join(cmd)
+        expected_filter = (
+            f"scale=3840:2160:flags={expected_flags}"
+            ":force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            "pad=3840:2160:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+        )
+        assert expected_filter in cmd_str
+
+
+def test_get_video_stream_info_rotation_swap(tmp_path, monkeypatch):
+    import json
+    import subprocess
+
+    vid = tmp_path / "vertical.mp4"
+    vid.write_bytes(b"dummy")
+
+    class MockCompleted:
+        def __init__(self, payload):
+            self.returncode = 0
+            self.stdout = json.dumps(payload)
+
+    # Caso 1: rotação via side_data_list (-90°)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: MockCompleted({
+            "format": {"duration": "12.5"},
+            "streams": [{
+                "codec_type": "video",
+                "width": 1920,
+                "height": 1080,
+                "r_frame_rate": "30/1",
+                "side_data_list": [{"rotation": -90}],
+            }],
+        }),
+    )
+    info1 = get_video_stream_info(vid)
+    assert info1["width"] == 1080
+    assert info1["height"] == 1920
+
+    # Caso 2: rotação via tags.rotate ("90")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: MockCompleted({
+            "format": {"duration": "10.0"},
+            "streams": [{
+                "codec_type": "video",
+                "width": 1920,
+                "height": 1080,
+                "r_frame_rate": "30/1",
+                "tags": {"rotate": "90"},
+            }],
+        }),
+    )
+    info2 = get_video_stream_info(vid)
+    assert info2["width"] == 1080
+    assert info2["height"] == 1920
+
+    # Caso 3: rotação 180° mantém largura e altura
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: MockCompleted({
+            "format": {"duration": "10.0"},
+            "streams": [{
+                "codec_type": "video",
+                "width": 1920,
+                "height": 1080,
+                "r_frame_rate": "30/1",
+                "tags": {"rotate": "180"},
+            }],
+        }),
+    )
+    info3 = get_video_stream_info(vid)
+    assert info3["width"] == 1920
+    assert info3["height"] == 1080
+
+
+def test_build_edited_video_youtube_metadata_non_16_9_aspect(tmp_path):
+    vid_path = tmp_path / "sample.mp4"
+    vid_path.write_bytes(b"dummy")
+
+    rec_4_3 = {
+        "output_video_path": str(vid_path),
+        "camera_model": "Canon SX60",
+        "clip_count": 1,
+        "orig_resolution": "1440x1080",
+        "metadata_json": {"orig_width": 1440, "orig_height": 1080},
+    }
+    meta_4_3 = build_edited_video_youtube_metadata(vid_path, rec_4_3, {})
+    assert "1440x1080 (Proporção 4:3 ➔ Enquadramento 4K Pillarbox/Letterbox)" in meta_4_3["description"]
+
+    rec_9_16 = {
+        "output_video_path": str(vid_path),
+        "camera_model": "Smartphone",
+        "clip_count": 1,
+        "orig_resolution": "1080x1920",
+        "metadata_json": {"orig_width": 1080, "orig_height": 1920},
+    }
+    meta_9_16 = build_edited_video_youtube_metadata(vid_path, rec_9_16, {})
+    assert "1080x1920 (Proporção 9:16 ➔ Enquadramento 4K Pillarbox/Letterbox)" in meta_9_16["description"]
 
 

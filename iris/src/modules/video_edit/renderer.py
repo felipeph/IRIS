@@ -36,7 +36,7 @@ def get_video_stream_info(video_path: Path) -> Dict[str, Any]:
     try:
         cmd = [
             "ffprobe", "-v", "error",
-            "-show_entries", "stream=codec_type,width,height,r_frame_rate,duration:format=duration",
+            "-show_entries", "stream=codec_type,width,height,r_frame_rate,duration:stream_tags=rotate:stream_side_data=rotation:format=duration",
             "-of", "json",
             str(video_path.resolve())
         ]
@@ -55,8 +55,24 @@ def get_video_stream_info(video_path: Path) -> Dict[str, Any]:
                 ctype = s.get("codec_type")
                 if ctype == "video":
                     if "width" in s and "height" in s:
-                        info["width"] = int(s["width"])
-                        info["height"] = int(s["height"])
+                        w = int(s["width"])
+                        h = int(s["height"])
+                        rot_candidates = []
+                        tags = s.get("tags")
+                        if isinstance(tags, dict) and tags.get("rotate") is not None:
+                            rot_candidates.append(tags.get("rotate"))
+                        for sd in s.get("side_data_list") or []:
+                            if isinstance(sd, dict) and sd.get("rotation") is not None:
+                                rot_candidates.append(sd.get("rotation"))
+                        for rot_val in rot_candidates:
+                            try:
+                                if abs(int(round(float(rot_val)))) % 180 == 90:
+                                    w, h = h, w
+                                    break
+                            except (ValueError, TypeError):
+                                pass
+                        info["width"] = w
+                        info["height"] = h
                     if "r_frame_rate" in s and "/" in s["r_frame_rate"]:
                         try:
                             num, den = s["r_frame_rate"].split("/")
@@ -98,6 +114,92 @@ def build_atempo_chain(speed: float) -> str:
 
     return ",".join(filters)
 
+def build_concat_demuxer_cmd(concat_list_path: Path, output_video_path: Path) -> List[str]:
+    """
+    Constrói o comando FFmpeg para unificar vídeos 4K já normalizados
+    usando o concat demuxer com stream copy (-c copy), sem recodificação.
+    """
+    return [
+        "ffmpeg", "-y", "-hide_banner",
+        "-f", "concat", "-safe", "0",
+        "-i", str(concat_list_path.resolve()),
+        "-c", "copy",
+        "-movflags", "+faststart",
+        "-progress", "pipe:1",
+        "-nostats",
+        str(output_video_path.resolve())
+    ]
+
+
+def _write_concat_list_file(part_paths: List[Path], concat_list_path: Path) -> None:
+    """Escreve o arquivo de manifesto para o concat demuxer do FFmpeg em UTF-8."""
+    lines = []
+    for p in part_paths:
+        safe_path = str(p.resolve()).replace("\\", "/").replace("'", "'\\''")
+        lines.append(f"file '{safe_path}'")
+    concat_list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _build_single_clip_audio_and_inputs(
+    input_args: List[str],
+    has_any_audio: bool,
+    clip_has_audio: bool,
+    atempo_str: str
+) -> Tuple[List[str], List[str]]:
+    """
+    Configura entradas e argumentos de áudio para um clipe individual normalizado.
+    Se a sessão possuir áudio (has_any_audio=True), garante que clipes mudos
+    recebam uma trilha silenciosa AAC 48kHz estéreo compatível com concat demuxer.
+    """
+    extra_filter_args: List[str] = []
+    if not has_any_audio:
+        return extra_filter_args, ["-an"]
+
+    if clip_has_audio:
+        if atempo_str:
+            extra_filter_args.extend(["-af", atempo_str])
+        audio_args = ["-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-ac", "2"]
+        return extra_filter_args, audio_args
+
+    # Injeta trilha silenciosa para manter stream de áudio uniforme no concat demuxer
+    input_args.extend(["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"])
+    audio_args = [
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-shortest",
+        "-c:a", "aac",
+        "-b:a", "320k",
+        "-ar", "48000",
+        "-ac", "2",
+    ]
+    return extra_filter_args, audio_args
+
+
+def is_same_aspect_ratio(
+    width: int,
+    height: int,
+    target_w: int = 3840,
+    target_h: int = 2160,
+    tolerance: float = 0.015,
+) -> bool:
+    """Verifica se a proporção do vídeo de entrada equivale à do quadro alvo."""
+    if width <= 0 or height <= 0 or target_w <= 0 or target_h <= 0:
+        return True
+    return abs((width / height) - (target_w / target_h)) <= tolerance
+
+
+def build_scale_pad_filter(target_w: int, target_h: int, scale_flags: str) -> str:
+    """
+    Constrói cadeia FFmpeg scale+pad preservando o aspect ratio original
+    dentro do canvas alvo (adiciona pillarbox ou letterbox preto quando necessário).
+    """
+    return (
+        f"scale={target_w}:{target_h}:flags={scale_flags}"
+        f":force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black"
+    )
+
+
 def build_render_cmd(
     clip_paths: List[Path],
     clip_infos: List[Dict[str, Any]],
@@ -122,7 +224,22 @@ def build_render_cmd(
     if profile not in ["fast", "balanced", "quality"]:
         profile = "fast"
 
-    use_qsv_hw = (profile == "fast" and "qsv" in encoder_name.lower() and not force_software)
+    all_match_target_ar = all(
+        is_same_aspect_ratio(
+            int(inf.get("width") or 1920),
+            int(inf.get("height") or 1080),
+            target_w,
+            target_h,
+        )
+        for inf in (clip_infos or [])
+    )
+
+    use_qsv_hw = (
+        profile == "fast"
+        and "qsv" in encoder_name.lower()
+        and not force_software
+        and all_match_target_ar
+    )
     atempo_str = build_atempo_chain(speed) if has_any_audio else ""
 
     # 1. PERFIL FAST COM ACELERAÇÃO DE HARDWARE INTEL QSV
@@ -135,6 +252,7 @@ def build_render_cmd(
             p = clip_paths[0]
             s_trim = trim_starts[0]
             d_trim = trimmed_durs[0]
+            clip_has_audio = bool(clip_infos[0].get("has_audio", False)) if clip_infos else False
 
             input_args = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
             if s_trim > 0:
@@ -144,18 +262,20 @@ def build_render_cmd(
             input_args.extend(["-i", str(p.resolve())])
 
             filter_args = ["-vf", f"setpts=(1/{speed:.6f})*PTS,{hw_vpp_filter}"]
-            if has_any_audio:
-                if atempo_str:
-                    filter_args.extend(["-af", atempo_str])
-                audio_args = ["-c:a", "aac", "-b:a", "320k", "-ar", "48000"]
-            else:
-                audio_args = ["-an"]
+            extra_audio_filters, audio_args = _build_single_clip_audio_and_inputs(
+                input_args=input_args,
+                has_any_audio=has_any_audio,
+                clip_has_audio=clip_has_audio,
+                atempo_str=atempo_str,
+            )
+            filter_args.extend(extra_audio_filters)
 
             cmd = [
                 "ffmpeg", "-y", "-hide_banner",
                 *input_args,
                 *filter_args,
                 *audio_args,
+                "-video_track_timescale", "90000",
                 "-colorspace", "bt709",
                 "-color_trc", "bt709",
                 "-color_primaries", "bt709",
@@ -197,7 +317,7 @@ def build_render_cmd(
                 else:
                     filter_parts.append("[acat]anull[aout]")
                 map_args = ["-map", "[vout]", "-map", "[aout]"]
-                audio_args = ["-c:a", "aac", "-b:a", "320k", "-ar", "48000"]
+                audio_args = ["-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-ac", "2"]
             else:
                 map_args = ["-map", "[vout]"]
                 audio_args = ["-an"]
@@ -209,6 +329,7 @@ def build_render_cmd(
                 "-filter_complex", full_filter_complex,
                 *map_args,
                 *audio_args,
+                "-video_track_timescale", "90000",
                 "-colorspace", "bt709",
                 "-color_trc", "bt709",
                 "-color_primaries", "bt709",
@@ -227,7 +348,8 @@ def build_render_cmd(
         deband_used = False
         v_chain.append(f"setpts=(1/{speed:.6f})*PTS")
         v_chain.append(f"fps=fps={target_fps}:round=near")
-        v_chain.append(f"scale={target_w}:{target_h}:flags=bicubic")
+        v_chain.append(build_scale_pad_filter(target_w, target_h, "bicubic"))
+        v_chain.append("setsar=1")
     elif profile == "balanced":
         unsharp_used = True
         deband_used = False
@@ -235,7 +357,8 @@ def build_render_cmd(
         v_chain.append("unsharp=luma_msize_x=3:luma_msize_y=3:luma_amount=0.5:chroma_msize_x=3:chroma_msize_y=3:chroma_amount=0.0")
         v_chain.append(f"setpts=(1/{speed:.6f})*PTS")
         v_chain.append(f"fps=fps={target_fps}:round=near")
-        v_chain.append(f"scale={target_w}:{target_h}:flags=bicubic+accurate_rnd")
+        v_chain.append(build_scale_pad_filter(target_w, target_h, "bicubic+accurate_rnd"))
+        v_chain.append("setsar=1")
     else:  # quality
         unsharp_used = True
         deband_used = True
@@ -244,7 +367,8 @@ def build_render_cmd(
         v_chain.append("deband=1thr=0.04:2thr=0.04:3thr=0.04:range=16:blur=true:coupling=true")
         v_chain.append(f"setpts=(1/{speed:.6f})*PTS")
         v_chain.append(f"fps=fps={target_fps}:round=near")
-        v_chain.append(f"scale={target_w}:{target_h}:flags=lanczos+accurate_rnd+full_chroma_int")
+        v_chain.append(build_scale_pad_filter(target_w, target_h, "lanczos+accurate_rnd+full_chroma_int"))
+        v_chain.append("setsar=1")
 
     v_filter_common = ",".join(v_chain)
 
@@ -252,6 +376,7 @@ def build_render_cmd(
         p = clip_paths[0]
         s_trim = trim_starts[0]
         d_trim = trimmed_durs[0]
+        clip_has_audio = bool(clip_infos[0].get("has_audio", False)) if clip_infos else False
 
         input_args = []
         if s_trim > 0:
@@ -261,18 +386,20 @@ def build_render_cmd(
         input_args.extend(["-i", str(p.resolve())])
 
         filter_args = ["-vf", v_filter_common]
-        if has_any_audio:
-            if atempo_str:
-                filter_args.extend(["-af", atempo_str])
-            audio_args = ["-c:a", "aac", "-b:a", "320k", "-ar", "48000"]
-        else:
-            audio_args = ["-an"]
+        extra_audio_filters, audio_args = _build_single_clip_audio_and_inputs(
+            input_args=input_args,
+            has_any_audio=has_any_audio,
+            clip_has_audio=clip_has_audio,
+            atempo_str=atempo_str,
+        )
+        filter_args.extend(extra_audio_filters)
 
         cmd = [
             "ffmpeg", "-y", "-hide_banner",
             *input_args,
             *filter_args,
             *audio_args,
+            "-video_track_timescale", "90000",
             "-pix_fmt", "yuv420p",
             "-colorspace", "bt709",
             "-color_trc", "bt709",
@@ -313,7 +440,7 @@ def build_render_cmd(
             else:
                 filter_parts.append("[acat]anull[aout]")
             map_args = ["-map", "[vout]", "-map", "[aout]"]
-            audio_args = ["-c:a", "aac", "-b:a", "320k", "-ar", "48000"]
+            audio_args = ["-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-ac", "2"]
         else:
             concat_str = "".join(v_concat_inputs) + f"concat=n={n_clips}:v=1:a=0[vcat]"
             filter_parts.append(concat_str)
@@ -328,6 +455,7 @@ def build_render_cmd(
             "-filter_complex", full_filter_complex,
             *map_args,
             *audio_args,
+            "-video_track_timescale", "90000",
             "-pix_fmt", "yuv420p",
             "-colorspace", "bt709",
             "-color_trc", "bt709",
@@ -340,6 +468,119 @@ def build_render_cmd(
         ]
         return cmd, unsharp_used, deband_used
 
+
+def _execute_ffmpeg_with_progress(
+    cmd: List[str],
+    live: Live,
+    start_time: float,
+    start_str: str,
+    total_clips: int,
+    total_expected_frames: int,
+    base_completed_frames: int,
+    target_fps: int,
+    encoder_name: str,
+    resolution_label: str,
+    output_name: str,
+    status_msg: str,
+) -> Tuple[int, int, str]:
+    """
+    Executa um comando FFmpeg atualizando o painel Rich Live com progresso acumulado.
+    Retorna (returncode, last_frame, err_msg).
+    """
+    stderr_lines: List[str] = []
+
+    def capture_stderr(proc):
+        try:
+            for line in iter(proc.stderr.readline, ''):
+                if line:
+                    stderr_lines.append(line)
+        except Exception:
+            pass
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        bufsize=1
+    )
+    t_err = threading.Thread(target=capture_stderr, args=(process,), daemon=True)
+    t_err.start()
+
+    clip_frame = 0
+    current_fps = 0.0
+    current_speed_str = "0.0x"
+
+    try:
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("frame="):
+                try:
+                    clip_frame = int(line.split("=", 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith("fps="):
+                try:
+                    current_fps = float(line.split("=", 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith("speed="):
+                try:
+                    current_speed_str = line.split("=", 1)[1].strip()
+                except Exception:
+                    pass
+            elif line.startswith("progress="):
+                elapsed_sec = max(0.1, time.time() - start_time)
+                elapsed_str = str(timedelta(seconds=int(elapsed_sec)))
+                global_frame = min(base_completed_frames + clip_frame, total_expected_frames)
+                remaining_frames = max(0, total_expected_frames - global_frame)
+                effective_fps = current_fps if current_fps > 0 else (global_frame / elapsed_sec)
+
+                if effective_fps > 0 and remaining_frames > 0:
+                    eta_sec = remaining_frames / effective_fps
+                    eta_str = str(timedelta(seconds=int(eta_sec)))
+                    end_dt = datetime.now() + timedelta(seconds=int(eta_sec))
+                    previsao_str = end_dt.strftime("%H:%M:%S")
+                else:
+                    eta_str = "0:00:00" if remaining_frames == 0 else "--:--:--"
+                    previsao_str = datetime.now().strftime("%H:%M:%S")
+
+                live.update(PipelineUI.generate_video_renderable(
+                    stage_title="ETAPA 6: EDIÇÃO E UPSCALE DE VÍDEO 4K (GPU/CPU)",
+                    start_str=start_str,
+                    total_photos=total_clips,
+                    total_frames=total_expected_frames,
+                    current_frame=global_frame,
+                    fps_target=target_fps,
+                    current_fps=current_fps,
+                    current_speed=current_speed_str,
+                    encoder_name=encoder_name,
+                    resolution=resolution_label,
+                    output_name=output_name,
+                    status_msg=status_msg,
+                    elapsed_str=elapsed_str,
+                    eta_str=eta_str,
+                    previsao_fim_str=previsao_str
+                ))
+
+        process.wait()
+        t_err.join(timeout=2.0)
+    except Exception:
+        if process.poll() is None:
+            try:
+                process.kill()
+            except Exception:
+                pass
+        raise
+
+    err_msg = "".join(stderr_lines[-20:]) if stderr_lines else f"Código de saída {process.returncode}"
+    return process.returncode, clip_frame, err_msg
+
+
 def render_edited_video(
     clip_paths: List[Path],
     output_video_path: Path,
@@ -348,6 +589,9 @@ def render_edited_video(
 ) -> Tuple[bool, str, str, Dict[str, Any]]:
     """
     Renderiza vídeo 4K UHD com controle de velocidade, FPS, trimming e perfis de renderização.
+    Para múltiplos clipes, opera em duas etapas:
+      1) Upscale/normalização 4K individual de cada vídeo para arquivos temporários.
+      2) Unificação instantânea via concat demuxer (-c copy), descartando os temporários.
     Perfis suportados:
       - 'fast': Aceleração máxima por hardware Intel QSV (VPP upscale 4K, zero filtros software)
       - 'balanced': Equilíbrio com unsharp leve 3x3 em 1080p pré-upscale bicúbico
@@ -379,8 +623,8 @@ def render_edited_video(
 
     # Calcula duração total esperada
     total_orig_dur = 0.0
-    trimmed_durs = []
-    trim_starts = []
+    trimmed_durs: List[float] = []
+    trim_starts: List[float] = []
     for inf in clip_infos:
         d = inf["duration"]
         total_orig_dur += d
@@ -397,186 +641,20 @@ def render_edited_video(
 
     output_video_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd, unsharp_active, deband_active = build_render_cmd(
-        clip_paths=clip_paths,
-        clip_infos=clip_infos,
-        output_video_path=output_video_path,
-        trim_starts=trim_starts,
-        trimmed_durs=trimmed_durs,
-        speed=speed,
-        target_fps=target_fps,
-        target_w=target_w,
-        target_h=target_h,
-        render_profile=render_profile,
-        encoder_name=encoder_name,
-        encoder_args=encoder_args,
-        has_any_audio=has_any_audio,
-        force_software=force_software
-    )
-
-    # Execução e monitoramento com Rich UI
     start_time = time.time()
     start_str = datetime.now().strftime("%H:%M:%S")
     resolution_label = f"{target_w}x{target_h} (4K UHD) [Speed {speed}x | {render_profile.upper()}]"
     output_name = output_video_path.name
+    is_hardware = (render_profile == "fast" and "qsv" in encoder_name.lower())
 
-    stderr_lines = []
-    def capture_stderr(proc):
-        try:
-            for l in iter(proc.stderr.readline, ''):
-                if l:
-                    stderr_lines.append(l)
-        except Exception:
-            pass
-
-    process = None
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            bufsize=1
-        )
-
-        t_err = threading.Thread(target=capture_stderr, args=(process,), daemon=True)
-        t_err.start()
-
-        current_frame = 0
-        current_fps = 0.0
-        current_speed_str = "0.0x"
-
-        with Live(PipelineUI.generate_video_renderable(
-            stage_title="ETAPA 6: EDIÇÃO E UPSCALE DE VÍDEO 4K (GPU/CPU)",
-            start_str=start_str,
-            total_photos=len(clip_paths),
-            total_frames=total_expected_frames,
-            current_frame=0,
-            fps_target=target_fps,
-            current_fps=0.0,
-            current_speed="0.0x",
-            encoder_name=encoder_name,
-            resolution=resolution_label,
-            output_name=output_name,
-            status_msg="Iniciando transcodificação FFmpeg...",
-            elapsed_str="0:00:00",
-            eta_str="--:--:--",
-            previsao_fim_str="--:--:--"
-        ), console=console, refresh_per_second=4) as live:
-
-            for line in process.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                if line.startswith("frame="):
-                    try:
-                        current_frame = int(line.split("=", 1)[1].strip())
-                    except Exception:
-                        pass
-                elif line.startswith("fps="):
-                    try:
-                        current_fps = float(line.split("=", 1)[1].strip())
-                    except Exception:
-                        pass
-                elif line.startswith("speed="):
-                    try:
-                        current_speed_str = line.split("=", 1)[1].strip()
-                    except Exception:
-                        pass
-                elif line.startswith("progress="):
-                    elapsed_sec = max(0.1, time.time() - start_time)
-                    elapsed_str = str(timedelta(seconds=int(elapsed_sec)))
-
-                    remaining_frames = max(0, total_expected_frames - current_frame)
-                    effective_fps = current_fps if current_fps > 0 else (current_frame / elapsed_sec)
-
-                    if effective_fps > 0 and remaining_frames > 0:
-                        eta_sec = remaining_frames / effective_fps
-                        eta_str = str(timedelta(seconds=int(eta_sec)))
-                        end_dt = datetime.now() + timedelta(seconds=int(eta_sec))
-                        previsao_str = end_dt.strftime("%H:%M:%S")
-                    else:
-                        eta_str = "0:00:00" if remaining_frames == 0 else "--:--:--"
-                        previsao_str = datetime.now().strftime("%H:%M:%S")
-
-                    live.update(PipelineUI.generate_video_renderable(
-                        stage_title="ETAPA 6: EDIÇÃO E UPSCALE DE VÍDEO 4K (GPU/CPU)",
-                        start_str=start_str,
-                        total_photos=len(clip_paths),
-                        total_frames=total_expected_frames,
-                        current_frame=min(current_frame, total_expected_frames),
-                        fps_target=target_fps,
-                        current_fps=current_fps,
-                        current_speed=current_speed_str,
-                        encoder_name=encoder_name,
-                        resolution=resolution_label,
-                        output_name=output_name,
-                        status_msg="Renderizando vídeo 4K...",
-                        elapsed_str=elapsed_str,
-                        eta_str=eta_str,
-                        previsao_fim_str=previsao_str
-                    ))
-
-            process.wait()
-            t_err.join(timeout=2.0)
-
-        render_sec = time.time() - start_time
-        if process.returncode == 0 and output_video_path.exists() and output_video_path.stat().st_size > 1000:
-            final_size = output_video_path.stat().st_size
-            avg_fps = (current_frame / render_sec) if render_sec > 0 else 0.0
-
-            stats = {
-                "render_profile": render_profile,
-                "render_time_seconds": round(render_sec, 2),
-                "avg_fps": round(avg_fps, 1),
-                "encoder": encoder_name,
-                "final_size_bytes": final_size,
-                "final_duration_seconds": round(expected_final_dur, 2),
-                "speed_factor": speed,
-                "target_fps": target_fps,
-                "deband_enabled": deband_active,
-                "unsharp_enabled": unsharp_active,
-                "audio_stripped": not has_any_audio,
-                "trim_seconds": trim_sec if trim_enabled else 0.0
-            }
-            return True, encoder_name, "", stats
-        else:
-            err_msg = "".join(stderr_lines[-20:]) if stderr_lines else f"Código de saída {process.returncode}"
-            # Fallback automático: se falhou no modo fast por hardware, tenta via software (CPU)
-            is_hardware = (render_profile == "fast" and "qsv" in encoder_name.lower())
-            if is_hardware and not force_software:
-                logger.warning(
-                    f"[video_edit] Falha na renderização acelerada por hardware QSV ({err_msg}). "
-                    f"Acionando fallback automático para software (CPU)..."
-                )
-                console.print(
-                    f"\n[yellow]⚠ Falha na aceleração QSV de '{output_video_path.name}'. "
-                    f"Acionando fallback automático para CPU (software)...[/yellow]"
-                )
-                return render_edited_video(
-                    clip_paths=clip_paths,
-                    output_video_path=output_video_path,
-                    config=config,
-                    force_software=True
-                )
-            return False, encoder_name, err_msg, {}
-
-    except Exception as e:
-        if process and process.poll() is None:
-            try:
-                process.kill()
-            except Exception:
-                pass
-        is_hardware = (render_profile == "fast" and "qsv" in encoder_name.lower())
+    def _retry_software_if_needed(reason_msg: str) -> Optional[Tuple[bool, str, str, Dict[str, Any]]]:
         if is_hardware and not force_software:
             logger.warning(
-                f"[video_edit] Exceção na renderização QSV ({e}). "
+                f"[video_edit] Falha na renderização acelerada por hardware QSV ({reason_msg}). "
                 f"Acionando fallback automático para software (CPU)..."
             )
             console.print(
-                f"\n[yellow]⚠ Exceção na aceleração QSV de '{output_video_path.name}'. "
+                f"\n[yellow]⚠ Falha na aceleração QSV de '{output_video_path.name}'. "
                 f"Acionando fallback automático para CPU (software)...[/yellow]"
             )
             return render_edited_video(
@@ -585,4 +663,215 @@ def render_edited_video(
                 config=config,
                 force_software=True
             )
+        return None
+
+    # Fluxo 1: Clipe único (1 etapa direta)
+    if len(clip_paths) == 1:
+        cmd, unsharp_active, deband_active = build_render_cmd(
+            clip_paths=clip_paths,
+            clip_infos=clip_infos,
+            output_video_path=output_video_path,
+            trim_starts=trim_starts,
+            trimmed_durs=trimmed_durs,
+            speed=speed,
+            target_fps=target_fps,
+            target_w=target_w,
+            target_h=target_h,
+            render_profile=render_profile,
+            encoder_name=encoder_name,
+            encoder_args=encoder_args,
+            has_any_audio=has_any_audio,
+            force_software=force_software
+        )
+        try:
+            with Live(PipelineUI.generate_video_renderable(
+                stage_title="ETAPA 6: EDIÇÃO E UPSCALE DE VÍDEO 4K (GPU/CPU)",
+                start_str=start_str,
+                total_photos=1,
+                total_frames=total_expected_frames,
+                current_frame=0,
+                fps_target=target_fps,
+                current_fps=0.0,
+                current_speed="0.0x",
+                encoder_name=encoder_name,
+                resolution=resolution_label,
+                output_name=output_name,
+                status_msg="Iniciando transcodificação FFmpeg...",
+                elapsed_str="0:00:00",
+                eta_str="--:--:--",
+                previsao_fim_str="--:--:--"
+            ), console=console, refresh_per_second=4) as live:
+                rc, current_frame, err_msg = _execute_ffmpeg_with_progress(
+                    cmd=cmd,
+                    live=live,
+                    start_time=start_time,
+                    start_str=start_str,
+                    total_clips=1,
+                    total_expected_frames=total_expected_frames,
+                    base_completed_frames=0,
+                    target_fps=target_fps,
+                    encoder_name=encoder_name,
+                    resolution_label=resolution_label,
+                    output_name=output_name,
+                    status_msg="Renderizando vídeo 4K...",
+                )
+
+            render_sec = time.time() - start_time
+            if rc == 0 and output_video_path.exists() and output_video_path.stat().st_size > 1000:
+                avg_fps = (current_frame / render_sec) if render_sec > 0 else 0.0
+                stats = {
+                    "render_profile": render_profile,
+                    "render_time_seconds": round(render_sec, 2),
+                    "avg_fps": round(avg_fps, 1),
+                    "encoder": encoder_name,
+                    "final_size_bytes": output_video_path.stat().st_size,
+                    "final_duration_seconds": round(expected_final_dur, 2),
+                    "speed_factor": speed,
+                    "target_fps": target_fps,
+                    "deband_enabled": deband_active,
+                    "unsharp_enabled": unsharp_active,
+                    "audio_stripped": not has_any_audio,
+                    "trim_seconds": trim_sec if trim_enabled else 0.0,
+                    "two_step_concat": False,
+                    "parts_rendered": 1,
+                }
+                return True, encoder_name, "", stats
+
+            fallback = _retry_software_if_needed(err_msg)
+            if fallback is not None:
+                return fallback
+            return False, encoder_name, err_msg, {}
+        except Exception as e:
+            fallback = _retry_software_if_needed(str(e))
+            if fallback is not None:
+                return fallback
+            return False, encoder_name, str(e), {}
+
+    # Fluxo 2: Múltiplos clipes em Duas Etapas (Upscale 4K individual + Concat Demuxer)
+    temp_dir = output_video_path.parent / f".tmp_concat_{output_video_path.stem[:32]}_{os.getpid()}_{int(time.time() * 1000)}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    part_paths: List[Path] = []
+    unsharp_active = False
+    deband_active = False
+
+    try:
+        completed_frames = 0
+        total_clips = len(clip_paths)
+
+        with Live(PipelineUI.generate_video_renderable(
+            stage_title="ETAPA 6: EDIÇÃO E UPSCALE DE VÍDEO 4K (2 ETAPAS)",
+            start_str=start_str,
+            total_photos=total_clips,
+            total_frames=total_expected_frames,
+            current_frame=0,
+            fps_target=target_fps,
+            current_fps=0.0,
+            current_speed="0.0x",
+            encoder_name=encoder_name,
+            resolution=resolution_label,
+            output_name=output_name,
+            status_msg=f"Etapa 1/2: Preparando upscale individual de {total_clips} vídeo(s)...",
+            elapsed_str="0:00:00",
+            eta_str="--:--:--",
+            previsao_fim_str="--:--:--"
+        ), console=console, refresh_per_second=4) as live:
+
+            # Etapa 1: Upscale e normalização 4K individual de cada vídeo
+            for idx, (c_path, c_info, s_trim, d_trim) in enumerate(
+                zip(clip_paths, clip_infos, trim_starts, trimmed_durs), 1
+            ):
+                part_path = temp_dir / f"part_{idx:04d}.mp4"
+                clip_dur = d_trim / speed if speed > 0 else d_trim
+                clip_expected_frames = max(1, int(round(clip_dur * target_fps)))
+
+                cmd_single, unsharp_active, deband_active = build_render_cmd(
+                    clip_paths=[c_path],
+                    clip_infos=[c_info],
+                    output_video_path=part_path,
+                    trim_starts=[s_trim],
+                    trimmed_durs=[d_trim],
+                    speed=speed,
+                    target_fps=target_fps,
+                    target_w=target_w,
+                    target_h=target_h,
+                    render_profile=render_profile,
+                    encoder_name=encoder_name,
+                    encoder_args=encoder_args,
+                    has_any_audio=has_any_audio,
+                    force_software=force_software
+                )
+
+                rc, clip_frames, err_msg = _execute_ffmpeg_with_progress(
+                    cmd=cmd_single,
+                    live=live,
+                    start_time=start_time,
+                    start_str=start_str,
+                    total_clips=total_clips,
+                    total_expected_frames=total_expected_frames,
+                    base_completed_frames=completed_frames,
+                    target_fps=target_fps,
+                    encoder_name=encoder_name,
+                    resolution_label=resolution_label,
+                    output_name=output_name,
+                    status_msg=f"Etapa 1/2: Upscale 4K clipe [{idx}/{total_clips}] ({c_path.name})...",
+                )
+
+                if rc != 0 or not part_path.exists() or part_path.stat().st_size <= 1000:
+                    fallback = _retry_software_if_needed(err_msg)
+                    if fallback is not None:
+                        return fallback
+                    return False, encoder_name, err_msg, {}
+
+                completed_frames += max(clip_frames, clip_expected_frames)
+                part_paths.append(part_path)
+
+            # Etapa 2: Concatenação simples sem recodificação (concat demuxer)
+            concat_list_path = temp_dir / "concat_list.txt"
+            _write_concat_list_file(part_paths, concat_list_path)
+            cmd_concat = build_concat_demuxer_cmd(concat_list_path, output_video_path)
+
+            rc_cat, _, err_cat = _execute_ffmpeg_with_progress(
+                cmd=cmd_concat,
+                live=live,
+                start_time=start_time,
+                start_str=start_str,
+                total_clips=total_clips,
+                total_expected_frames=total_expected_frames,
+                base_completed_frames=total_expected_frames,
+                target_fps=target_fps,
+                encoder_name=encoder_name,
+                resolution_label=resolution_label,
+                output_name=output_name,
+                status_msg=f"Etapa 2/2: Unificando {total_clips} vídeos 4K (concat demuxer)...",
+            )
+
+            render_sec = time.time() - start_time
+            if rc_cat == 0 and output_video_path.exists() and output_video_path.stat().st_size > 1000:
+                avg_fps = (total_expected_frames / render_sec) if render_sec > 0 else 0.0
+                stats = {
+                    "render_profile": render_profile,
+                    "render_time_seconds": round(render_sec, 2),
+                    "avg_fps": round(avg_fps, 1),
+                    "encoder": encoder_name,
+                    "final_size_bytes": output_video_path.stat().st_size,
+                    "final_duration_seconds": round(expected_final_dur, 2),
+                    "speed_factor": speed,
+                    "target_fps": target_fps,
+                    "deband_enabled": deband_active,
+                    "unsharp_enabled": unsharp_active,
+                    "audio_stripped": not has_any_audio,
+                    "trim_seconds": trim_sec if trim_enabled else 0.0,
+                    "two_step_concat": True,
+                    "parts_rendered": len(part_paths),
+                }
+                return True, encoder_name, "", stats
+
+            return False, encoder_name, f"Falha na concatenação (concat demuxer): {err_cat}", {}
+
+    except Exception as e:
+        fallback = _retry_software_if_needed(str(e))
+        if fallback is not None:
+            return fallback
         return False, encoder_name, str(e), {}
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

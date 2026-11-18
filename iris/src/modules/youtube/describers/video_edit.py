@@ -7,6 +7,7 @@ from .formatting import (
     _extract_temporal_context,
     format_duration_human,
     format_bytes_human,
+    calculate_aspect_ratio,
 )
 from .geo import resolve_project_geolocation, format_location_block, build_geo_hashtags
 from .birds import (
@@ -108,7 +109,10 @@ def build_edited_video_youtube_metadata(
 
     cam_make = meta.get("camera_make", "")
     cam_model = meta.get("camera_model", "")
-    if cam_make and cam_model and not cam_model.startswith(cam_make):
+    camera_models = meta.get("camera_models")
+    if isinstance(camera_models, list) and len(camera_models) > 1:
+        camera_name = " / ".join(str(c).strip() for c in camera_models if str(c).strip())
+    elif cam_make and cam_model and not cam_model.startswith(cam_make):
         camera_name = f"{cam_make} {cam_model}".strip()
     else:
         camera_name = cam_model or cam_make or "Câmera"
@@ -116,6 +120,17 @@ def build_edited_video_youtube_metadata(
     # Informações Técnicas
     orig_w = meta.get("orig_width") or record.get("orig_resolution", "1920x1080").split("x")[0]
     orig_h = meta.get("orig_height") or record.get("orig_resolution", "1920x1080").split("x")[-1]
+    orig_resolutions = meta.get("orig_resolutions")
+    try:
+        orig_aspect = calculate_aspect_ratio(int(orig_w), int(orig_h)) or "16:9"
+    except Exception:
+        orig_aspect = "16:9"
+    if isinstance(orig_resolutions, list) and len(orig_resolutions) > 1:
+        orig_res_desc = f"{' / '.join(str(r) for r in orig_resolutions if r)} (Múltiplas Câmeras ➔ Normalizado 16:9)"
+    elif orig_aspect != "16:9":
+        orig_res_desc = f"{orig_w}x{orig_h} (Proporção {orig_aspect} ➔ Enquadramento 4K Pillarbox/Letterbox)"
+    else:
+        orig_res_desc = f"{orig_w}x{orig_h} (Proporção 16:9)"
     target_res = record.get("target_resolution", "3840x2160")
     orig_fps = record.get("orig_fps") or meta.get("orig_fps", 30.0)
     target_fps = int(record.get("target_fps") or meta.get("target_fps", 60))
@@ -234,7 +249,7 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
 
 📷 EQUIPAMENTO E ARQUIVO ORIGINAL:
 • Câmera: {camera_name}
-• Resolução Nativa Original: {orig_w}x{orig_h} (Proporção 16:9)
+• Resolução Nativa Original: {orig_res_desc}
 • Áudio: {audio_desc}
 
 🛠️ PROCESSAMENTO E ENGENHARIA DE VÍDEO (MASTERIZAÇÃO 4K):
@@ -257,6 +272,15 @@ Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (I
         "4K UHD", "Natureza", "Vídeo 4K", "60 FPS", profile_tag,
         camera_name, cam_make or "Câmera", "IRIS", "Nature"
     ]
+    if isinstance(camera_models, list):
+        for cm in camera_models:
+            cm_str = str(cm).strip()
+            if cm_str and cm_str not in tags:
+                tags.append(cm_str)
+    for cmake in meta.get("camera_makes", []) or []:
+        cmake_str = str(cmake).strip()
+        if cmake_str and cmake_str not in tags:
+            tags.append(cmake_str)
     if loc:
         for l_cand in [loc.city, loc.state, loc.country, loc.poi, loc.suburb]:
             if l_cand and l_cand.strip() and l_cand.strip() not in tags:

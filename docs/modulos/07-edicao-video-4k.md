@@ -55,3 +55,12 @@ Antes de expandir a matriz de pixels de 1920x1080 para 3840x2160, o IRIS aplica 
 unsharp=5:5:0.8:5:5:0.0
 ```
 Isso realça o contraste das micro-arestas na resolução nativa do sensor antes da interpolação Lanczos, impedindo que o upscale crie um aspecto difuso ou borrado.
+
+---
+
+## 6. Preservação de Aspect Ratio (Pillarbox / Letterbox)
+
+Independentemente da proporção original do clipe (ex: `4:3`, `9:16` vertical, `1:1` ou ultrawide), o container final sai sempre em **4K UHD (`3840x2160`, 16:9)** com pixels quadrados (`setsar=1`):
+- **Escala Proporcional (`force_original_aspect_ratio=decrease:force_divisible_by=2`):** O vídeo é escalado até encostar na largura ou altura máxima de `3840x2160` sem esticar ou cortar a imagem.
+- **Preenchimento Centralizado (`pad=3840:2160:(ow-iw)/2:(oh-ih)/2:black`):** Quando a proporção original não é 16:9, barras pretas centralizadas (*pillarbox* lateral ou *letterbox* superior/inferior) completam o quadro 4K.
+- **Otimização QSV (`fast`):** Clipes nativos 16:9 utilizam aceleração 100% em hardware (`vpp_qsv`); clipes fora de 16:9 utilizam `scale+pad` mantendo codificação acelerada em GPU (`h264_qsv`).

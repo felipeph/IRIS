@@ -14,7 +14,12 @@ from src.core.project import Project, ProjectItem
 from src.core.config import config
 from src.core.geo import GeoService
 from src.modules.video_edit.namer import generate_edited_video_name, resolve_edited_output_path
-from src.modules.video_edit.session import group_videos_into_sessions, parse_item_datetime, parse_duration_seconds
+from src.modules.video_edit.session import (
+    group_videos_into_sessions,
+    parse_item_datetime,
+    parse_duration_seconds,
+    summarize_session_cameras,
+)
 from src.modules.video_edit.renderer import render_edited_video, get_video_stream_info
 from src.modules.timelapse.notifier import send_windows_toast, send_ntfy_notification
 
@@ -122,11 +127,21 @@ class VideoEditStage(PipelineStage):
             first_dt = parse_item_datetime(first_it)
             last_it = s_items[-1]
             last_dt = parse_item_datetime(last_it) if len(s_items) > 1 else None
-            cam = first_it.meta_camera_model or first_it.meta_camera_make or "Camera"
+            cam_summary = summarize_session_cameras(s_items)
+            cam = cam_summary["camera_token"]
+            cam_display = (
+                f"Multi-Camera ({len(cam_summary['camera_models_short'])})"
+                if cam_summary["is_multi_camera"] else cam
+            )
 
             # Resoluções e durações
             w = first_it.meta_width or 1920
             h = first_it.meta_height or 1080
+            orig_res_list = list(dict.fromkeys(
+                f"{it.meta_width or 1920}x{it.meta_height or 1080}" for it in s_items
+            ))
+            res_display = " / ".join(orig_res_list) if len(orig_res_list) > 1 else f"{w}x{h}"
+
             fps_val = 30.0
             if first_it.meta_fps_str:
                 try:
@@ -204,8 +219,8 @@ class VideoEditStage(PipelineStage):
             summary_table.add_row(
                 str(idx),
                 display_name,
-                cam,
-                f"{w}x{h}",
+                cam_display,
+                res_display,
                 f"{fps_val:.0f} fps",
                 dur_str,
                 status_desc
@@ -216,6 +231,8 @@ class VideoEditStage(PipelineStage):
                 "first_dt": first_dt,
                 "last_dt": last_dt,
                 "camera": cam,
+                "cam_summary": cam_summary,
+                "orig_resolutions": orig_res_list,
                 "bird_ident": bird_ident,
                 "orig_w": w,
                 "orig_h": h,
@@ -316,9 +333,14 @@ class VideoEditStage(PipelineStage):
                 video_size_bytes = out_path.stat().st_size if out_path.exists() else 0
 
                 # Compila metadados técnicos ricos para descrição do YouTube
+                cam_summary = sdata.get("cam_summary") or summarize_session_cameras(s_items)
                 rich_meta = {
-                    "camera_make": s_items[0].meta_camera_make or "Cam",
+                    "camera_make": cam_summary.get("camera_make", "Cam"),
                     "camera_model": cam,
+                    "camera_models": cam_summary.get("camera_names_full", [cam]),
+                    "camera_makes": cam_summary.get("camera_makes", []),
+                    "is_multi_camera": bool(cam_summary.get("is_multi_camera", False)),
+                    "orig_resolutions": sdata.get("orig_resolutions", [f"{orig_w}x{orig_h}"]),
                     "orig_width": orig_w,
                     "orig_height": orig_h,
                     "orig_fps": fps_val,
