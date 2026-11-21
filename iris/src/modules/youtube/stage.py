@@ -80,7 +80,7 @@ def wait_countdown(seconds: int, item_name: str) -> bool:
 
 class YouTubeUploadStage(PipelineStage):
     """
-    Etapa 7: Publicação oficial de vídeos gerados no canal do YouTube.
+    Publicação oficial de vídeos gerados no canal do YouTube.
     Executa upload resumable em blocos com acompanhamento Rich em tempo real
     para Timelapses e Vídeos Editados 4K nas suas respectivas playlists,
     registrando o link/ID no banco de dados do projeto e banco central.
@@ -183,7 +183,7 @@ class YouTubeUploadStage(PipelineStage):
                 "playlist": yt_config.get("video_playlist", "Natureza 4K UHD")
             })
 
-        console.print(f"\n[bold cyan]=== Etapa 7: Publicação no YouTube ({len(pending_jobs)} vídeo(s) pendente(s): {len(pending_tl)} timelapses, {len(pending_ve)} vídeos editados) ===[/bold cyan]")
+        console.print(f"\n[bold cyan]=== {self.name} ({len(pending_jobs)} vídeo(s) pendente(s): {len(pending_tl)} timelapses, {len(pending_ve)} vídeos editados) ===[/bold cyan]")
 
         # 2. Autenticação na API
         youtube = get_authenticated_service()
@@ -345,9 +345,10 @@ class YouTubeUploadStage(PipelineStage):
                 start_str = datetime.now().strftime("%H:%M:%S")
                 retry_count = 0
                 uploaded_bytes = 0
+                stage_title = "ETAPA: PUBLICAÇÃO NO YOUTUBE (OAUTH 2.0)"
 
                 with Live(PipelineUI.generate_upload_renderable(
-                    stage_title="ETAPA 6: PUBLICAÇÃO NO YOUTUBE (OAUTH 2.0)",
+                    stage_title=stage_title,
                     start_str=start_str,
                     video_title=metadata["title"],
                     video_filename=video_path.name,
@@ -381,7 +382,7 @@ class YouTubeUploadStage(PipelineStage):
                                     previsao_str = datetime.now().strftime("%H:%M:%S")
 
                                 live.update(PipelineUI.generate_upload_renderable(
-                                    stage_title="ETAPA 6: PUBLICAÇÃO NO YOUTUBE (OAUTH 2.0)",
+                                    stage_title=stage_title,
                                     start_str=start_str,
                                     video_title=metadata["title"],
                                     video_filename=video_path.name,
@@ -472,10 +473,10 @@ class YouTubeUploadStage(PipelineStage):
                 error_count += 1
 
         if error_count > 0:
-            console.print(f"[yellow]Etapa 6 finalizada com {error_count} erro(s).[/yellow]")
+            console.print(f"[yellow]{self.name} finalizada com {error_count} erro(s).[/yellow]")
             return False
 
-        console.print(f"[bold green]Etapa 6 concluída com sucesso! ({success_count} vídeo(s) publicado(s)).[/bold green]")
+        console.print(f"[bold green]{self.name} concluída com sucesso! ({success_count} vídeo(s) publicado(s)).[/bold green]")
         return True
 
 def get_stage(stage_id: str, name: str) -> PipelineStage:

@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/Integridade-Zero_Data_Loss-red.svg" alt="Zero Data Loss">
   <img src="https://img.shields.io/badge/Banco_de_Dados-Dual_SQLite_WAL-success.svg?logo=sqlite" alt="SQLite Dual WAL">
   <img src="https://img.shields.io/badge/Acelera%C3%A7%C3%A3o-GPU_NVENC%2FQSV%2FAMF-orange.svg" alt="GPU Acceleration">
-  <img src="https://img.shields.io/badge/Testes-380%2B_Passed-brightgreen.svg" alt="380+ Passed Tests">
+  <img src="https://img.shields.io/badge/Testes-440%2B_Passed-brightgreen.svg" alt="440+ Passed Tests">
   <img src="https://img.shields.io/badge/Licen%C3%A7a-MIT-green.svg" alt="MIT License">
 </p>
 
@@ -21,12 +21,13 @@ O **IRIS (Imaging Resources and Integration System)** é uma plataforma autônom
 
 ```mermaid
 flowchart LR
-    A["📷 Cartão SD / Câmeras"] --> B["📥 1-4. Ingestão, Limpeza,\nPlanejamento & Organização"]
+    A["📷 Cartão SD / Câmeras"] --> B["📥 1-4. Ingestão, Limpeza,\nPlanejamento & Organização\n(Modo Evento/Álbum)"]
     B --> C["📍 5. Sanitização EXIF\n& Geotag UTF-8"]
     C --> D["🦜 6-9. Aves: YOLOv8 +\niNaturalist + Catálogo [B]"]
     B --> E["🌙 10-11. Astro Lunar:\nPSS Stack + Wavelets"]
-    B & D --> F["🎬 12-13. Timelapse 4K &\nVídeo 4K (Auto-Join Aves)"]
-    F --> G["🚀 14. YouTube API v3\n(Upload 64MB + Playlists)"]
+    B --> T["🌌 12. Timelapse Denoise\n(Filtragem 16-bit)"]
+    T & D --> F["🎬 13-14. Timelapse 4K &\nVídeo 4K (2 Etapas Multi-Camera)"]
+    F --> G["🚀 15. YouTube API v3\n(Upload 64MB + Playlists)"]
 ```
 
 ---
@@ -54,8 +55,8 @@ flowchart LR
 
 | Seção | Descrição | Tópicos Principais |
 | :--- | :--- | :--- |
-| **[Visão Geral](visao-geral/introducao.md)** | Introdução ao sistema, câmeras e setup. | Equipamentos catalogados, menu interativo em 9 subpáginas, guia rápido. |
+| **[Visão Geral](visao-geral/introducao.md)** | Introdução ao sistema, câmeras e setup. | Equipamentos catalogados, menu interativo em 10 categorias temáticas, guia rápido. |
 | **[Arquitetura & Engenharia](arquitetura/principios-de-design.md)** | Fundamentos de software e decisões técnicas. | Clean Architecture, SOLID, Dual SQLite, Locks atômicos, ADRs. |
-| **[Módulos do Pipeline](modulos/01-ingestao.md)** | Deep Dive nas etapas do sistema. | Ingestão, Organização, Sanitização & Geo, Aves (YOLO + iNaturalist), Timelapse 4K, Vídeo 4K, Astro e YouTube. |
-| **[IA & Engenharia](ia-e-engenharia/contexto-para-ia.md)** | Especificação formal para agentes de IA e manutenção. | Mapa modular do código, invariantes, suíte de 380+ testes em `pytest`, `llms.txt`. |
+| **[Módulos do Pipeline](modulos/01-ingestao.md)** | Deep Dive nas etapas do sistema. | Ingestão, Organização, Sanitização & Geo, Aves (YOLO + iNaturalist), Timelapse 4K & Denoise, Vídeo 4K, Astro e YouTube. |
+| **[IA & Engenharia](ia-e-engenharia/contexto-para-ia.md)** | Especificação formal para agentes de IA e manutenção. | Mapa modular do código, invariantes, suíte de 440+ testes em `pytest`, `llms.txt`. |
 | **[Referência Técnica](referencia/pipeline-lifecycle.md)** | **Matriz Mestre do Pipeline** e Dicionário SQLite. | Mapeamento Etapa $\rightarrow$ Módulo `.py` $\rightarrow$ Tabelas SQLite $\rightarrow$ Pastas `C:\IRIS`. |

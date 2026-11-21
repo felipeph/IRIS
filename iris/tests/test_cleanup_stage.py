@@ -286,3 +286,27 @@ def test_is_removable_media_detection(tmp_path):
     with patch("os.name", "nt"), \
          patch("ctypes.windll.kernel32.GetDriveTypeW", return_value=3):
         assert is_removable_media(Path("C:/IRIS")) is False
+
+
+def test_cleanup_stage_removes_empty_subdir_with_os_junk_files(cleanup_env):
+    """Garante que subpastas na origem com apenas lixo de SO (Thumbs.db) são removidas mantendo source_dir."""
+    project = cleanup_env["project"]
+    project.auto_cleanup = True
+    stage = CleanupStage("cleanup", "Limpeza da Origem")
+
+    subdir = cleanup_env["src_file2"].parent
+    junk_file = subdir / "Thumbs.db"
+    junk_file.write_bytes(b"windows_thumb_cache")
+
+    def fake_trash(path_str):
+        Path(path_str).unlink()
+
+    with patch.object(project, "get_items", return_value=cleanup_env["items"]), \
+         patch("src.modules.cleanup.stage.is_removable_media", return_value=False), \
+         patch("src.modules.cleanup.stage.send2trash", side_effect=fake_trash):
+        success = stage.run(project, auto_clean=True)
+
+    assert success is True
+    assert cleanup_env["source_dir"].exists()
+    assert not junk_file.exists()
+    assert not subdir.exists()

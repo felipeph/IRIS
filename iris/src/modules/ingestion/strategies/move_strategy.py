@@ -80,7 +80,7 @@ class MoveStrategy(IngestionStrategy):
         tracker.last_completed_units = already_ingested_bytes
         start_str = datetime.now().strftime("%H:%M:%S")
 
-        stage_title = f"ETAPA 1: INGESTÃO RÁPIDA (MOVER NATIVO - {self.max_workers} WORKERS)"
+        stage_title = f"ETAPA: INGESTÃO RÁPIDA (MOVER NATIVO - {self.max_workers} WORKERS)"
 
         def _worker_move_and_hash(task):
             s_path, t_path, s_size, key = task

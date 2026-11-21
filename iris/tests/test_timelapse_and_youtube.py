@@ -1329,6 +1329,58 @@ def test_render_timelapse_video_persistent_qsv_failure_falls_to_cpu(tmp_path, mo
     assert stats["render_mode"] == "software_cpu"
 
 
+def test_reverse_geocode_coordinates_delegates_and_caches(monkeypatch):
+    """Valida que reverse_geocode_coordinates delega para src.core.geo.reverse_geocode e trata cache/offline."""
+    from unittest.mock import MagicMock
+    import src.modules.youtube.uploader as uploader_mod
+
+    monkeypatch.setattr(uploader_mod, "_GEOCODE_CACHE", {})
+
+    # 1. Resposta online: delega, formata e guarda no cache
+    mock_geo = MagicMock(return_value={
+        "city": "Formiga",
+        "state": "Minas Gerais",
+        "country": "Brasil",
+        "suburb": "São Luiz",
+        "poi": "",
+        "source": "nominatim",
+    })
+    monkeypatch.setattr("src.core.geo.reverse_geocode", mock_geo)
+
+    res1 = uploader_mod.reverse_geocode_coordinates(-20.456887, -45.438307, timeout=3.0)
+    res2 = uploader_mod.reverse_geocode_coordinates(-20.456887, -45.438307, timeout=3.0)
+
+    assert mock_geo.call_count == 1
+    assert res1 == {
+        "city": "Formiga",
+        "state": "Minas Gerais",
+        "country": "Brasil",
+        "formatted_address": "Formiga, Minas Gerais, Brasil",
+    }
+    assert res2 == res1
+
+    # 2. Resposta offline: retorna vazio sem poluir _GEOCODE_CACHE
+    monkeypatch.setattr(uploader_mod, "_GEOCODE_CACHE", {})
+    mock_offline = MagicMock(return_value={
+        "city": "",
+        "state": "",
+        "country": "Brasil",
+        "suburb": "",
+        "poi": "",
+        "source": "offline",
+    })
+    monkeypatch.setattr("src.core.geo.reverse_geocode", mock_offline)
+
+    res_off = uploader_mod.reverse_geocode_coordinates(-10.1234, -40.5678)
+    assert res_off == {
+        "city": "",
+        "state": "",
+        "country": "",
+        "formatted_address": "",
+    }
+    assert uploader_mod._GEOCODE_CACHE == {}
+
+
 
 
 

@@ -1,3 +1,20 @@
+# Core CLI, Config & Hashing
 rich==13.7.0
 pyyaml==6.0.1
 xxhash==4.0.1
+requests>=2.31.0
+send2trash>=1.8.3
+
+# Image & Video / Denoise
+numpy>=1.26.0
+opencv-python>=4.9.0
+Pillow>=10.0.0
+
+# YouTube Data API v3 & OAuth 2.0
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.2.0
+
+# Test Suite
+pytest>=8.0.0

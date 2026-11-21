@@ -1,0 +1,44 @@
+name: Automated Test Suite (pytest)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system tools (ffmpeg, exiftool & OpenCV libs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libimage-exiftool-perl libgl1 libglib2.0-0
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r iris/requirements.txt
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install ultralytics open-clip-torch pandas piexif rawpy tifffile
+
+      - name: Run pytest suite
+        env:
+          IRIS_DISABLE_NOTIFICATIONS: "1"
+          IRIS_ASTRO_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          python -m pytest iris/tests -v
