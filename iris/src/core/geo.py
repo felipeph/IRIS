@@ -176,11 +176,19 @@ def build_location_panel(
     return Panel("\n".join(lines), expand=False, border_style=border_style)
 
 
-def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str = "") -> List[str]:
+def build_exiftool_geo_args(
+    loc: GeoLocation,
+    is_video: bool = False,
+    ext: str = "",
+    previous_loc: Optional[GeoLocation] = None,
+    previous_tags: Optional[List[str]] = None,
+) -> List[str]:
     """
     Gera argumentos de linha de comando para o ExifTool para injeção de GPS e IPTC/XMP.
     Atenção: Apenas chamado para mídias graváveis (GEO_WRITABLE_EXTS).
     Vídeos e RAWs nunca recebem chamada de escrita do ExifTool.
+    Se `previous_loc` ou `previous_tags` forem informados, remove antes as tags exclusivas
+    do local anterior e limpa campos escalares vazios no novo local.
     """
     ext_lower = ext.lower()
     if is_video or ext_lower not in GEO_WRITABLE_EXTS:
@@ -192,6 +200,18 @@ def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str =
     lng_ref = "E" if lng >= 0 else "W"
     abs_lat = abs(lat)
     abs_lng = abs(lng)
+
+    old_tags: List[str] = []
+    if previous_loc is not None:
+        for t in previous_loc.get_tags():
+            if t and t not in old_tags:
+                old_tags.append(t)
+    if previous_tags:
+        for t in previous_tags:
+            t_clean = str(t or "").strip()
+            if t_clean and t_clean not in old_tags:
+                old_tags.append(t_clean)
+    is_reapply = (previous_loc is not None) or bool(old_tags)
 
     args = [
         "-charset", "UTF8",
@@ -210,25 +230,46 @@ def build_exiftool_geo_args(loc: GeoLocation, is_video: bool = False, ext: str =
     if loc.city:
         args.append(f"-IPTC:City={loc.city}")
         args.append(f"-XMP-photoshop:City={loc.city}")
+    elif is_reapply:
+        args.append("-IPTC:City=")
+        args.append("-XMP-photoshop:City=")
+
     if loc.state:
         args.append(f"-IPTC:Province-State={loc.state}")
         args.append(f"-XMP-photoshop:State={loc.state}")
+    elif is_reapply:
+        args.append("-IPTC:Province-State=")
+        args.append("-XMP-photoshop:State=")
+
     if loc.country:
         args.append(f"-IPTC:Country-PrimaryLocationName={loc.country}")
         args.append(f"-XMP-photoshop:Country={loc.country}")
+    elif is_reapply:
+        args.append("-IPTC:Country-PrimaryLocationName=")
+        args.append("-XMP-photoshop:Country=")
 
     sub_loc = loc.poi or loc.suburb or loc.label
     if sub_loc:
         args.append(f"-IPTC:Sub-location={sub_loc}")
         args.append(f"-XMP-iptcCore:Location={sub_loc}")
+    elif is_reapply:
+        args.append("-IPTC:Sub-location=")
+        args.append("-XMP-iptcCore:Location=")
 
     tags = loc.get_tags()
+    for old_tag in old_tags:
+        if old_tag not in tags:
+            args.append(f"-Keywords-={old_tag}")
+            args.append(f"-Subject-={old_tag}")
+
     for tag in tags:
         args.append(f"-Keywords+={tag}")
         args.append(f"-Subject+={tag}")
 
     if tags:
         args.append(f"-XPKeywords={';'.join(tags)}")
+    elif is_reapply:
+        args.append("-XPKeywords=")
 
     return args
 

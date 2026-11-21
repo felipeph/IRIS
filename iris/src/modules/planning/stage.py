@@ -116,6 +116,7 @@ class PlanningStage(PipelineStage):
                 try:
                     ts = datetime.fromisoformat(item.meta_timestamp) if item.meta_timestamp else None
                     folder_name = Path(item.original_path).parent.name if item.original_path else Path(item.staging_path).parent.name
+                    is_preset = getattr(item, "geo_source", "") == "preset"
                     meta = MediaMetadata(
                         file_path=Path(item.staging_path),
                         source_folder_name=folder_name,
@@ -138,9 +139,9 @@ class PlanningStage(PipelineStage):
                         is_raw=item.meta_is_raw,
                         width=item.meta_width,
                         height=item.meta_height,
-                        latitude=item.meta_latitude,
-                        longitude=item.meta_longitude,
-                        gps_accuracy=item.meta_gps_accuracy,
+                        latitude=None if is_preset else item.meta_latitude,
+                        longitude=None if is_preset else item.meta_longitude,
+                        gps_accuracy=None if is_preset else item.meta_gps_accuracy,
                     )
                     all_metadatas.append(meta)
                 except Exception as e:
@@ -180,12 +181,13 @@ class PlanningStage(PipelineStage):
                     p_item.relative_dest_dir = str(c_item.relative_dest_dir)
                     p_item.extra_dest_dirs_json = json.dumps([str(p) for p in c_item.extra_dest_dirs])
                     p_item.burst_id = getattr(c_item, "burst_id", "") or ""
-                    if p_item.meta_latitude is None and loc:
+                    if (p_item.meta_latitude is None or getattr(p_item, "geo_source", "") == "preset") and loc:
                         p_item.meta_latitude = loc.lat
                         p_item.meta_longitude = loc.lng
                         p_item.meta_gps_accuracy = loc.accuracy_m
                         p_item.geo_source = "preset"
-                        p_item.geo_written = False
+                        if p_item.status != "organized":
+                            p_item.geo_written = False
                     project.save_item(p_item)
         
         console.print("[bold green]Planejamento concluído![/bold green]")

@@ -422,3 +422,23 @@ def test_client_session_connection_pooling():
     assert hasattr(sess1, "adapters")
 
 
+@patch("requests.post")
+def test_score_image_ignores_empty_observed_on_string(mock_post):
+    """Valida que strings vazias ou com apenas espaços em observed_on não são enviadas no payload."""
+    client = INaturalistClient(jwt_token="valid_jwt", request_delay_seconds=0.01)
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"results": []}
+    mock_post.return_value = mock_resp
+
+    test_img = Image.new("RGB", (60, 60), color="green")
+    client.score_image(test_img, observed_on="")
+    client.score_image(test_img, observed_on="   ")
+
+    assert mock_post.call_count == 2
+    for call in mock_post.call_args_list:
+        assert "observed_on" not in call[1]["data"]
+
+
+

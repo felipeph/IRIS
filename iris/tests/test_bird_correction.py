@@ -201,3 +201,91 @@ def test_bird_correction_physical_move(tmp_path):
         assert len(files_in_new_dir) == 1
         assert "Suiriri" in files_in_new_dir[0].name
         assert "Tyrannus-melancholicus" in files_in_new_dir[0].name
+
+
+def test_bird_correction_updates_central_db_and_syncs_hash_for_jpg_only(tmp_path):
+    """Valida que correct_bird_identification atualiza central DB sem órfãos, ignora ExifTool em vídeo e sincroniza hash em JPEG."""
+    from PIL import Image
+    from src.core.project import ProjectItem
+    from src.modules.ingestion.strategies.base import compute_file_hash
+
+    proj_dir = tmp_path / "projects"
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    central_db = proj_dir / "iris_central.db"
+    dest_root = tmp_path / "IRIS"
+
+    vid_dir = dest_root / "3_Videos" / "2026" / "10" / "18" / "periquito-australiano"
+    vid_dir.mkdir(parents=True, exist_ok=True)
+    old_vid = vid_dir / "2026-10-18_16-40-00_periquito-australiano_Melopsittacus-undulatus_MVI_4190.mp4"
+    old_vid.write_bytes(b"MP4_UNTOUCHED_BYTES")
+
+    jpg_dir = dest_root / "2_AlbunsDatas" / "2026" / "10" / "18" / "periquito-australiano"
+    jpg_dir.mkdir(parents=True, exist_ok=True)
+    old_jpg = jpg_dir / "2026-10-18_16-41-00_periquito-australiano_Melopsittacus-undulatus_IMG_4191.jpg"
+    Image.new("RGB", (20, 20), color="blue").save(old_jpg, "JPEG")
+    orig_jpg_hash = compute_file_hash(old_jpg)
+
+    with patch("src.core.project.PROJECTS_DIR", proj_dir), \
+         patch("src.core.project.CENTRAL_DB_PATH", central_db), \
+         patch("src.core.config.config.get", side_effect=lambda k, d=None: dest_root if k == "general.destination_root" else (True if k == "modules.bird_id.write_exif_tags" else d)):
+
+        proj = create_project("CorrectCentralSync", str(tmp_path / "orig"))
+        proj.save_items_batch([
+            ProjectItem(str(old_vid), "", organized_path=str(old_vid), status="organized", file_size_bytes=old_vid.stat().st_size, file_hash=compute_file_hash(old_vid)),
+            ProjectItem(str(old_jpg), "", organized_path=str(old_jpg), status="organized", file_size_bytes=old_jpg.stat().st_size, file_hash=orig_jpg_hash),
+        ])
+        proj.add_bird_identification({
+            "item_path": str(old_vid.resolve()), "is_video": True,
+            "species_common": "periquito-australiano", "species_scientific": "Melopsittacus undulatus",
+            "confidence": 0.5, "needs_review": True,
+        })
+        proj.add_bird_identification({
+            "item_path": str(old_jpg.resolve()), "is_video": False,
+            "species_common": "periquito-australiano", "species_scientific": "Melopsittacus undulatus",
+            "confidence": 0.5, "needs_review": True,
+        })
+
+        def fake_exif_run(cmd, **kwargs):
+            arg_txt = Path(cmd[cmd.index("-@") + 1]).read_text(encoding="utf-8")
+            target_line = [ln.strip() for ln in arg_txt.splitlines() if ln.strip()][-1]
+            with open(target_line, "ab") as f:
+                f.write(b"_TAG")
+            m = MagicMock()
+            m.returncode = 0
+            return m
+
+        with patch("src.modules.bird_id.action.shutil.which", return_value="exiftool"), \
+             patch("src.modules.bird_id.action.subprocess.run", side_effect=fake_exif_run) as mock_run:
+            # Vídeo: não deve acionar ExifTool
+            proj.correct_bird_identification(
+                str(old_vid.resolve()),
+                {"species_common": "Suiriri", "species_scientific": "Tyrannus melancholicus"},
+                apply_physical_move=True,
+            )
+            assert mock_run.call_count == 0
+
+            # JPEG: deve acionar ExifTool 1x e sincronizar file_hash
+            proj.correct_bird_identification(
+                str(old_jpg.resolve()),
+                {"species_common": "Suiriri", "species_scientific": "Tyrannus melancholicus"},
+                apply_physical_move=True,
+            )
+            assert mock_run.call_count == 1
+
+        new_jpg_item = proj.get_item(str(old_jpg))
+        new_jpg_path = Path(new_jpg_item.organized_path)
+        assert new_jpg_path.exists()
+        assert new_jpg_item.file_hash == compute_file_hash(new_jpg_path)
+        assert new_jpg_item.file_hash != orig_jpg_hash
+
+        with sqlite3.connect(central_db) as conn:
+            rows = conn.execute(
+                "SELECT item_path, species_common FROM bird_identifications WHERE project_name=?",
+                (proj.name,),
+            ).fetchall()
+        assert len(rows) == 2
+        central_paths = {r[0] for r in rows}
+        assert str(old_vid.resolve()) not in central_paths
+        assert str(old_jpg.resolve()) not in central_paths
+        assert str(new_jpg_path.resolve()) in central_paths
+

@@ -23,8 +23,12 @@ class _ProjectTransactionContext:
         conn = self.project._get_active_conn()
         if conn is None:
             self._is_top_level = True
+            self.project._ensure_db_initialized()
             import src.core.project as p_mod
-            conn = p_mod.get_db_connection(self.project._project_db_file)
+            conn = p_mod.get_attached_project_connection(
+                self.project._project_db_file,
+                p_mod.CENTRAL_DB_PATH,
+            )
             conn.execute("BEGIN IMMEDIATE;")
             self.project._set_active_conn(conn)
         else:
@@ -141,8 +145,13 @@ class ProjectBase:
             if self._project_db_file.resolve() != p_mod.CENTRAL_DB_PATH.resolve():
                 try:
                     active_conn.execute(central_sql, central_params)
-                except sqlite3.OperationalError:
-                    pass
+                except sqlite3.OperationalError as exc:
+                    from src.core.logger import log_event
+                    log_event(
+                        f"Falha no dual-write em transação ativa para central DB: {exc}",
+                        level="warning",
+                    )
+                    raise
             return
 
         with p_mod.get_attached_project_connection(self._project_db_file, p_mod.CENTRAL_DB_PATH) as conn:

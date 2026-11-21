@@ -1704,3 +1704,238 @@ def test_bird_organize_refuses_to_move_timelapse_frames(tmp_path, monkeypatch):
     assert tl_file.exists()
     assert not (iris_dest_root / "2_AlbunsDatas").exists()
 
+
+def test_write_bird_exif_tags_blocks_raw_and_video_and_preserves_mtime(tmp_path, monkeypatch):
+    """Garante que RAWs e vídeos nunca disparam ExifTool e que JPEGs incluem -P para preservar mtime."""
+    import shutil
+    from src.modules.bird_id.action import write_bird_exif_tags
+
+    raw_file = tmp_path / "ave.CR2"
+    raw_file.write_bytes(b"RAW_BINARY_DATA")
+    vid_file = tmp_path / "ave.MP4"
+    vid_file.write_bytes(b"MP4_BINARY_DATA")
+    jpg_file = tmp_path / "ave.JPG"
+    Image.new("RGB", (40, 40), color="green").save(jpg_file, "JPEG")
+
+    captured_argfiles = []
+    captured_kwargs = []
+
+    def fake_run(cmd, **kwargs):
+        captured_kwargs.append(kwargs)
+        if "-@" in cmd:
+            arg_path = Path(cmd[cmd.index("-@") + 1])
+            if arg_path.exists():
+                captured_argfiles.append(arg_path.read_text(encoding="utf-8"))
+        m = MagicMock()
+        m.returncode = 0
+        return m
+
+    with patch("src.modules.bird_id.action.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.subprocess.run", side_effect=fake_run) as mock_run:
+        assert write_bird_exif_tags(raw_file, "Bem-te-vi", "Pitangus sulphuratus") is False
+        assert write_bird_exif_tags(vid_file, "Bem-te-vi", "Pitangus sulphuratus") is False
+        assert mock_run.call_count == 0
+
+        assert write_bird_exif_tags(jpg_file, "Sabiá-laranjeira", "Turdus rufiventris") is True
+        assert mock_run.call_count == 1
+        assert "-overwrite_original" in captured_argfiles[0]
+        assert "\n-P\n" in captured_argfiles[0]
+        assert captured_kwargs[0].get("encoding") == "utf-8"
+
+    # Se ExifTool real estiver instalado, valida preservação efetiva do mtime no filesystem
+    if shutil.which("exiftool"):
+        real_jpg = tmp_path / "ave_real_mtime.jpg"
+        Image.new("RGB", (40, 40), color="red").save(real_jpg, "JPEG")
+        fixed_ts = 1700000000
+        os.utime(real_jpg, (fixed_ts, fixed_ts))
+        assert write_bird_exif_tags(real_jpg, "Suiriri", "Tyrannus melancholicus") is True
+        assert abs(real_jpg.stat().st_mtime - fixed_ts) < 2.0
+
+
+def test_bird_tag_stage_never_rewrites_raw_or_video_and_syncs_hash(tmp_path, monkeypatch):
+    """Garante Zero Data Loss em RAW/vídeo no BirdTagStage e atualização de hash/tamanho no SQLite para JPEG."""
+    from src.modules.bird_id.tag_stage import BirdTagStage
+    from src.modules.ingestion.strategies.base import compute_file_hash
+
+    proj = create_project("test_tag_zdl_and_hash", str(tmp_path))
+
+    jpg_file = tmp_path / "ave.jpg"
+    Image.new("RGB", (30, 30), color="blue").save(jpg_file, "JPEG")
+    raw_file = tmp_path / "ave.CR2"
+    raw_file.write_bytes(b"RAW_PROTECTED_CONTENT")
+    vid_file = tmp_path / "ave.mp4"
+    vid_file.write_bytes(b"VIDEO_PROTECTED_CONTENT")
+    sib_raw = tmp_path / "ave_sib.CR2"
+    sib_raw.write_bytes(b"RAW_SIBLING_PROTECTED")
+
+    orig_jpg_hash = compute_file_hash(jpg_file)
+    orig_raw_hash = compute_file_hash(raw_file)
+    orig_vid_hash = compute_file_hash(vid_file)
+
+    proj.save_items_batch([
+        ProjectItem(
+            str(jpg_file), str(jpg_file), organized_path=str(jpg_file),
+            status="organized", burst_id="raj_01",
+            file_size_bytes=jpg_file.stat().st_size, file_hash=orig_jpg_hash,
+        ),
+        ProjectItem(
+            str(raw_file), str(raw_file), organized_path=str(raw_file),
+            status="organized",
+            file_size_bytes=raw_file.stat().st_size, file_hash=orig_raw_hash,
+        ),
+        ProjectItem(
+            str(vid_file), str(vid_file), organized_path=str(vid_file),
+            status="organized",
+            file_size_bytes=vid_file.stat().st_size, file_hash=orig_vid_hash,
+        ),
+        ProjectItem(
+            str(sib_raw), str(sib_raw), organized_path=str(sib_raw),
+            status="organized", burst_id="raj_01",
+            file_size_bytes=sib_raw.stat().st_size, file_hash=compute_file_hash(sib_raw),
+        ),
+    ])
+
+    for p, is_v in [(jpg_file, False), (raw_file, False), (vid_file, True)]:
+        proj.add_bird_identification({
+            "item_path": str(p),
+            "is_video": is_v,
+            "species_common": "Bem-te-vi",
+            "species_scientific": "Pitangus sulphuratus",
+            "confidence": 0.95,
+            "needs_review": False,
+        })
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: True if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    executed_argfiles = []
+
+    def fake_exiftool_run(cmd, **kwargs):
+        arg_path = Path(cmd[cmd.index("-@") + 1])
+        txt = arg_path.read_text(encoding="utf-8")
+        executed_argfiles.append(txt)
+        # Simula alteração física do JPEG ao gravar metadados
+        with open(jpg_file, "ab") as f:
+            f.write(b"_EXIF_TAGGED")
+        m = MagicMock()
+        m.returncode = 0
+        return m
+
+    with patch("src.modules.bird_id.tag_stage.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.subprocess.run", side_effect=fake_exiftool_run):
+        stage = BirdTagStage("bird_tag", "Injeção de Metadados de Aves")
+        assert stage.run(proj) is True
+
+    assert len(executed_argfiles) == 1
+    assert str(jpg_file.resolve()) in executed_argfiles[0]
+    assert ".CR2" not in executed_argfiles[0]
+    assert ".mp4" not in executed_argfiles[0]
+
+    # RAWs e vídeo permanecem bit-perfect
+    assert compute_file_hash(raw_file) == orig_raw_hash
+    assert compute_file_hash(vid_file) == orig_vid_hash
+    assert proj.get_item(str(raw_file)).file_hash == orig_raw_hash
+    assert proj.get_item(str(vid_file)).file_hash == orig_vid_hash
+
+    # JPEG teve file_size_bytes e file_hash sincronizados no SQLite
+    updated_jpg = proj.get_item(str(jpg_file))
+    expected_new_hash = compute_file_hash(jpg_file)
+    assert expected_new_hash != orig_jpg_hash
+    assert updated_jpg.file_hash == expected_new_hash
+    assert updated_jpg.file_size_bytes == jpg_file.stat().st_size
+
+    # Projeto contendo exclusivamente RAWs/vídeos retorna True sem chamar ExifTool
+    proj_raw_only = create_project("test_tag_raw_only", str(tmp_path))
+    proj_raw_only.save_item(ProjectItem(
+        str(raw_file), str(raw_file), organized_path=str(raw_file),
+        status="organized", file_size_bytes=raw_file.stat().st_size, file_hash=orig_raw_hash,
+    ))
+    proj_raw_only.add_bird_identification({
+        "item_path": str(raw_file),
+        "is_video": False,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "confidence": 0.95,
+        "needs_review": False,
+    })
+    with patch("src.modules.bird_id.tag_stage.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.subprocess.run") as mock_run_raw_only:
+        assert stage.run(proj_raw_only) is True
+        mock_run_raw_only.assert_not_called()
+
+
+@patch("src.modules.bird_id.classify_stage.BirdClassifier")
+def test_bird_classify_passes_observed_on_from_meta_timestamp(mock_classifier_cls, tmp_path):
+    """Valida que BirdClassifyStage passa observed_on a partir de meta_timestamp/meta_date_str nos fluxos individual, rajada e vídeo."""
+    from datetime import datetime
+    from src.modules.bird_id.classify_stage import BirdClassifyStage
+
+    observed_calls = []
+
+    def fake_classify_crop(pil_img, top_k=3, use_tta=True, lat=None, lng=None, accuracy=None, observed_on=None):
+        observed_calls.append(observed_on)
+        return [{
+            "scientific_name": "Pitangus sulphuratus",
+            "common_name": "Bem-te-vi",
+            "common_name_en": "Great Kiskadee",
+            "family": "Tyrannidae",
+            "order": "Passeriformes",
+            "confidence": 0.91,
+        }]
+
+    mock_classifier = MagicMock()
+    mock_classifier.classify_crop.side_effect = fake_classify_crop
+    mock_classifier_cls.return_value = mock_classifier
+
+    proj = create_project("test_observed_on_proj", str(tmp_path))
+
+    crop1 = tmp_path / "crop_1.jpg"
+    crop2 = tmp_path / "crop_2.jpg"
+    crop3 = tmp_path / "crop_3.jpg"
+    crop_vid = tmp_path / "crop_vid.jpg"
+    for c in (crop1, crop2, crop3, crop_vid):
+        cv2.imwrite(str(c), np.zeros((40, 40, 3), dtype=np.uint8))
+
+    p1 = tmp_path / "foto_ts.jpg"
+    p2 = tmp_path / "foto_burst_date.jpg"
+    p3 = tmp_path / "foto_sem_data.jpg"
+    pv = tmp_path / "video_ts.mp4"
+
+    proj.save_items_batch([
+        ProjectItem(
+            str(p1), str(p1), status="copied", meta_is_video=False,
+            meta_timestamp="2026-09-06T15:10:00", meta_date_str="2026-09-06", meta_time_str="15-10-00",
+        ),
+        ProjectItem(
+            str(p2), str(p2), status="copied", meta_is_video=False, burst_id="raj_obs",
+            meta_timestamp="", meta_date_str="2026-10-15", meta_time_str="08-30-00",
+        ),
+        ProjectItem(
+            str(p3), str(p3), status="copied", meta_is_video=False,
+            meta_timestamp="", meta_date_str="", meta_time_str="",
+        ),
+        ProjectItem(
+            str(pv), str(pv), status="copied", meta_is_video=True,
+            meta_timestamp="2026-11-01T07:05:00",
+        ),
+    ])
+
+    proj.save_bird_detection({"item_path": str(p1), "is_video": False, "crop_saved_path": str(crop1), "metadata_json": {}})
+    proj.save_bird_detection({"item_path": str(p2), "is_video": False, "crop_saved_path": str(crop2), "metadata_json": {"sharpness": 100.0}})
+    proj.save_bird_detection({"item_path": str(p3), "is_video": False, "crop_saved_path": str(crop3), "metadata_json": {}})
+    proj.save_bird_detection({
+        "item_path": str(pv), "is_video": True, "crop_saved_path": str(crop_vid),
+        "metadata_json": {"video_crops": [{"crop_path": str(crop_vid)}]},
+    })
+
+    stage = BirdClassifyStage("bird_id", "Classificação de Aves")
+    assert stage.run(proj) is True
+
+    assert datetime(2026, 9, 6, 15, 10, 0) in observed_calls
+    assert "2026-10-15 08:30:00" in observed_calls
+    assert None in observed_calls
+    assert datetime(2026, 11, 1, 7, 5, 0) in observed_calls
+
+

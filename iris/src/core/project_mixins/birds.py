@@ -400,7 +400,7 @@ class ProjectBirdsMixin:
         if apply_physical_move:
             try:
                 from src.core.config import config
-                from src.modules.bird_id.action import apply_bird_physical_move, apply_bird_metadata
+                from src.modules.bird_id.action import apply_bird_physical_move, apply_bird_metadata, _sync_item_hash
                 item = None
                 for it in self.get_items():
                     for p in [it.organized_path, it.staging_path, it.original_path]:
@@ -416,7 +416,8 @@ class ProjectBirdsMixin:
                     if item.organized_path and Path(item.organized_path).exists():
                         new_path = apply_bird_physical_move(item, self, updated_record, bird_cfg)
                         if new_path.exists() and bool(bird_cfg.get("write_exif_tags", True)):
-                            apply_bird_metadata(new_path, updated_record)
+                            if apply_bird_metadata(new_path, updated_record):
+                                _sync_item_hash(self, item, new_path)
             except Exception:
                 pass
 

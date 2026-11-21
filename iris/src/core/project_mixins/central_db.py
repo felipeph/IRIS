@@ -448,7 +448,13 @@ def reconcile_project_with_central(
         return {}
 
     p_mod.init_central_db()
-    stats = {"timelapses": 0, "edited_videos": 0, "astro_stacks": 0, "astro_sharpens": 0}
+    stats = {
+        "timelapses": 0,
+        "edited_videos": 0,
+        "astro_stacks": 0,
+        "astro_sharpens": 0,
+        "bird_identifications": 0,
+    }
 
     if project_db_file.resolve() == central_db_file.resolve():
         return stats
@@ -513,6 +519,14 @@ def reconcile_project_with_central(
             FROM main.astro_sharpens
         """)
         stats["astro_sharpens"] = cursor.rowcount
+
+        cursor.execute("""
+            DELETE FROM central.bird_identifications
+            WHERE project_name = ?
+              AND item_path NOT IN (
+                  SELECT item_path FROM main.bird_identifications WHERE project_name = ?
+              )
+        """, (project_name, project_name))
 
         cursor.execute("""
             INSERT OR REPLACE INTO central.bird_identifications (

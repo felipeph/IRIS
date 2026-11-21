@@ -17,8 +17,10 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from src.core.config import config
+from src.core.geo import GEO_WRITABLE_EXTS
 from src.core.project import Project, ProjectItem
 from src.core.cleanup import clean_empty_parent_dirs
+from src.modules.ingestion.strategies.base import compute_file_hash
 
 
 def sanitize_bird_token(name: str) -> str:
@@ -116,6 +118,9 @@ def write_bird_exif_tags(
     Utiliza argfile temporário com codificação UTF-8 explícita para compatibilidade universal
     e preservação perfeita de acentuação e espaços no Google Fotos, Apple Fotos, Lightroom e Windows.
     """
+    if file_path.suffix.lower() not in GEO_WRITABLE_EXTS:
+        return False
+
     env_exif = os.getenv("IRIS_EXIFTOOL_PATH")
     exiftool_bin = env_exif if env_exif else shutil.which("exiftool")
     if not exiftool_bin:
@@ -141,6 +146,7 @@ def write_bird_exif_tags(
 
     lines = [
         "-overwrite_original",
+        "-P",
         "-charset", "UTF8",
         "-charset", "iptc=UTF8",
         "-charset", "filename=UTF8",
@@ -179,7 +185,14 @@ def write_bird_exif_tags(
             argfile = f.name
 
         cmd = [exiftool_bin, "-charset", "UTF8", "-@", argfile]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
         return proc.returncode == 0
     except Exception:
         return False
@@ -326,6 +339,15 @@ def apply_bird_physical_move(
     return target_path
 
 
+def _sync_item_hash(project: Project, item: ProjectItem, file_path: Path) -> None:
+    """Atualiza file_size_bytes e file_hash do item no SQLite após modificação de metadados."""
+    if not file_path.exists():
+        return
+    item.file_size_bytes = file_path.stat().st_size
+    item.file_hash = compute_file_hash(file_path)
+    project.save_item(item)
+
+
 def apply_bird_organization(
     item: ProjectItem,
     project: Project,
@@ -339,6 +361,7 @@ def apply_bird_organization(
     target_path = apply_bird_physical_move(item, project, record, bird_cfg)
     write_exif = bool(bird_cfg.get("write_exif_tags", False))
     if write_exif and target_path.exists():
-        apply_bird_metadata(target_path, record)
+        if apply_bird_metadata(target_path, record):
+            _sync_item_hash(project, item, target_path)
     return target_path
 

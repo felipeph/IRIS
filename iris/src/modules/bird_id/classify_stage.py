@@ -32,6 +32,38 @@ from .reporter import export_bird_review_csv, render_bird_summary_table
 console = Console()
 
 
+def _resolve_observed_on(p_item: Optional[Any]) -> Optional[Any]:
+    """Extrai data/hora de observação dos campos reais de ProjectItem."""
+    if not p_item:
+        return None
+    raw_ts = getattr(p_item, "meta_timestamp", None)
+    if isinstance(raw_ts, datetime):
+        return raw_ts
+    if isinstance(raw_ts, str) and raw_ts.strip():
+        ts_str = raw_ts.strip()
+        try:
+            return datetime.fromisoformat(ts_str)
+        except ValueError:
+            return ts_str
+    raw_date = (getattr(p_item, "meta_date_str", None) or "").strip()
+    if raw_date:
+        raw_time = (getattr(p_item, "meta_time_str", None) or "").strip()
+        if raw_time:
+            return f"{raw_date} {raw_time.replace('-', ':')}"
+        return raw_date
+    return None
+
+
+def _lookup_project_item(items_by_path: Dict[str, Any], item_path_str: str) -> Optional[Any]:
+    it = items_by_path.get(item_path_str)
+    if it is None and item_path_str:
+        try:
+            it = items_by_path.get(str(Path(item_path_str).resolve()))
+        except Exception:
+            it = None
+    return it
+
+
 class BirdClassifyStage(PipelineStage):
     """Estágio atômico de classificação taxonômica de aves via iNaturalist / BioCLIP."""
 
@@ -130,12 +162,7 @@ class BirdClassifyStage(PipelineStage):
         filtered_records = []
         for r in records_with_crops:
             item_p = r.get("item_path", "")
-            item_match = items_by_path.get(item_p)
-            if not item_match and item_p:
-                try:
-                    item_match = items_by_path.get(str(Path(item_p).resolve()))
-                except Exception:
-                    item_match = None
+            item_match = _lookup_project_item(items_by_path, item_p)
             cat = getattr(item_match, "category", "") or ""
             rel_dest = (getattr(item_match, "relative_dest_dir", "") or "").replace("\\", "/")
             p_norm = item_p.replace("\\", "/")
@@ -179,7 +206,7 @@ class BirdClassifyStage(PipelineStage):
 
         for rec in records_with_crops:
             item_path_str = rec.get("item_path", "")
-            p_item = items_by_path.get(item_path_str)
+            p_item = _lookup_project_item(items_by_path, item_path_str)
             b_id = getattr(p_item, "burst_id", "") or "" if (p_item and not rec.get("is_video", False)) else ""
             if enable_burst_consensus and b_id:
                 burst_map[b_id].append(rec)
@@ -216,7 +243,7 @@ class BirdClassifyStage(PipelineStage):
 
                     for idx, rec in enumerate(rec_list):
                         item_path_str = rec.get("item_path", "")
-                        p_item = items_by_path.get(item_path_str)
+                        p_item = _lookup_project_item(items_by_path, item_path_str)
                         file_name = Path(item_path_str).name if item_path_str else "Recorte"
                         curr_photo_idx = len(burst_eval_items) + 1
                         total_burst_photos = len(rec_list)
@@ -240,7 +267,7 @@ class BirdClassifyStage(PipelineStage):
                         item_lat = exif_lat if exif_lat is not None else default_lat
                         item_lng = exif_lng if exif_lng is not None else default_lng
                         item_acc = getattr(p_item, "meta_gps_accuracy", None) or default_acc if p_item else default_acc
-                        observed_on = getattr(p_item, "meta_datetime_original", None) if p_item else None
+                        observed_on = _resolve_observed_on(p_item)
 
                         crop_saved_path = rec.get("crop_saved_path", "")
                         meta_json = rec.get("metadata_json", {})
@@ -435,7 +462,7 @@ class BirdClassifyStage(PipelineStage):
                         if idx in evaluated_indices:
                             continue
                         item_path_str = rec.get("item_path", "")
-                        p_item = items_by_path.get(item_path_str)
+                        p_item = _lookup_project_item(items_by_path, item_path_str)
                         crop_saved_path = rec.get("crop_saved_path", "")
                         meta_json = rec.get("metadata_json", {})
 
@@ -493,7 +520,7 @@ class BirdClassifyStage(PipelineStage):
                 else:
                     rec = rec_list[0]
                     item_path_str = rec.get("item_path", "")
-                    p_item = items_by_path.get(item_path_str)
+                    p_item = _lookup_project_item(items_by_path, item_path_str)
                     file_name = Path(item_path_str).name if item_path_str else "Recorte"
                     live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, "Classificando..."))
 
@@ -503,7 +530,7 @@ class BirdClassifyStage(PipelineStage):
                     item_lat = exif_lat if exif_lat is not None else default_lat
                     item_lng = exif_lng if exif_lng is not None else default_lng
                     item_acc = getattr(p_item, "meta_gps_accuracy", None) or default_acc if p_item else default_acc
-                    observed_on = getattr(p_item, "meta_datetime_original", None) if p_item else None
+                    observed_on = _resolve_observed_on(p_item)
 
                     is_video = rec.get("is_video", False)
                     crop_saved_path = rec.get("crop_saved_path", "")

@@ -280,3 +280,111 @@ def test_benchmark_has_items_and_count_vs_items_instantiation(mock_projects_dir)
     assert dur_count < 0.005  # < 5ms
     assert dur_count < dur_legacy
 
+
+def test_dual_write_inside_transaction_updates_central_db(mock_projects_dir):
+    """Garante commit e rollback conjuntos entre <projeto>.db e iris_central.db dentro de with project.transaction()."""
+    create_project("test_tx_dual_write", "X:\\src")
+    # Nova instância sem _init_project_db() prévio para validar inicialização segura antes de BEGIN IMMEDIATE
+    proj = Project("test_tx_dual_write")
+    assert proj._db_initialized is False
+
+    old_path = "/dest/raw_bird.jpg"
+    new_path = "/dest/Suiriri/raw_bird_Suiriri.jpg"
+
+    with proj.transaction():
+        proj.add_bird_identification({
+            "item_path": old_path,
+            "is_video": False,
+            "species_common": "Suiriri",
+            "species_scientific": "Tyrannus melancholicus",
+            "confidence": 0.95,
+            "needs_review": False,
+        })
+        proj.update_bird_identification_path(old_path, new_path)
+        proj.save_timelapse({
+            "sequence_dir": "seq_tx",
+            "output_video_path": "/exports/tx_tl.mp4",
+            "photo_count": 30,
+            "fps": 30,
+        })
+
+    central_db = mock_projects_dir / "iris_central.db"
+    with sqlite3.connect(central_db) as conn:
+        bird_rows = conn.execute(
+            "SELECT item_path FROM bird_identifications WHERE project_name=?",
+            (proj.name,),
+        ).fetchall()
+        tl_rows = conn.execute(
+            "SELECT output_video_path FROM timelapses WHERE project_name=?",
+            (proj.name,),
+        ).fetchall()
+
+    assert [r[0] for r in bird_rows] == [new_path]
+    assert [r[0] for r in tl_rows] == ["/exports/tx_tl.mp4"]
+
+    # Verifica rollback conjunto em caso de falha dentro da transação
+    failed_path = "/dest/rollback_bird.jpg"
+    with pytest.raises(RuntimeError):
+        with proj.transaction():
+            proj.update_bird_identification_path(new_path, failed_path)
+            proj.save_timelapse({
+                "sequence_dir": "seq_fail",
+                "output_video_path": "/exports/fail_tl.mp4",
+                "photo_count": 10,
+                "fps": 30,
+            })
+            raise RuntimeError("Falha simulada após dual-write")
+
+    assert proj.get_bird_identification(new_path) is not None
+    assert proj.get_bird_identification(failed_path) is None
+    with sqlite3.connect(central_db) as conn:
+        bird_rows_after = conn.execute(
+            "SELECT item_path FROM bird_identifications WHERE project_name=?",
+            (proj.name,),
+        ).fetchall()
+        tl_rows_after = conn.execute(
+            "SELECT output_video_path FROM timelapses WHERE project_name=?",
+            (proj.name,),
+        ).fetchall()
+    assert [r[0] for r in bird_rows_after] == [new_path]
+    assert [r[0] for r in tl_rows_after] == ["/exports/tx_tl.mp4"]
+
+
+def test_reconcile_prunes_stale_bird_identification_paths(mock_projects_dir):
+    """Garante que reconcile_project_with_central remove caminhos órfãos antigos do central sem duplicar."""
+    from src.core.project import reconcile_project_with_central
+
+    proj = create_project("test_reconcile_prune", "X:\\src")
+    old_path = "/dest/IMG_001.jpg"
+    new_path = "/dest/Bem-te-vi/IMG_001_Bem-te-vi.jpg"
+
+    proj.add_bird_identification({
+        "item_path": old_path,
+        "is_video": False,
+        "species_common": "Bem-te-vi",
+        "species_scientific": "Pitangus sulphuratus",
+        "confidence": 0.92,
+        "needs_review": False,
+    })
+
+    # Simula desincronização legada: apenas o banco local recebeu o new_path
+    with sqlite3.connect(proj._project_db_file) as conn:
+        conn.execute(
+            "UPDATE bird_identifications SET item_path=? WHERE project_name=? AND item_path=?",
+            (new_path, proj.name, old_path),
+        )
+        conn.commit()
+
+    stats = reconcile_project_with_central(proj.name)
+    assert stats["bird_identifications"] >= 1
+
+    central_db = mock_projects_dir / "iris_central.db"
+    with sqlite3.connect(central_db) as conn:
+        rows = conn.execute(
+            "SELECT item_path FROM bird_identifications WHERE project_name=?",
+            (proj.name,),
+        ).fetchall()
+
+    assert [r[0] for r in rows] == [new_path]
+
+

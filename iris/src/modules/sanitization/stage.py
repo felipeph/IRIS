@@ -162,6 +162,7 @@ class SanitizationStage(PipelineStage):
 
         batch_size = 500
         stage_title = "ETAPA: SANITIZAÇÃO DE METADADOS E GEOTAG (ÁLBUNS)"
+        all_known_locations = GeoService.get_locations() if loc else []
 
         with Live(
             PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, "Preparando...", "Inicializando"),
@@ -182,6 +183,7 @@ class SanitizationStage(PipelineStage):
                 items_write_geo_jpeg: List[Tuple[Path, Optional[ProjectItem]]] = []
                 items_write_geo_other: List[Tuple[Path, Optional[ProjectItem]]] = []
                 items_event_only_other: List[Tuple[Path, Optional[ProjectItem]]] = []
+                chunk_stale_geo_tags: List[str] = []
 
                 for p, it in chunk_targets:
                     p_res_str = str(p.resolve())
@@ -190,8 +192,10 @@ class SanitizationStage(PipelineStage):
                     is_raw = ext in RAW_EXTENSIONS
 
                     native_lat, native_lng, native_acc = gps_map.get(p_res_str, (None, None, None))
+                    is_preset_from_iris = bool(it is not None and getattr(it, "geo_source", "") == "preset")
+                    has_true_native_gps = (native_lat is not None and native_lng is not None) and not is_preset_from_iris
 
-                    if native_lat is not None and native_lng is not None:
+                    if has_true_native_gps:
                         # Possui GPS nativo da câmera/celular
                         if it:
                             it.meta_latitude = native_lat
@@ -206,8 +210,27 @@ class SanitizationStage(PipelineStage):
                         elif event_args_other and not is_video and not is_raw and ext in GEO_WRITABLE_EXTS:
                             items_event_only_other.append((p, it))
                     else:
-                        # Não possui GPS nativo
+                        # Não possui GPS nativo (ou possui preset prévio do próprio IRIS)
                         if loc and tag_media:
+                            if (
+                                it is not None
+                                and is_preset_from_iris
+                                and getattr(it, "geo_written", False)
+                                and it.meta_latitude is not None
+                                and it.meta_longitude is not None
+                            ):
+                                if abs(it.meta_latitude - loc.lat) > 1e-5 or abs(it.meta_longitude - loc.lng) > 1e-5:
+                                    for prev_loc in all_known_locations:
+                                        if (
+                                            prev_loc.id != loc.id
+                                            and abs(prev_loc.lat - it.meta_latitude) <= 1e-5
+                                            and abs(prev_loc.lng - it.meta_longitude) <= 1e-5
+                                        ):
+                                            for t in prev_loc.get_tags():
+                                                if t not in chunk_stale_geo_tags:
+                                                    chunk_stale_geo_tags.append(t)
+                                            break
+
                             if it:
                                 it.meta_latitude = loc.lat
                                 it.meta_longitude = loc.lng
@@ -267,7 +290,12 @@ class SanitizationStage(PipelineStage):
 
                 # Execução 2: JPEGs sem GPS (limpeza de APP2/MakerNotes + injeção de GPS/IPTC em UMA ÚNICA chamada)
                 if items_write_geo_jpeg and loc:
-                    geo_args = build_exiftool_geo_args(loc, is_video=False, ext=".jpg")
+                    geo_args = build_exiftool_geo_args(
+                        loc,
+                        is_video=False,
+                        ext=".jpg",
+                        previous_tags=chunk_stale_geo_tags or None,
+                    )
                     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
                         f.write("-MPF:all=\n")
                         f.write("-trailer:all=\n")
@@ -297,7 +325,12 @@ class SanitizationStage(PipelineStage):
 
                 # Execução 3: Outras imagens graváveis sem GPS (PNG/WEBP/HEIC/TIFF) -> apenas injeção de GPS/IPTC
                 if items_write_geo_other and loc:
-                    geo_args = build_exiftool_geo_args(loc, is_video=False, ext=".png")
+                    geo_args = build_exiftool_geo_args(
+                        loc,
+                        is_video=False,
+                        ext=".png",
+                        previous_tags=chunk_stale_geo_tags or None,
+                    )
                     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
                         f.write("-overwrite_original\n")
                         f.write("-P\n")

@@ -256,3 +256,142 @@ def test_sanitization_selective_albums_and_timelapse_samples(tmp_path, mock_geo_
     # 2. Frame mestre de timelapse e foto de astro NUNCA devem ter sido passados ao ExifTool
     assert str(f_tl_master.resolve()) not in all_exiftool_targets
     assert str(f_astro.resolve()) not in all_exiftool_targets
+
+
+def test_resanitization_updates_preset_location_without_corrupting_geo_source(tmp_path, mock_geo_loc):
+    """Valida que reexecutar SanitizationStage após troca de local atualiza preset sem converter geo_source para native."""
+    loc_b = GeoLocation(
+        id="test-bh",
+        label="Belvedere - BH - MG",
+        lat=-19.9667,
+        lng=-43.9500,
+        accuracy_m=15000.0,
+        city="Belo Horizonte",
+        state="Minas Gerais",
+        country="Brasil",
+        suburb="Belvedere",
+    )
+    GeoService.add_location(loc_b, set_as_default=False)
+
+    project = create_project("test_resanit_preset", str(tmp_path / "src"), geo_location_id=mock_geo_loc.id)
+    album_dir = tmp_path / "2_AlbunsDatas" / "2026" / "09" / "22"
+    album_dir.mkdir(parents=True, exist_ok=True)
+    photo = album_dir / "foto_preset.jpg"
+    photo.write_bytes(b"initial_jpeg_bytes")
+
+    item = ProjectItem(
+        original_path="G:/DCIM/IMG_10.JPG",
+        staging_path=str(photo),
+        organized_path=str(photo),
+        relative_dest_dir="2_AlbunsDatas/2026/09/22",
+        category="avulsa",
+        status="organized",
+        file_size_bytes=photo.stat().st_size,
+        file_hash="hash_init",
+    )
+    project.save_item(item)
+
+    mock_proc = MagicMock(returncode=0, stdout="", stderr="")
+    stage = SanitizationStage("sanitization", "Sanitização")
+
+    # 1ª execução: sem GPS -> recebe preset Local A (Formiga)
+    with patch("src.modules.sanitization.stage.read_gps_batch", return_value={str(photo.resolve()): (None, None, None)}), \
+         patch("src.modules.sanitization.stage.shutil.which", return_value="exiftool"), \
+         patch("subprocess.run", return_value=mock_proc):
+        assert stage.run(project) is True
+
+    it_after_1 = project.get_item("G:/DCIM/IMG_10.JPG")
+    assert it_after_1.geo_source == "preset"
+    assert it_after_1.geo_written is True
+    assert pytest.approx(it_after_1.meta_latitude) == mock_geo_loc.lat
+
+    # Troca a localização do projeto para Local B (BH) e simula ExifTool lendo GPS previamente injetado (Local A)
+    project.geo_location_id = loc_b.id
+    project.save()
+
+    captured_argfiles = []
+
+    def fake_run_2(cmd, **kwargs):
+        if "-@" in cmd:
+            arg_p = Path(cmd[cmd.index("-@") + 1])
+            if arg_p.exists():
+                captured_argfiles.append(arg_p.read_text(encoding="utf-8"))
+        return mock_proc
+
+    with patch("src.modules.sanitization.stage.read_gps_batch", return_value={str(photo.resolve()): (mock_geo_loc.lat, mock_geo_loc.lng, mock_geo_loc.accuracy_m)}), \
+         patch("src.modules.sanitization.stage.shutil.which", return_value="exiftool"), \
+         patch("subprocess.run", side_effect=fake_run_2):
+        assert stage.run(project) is True
+
+    it_after_2 = project.get_item("G:/DCIM/IMG_10.JPG")
+    assert it_after_2.geo_source == "preset"
+    assert it_after_2.geo_written is True
+    assert pytest.approx(it_after_2.meta_latitude) == loc_b.lat
+    assert pytest.approx(it_after_2.meta_longitude) == loc_b.lng
+
+    joined_args = "\n".join(captured_argfiles)
+    assert "-Keywords-=Formiga" in joined_args
+    assert "-Keywords+=Belo Horizonte" in joined_args
+
+
+def test_planning_reexecution_updates_preset_location_after_geo_change(tmp_path, mock_geo_loc):
+    """Valida que reexecutar PlanningStage após troca de local atualiza coords preset e o token {gps} no nome alvo."""
+    from src.core.geo import format_gps_token
+    from src.modules.planning.stage import PlanningStage
+
+    loc_b = GeoLocation(
+        id="test-bh-plan",
+        label="Belvedere - BH - MG",
+        lat=-19.9667,
+        lng=-43.9500,
+        accuracy_m=15000.0,
+        city="Belo Horizonte",
+        state="Minas Gerais",
+        country="Brasil",
+    )
+    GeoService.add_location(loc_b, set_as_default=False)
+
+    project = create_project("test_plan_regeo", str(tmp_path / "src"), geo_location_id=mock_geo_loc.id)
+    staged_photo = tmp_path / "IMG_0001.JPG"
+    staged_photo.write_bytes(b"dummy")
+
+    project.save_item(ProjectItem(
+        original_path=str(staged_photo),
+        staging_path=str(staged_photo),
+        status="copied",
+        verified=True,
+        meta_is_video=False,
+        meta_is_raw=False,
+        meta_date_str="2026-09-06",
+        meta_time_str="15-00-00",
+        meta_timestamp="2026-09-06T15:00:00",
+        meta_camera_model="SX60",
+        meta_camera_make="Canon",
+        meta_original_stem="IMG_0001",
+        meta_extension="JPG",
+    ))
+
+    stage = PlanningStage("planning", "Planejamento")
+    with patch("src.modules.planning.stage.shutil.which", return_value="bin_ok"):
+        assert stage.run(project) is True
+
+    it1 = project.get_item(str(staged_photo))
+    token_a = format_gps_token(mock_geo_loc.lat, mock_geo_loc.lng)
+    token_b = format_gps_token(loc_b.lat, loc_b.lng)
+    assert it1.geo_source == "preset"
+    assert pytest.approx(it1.meta_latitude) == mock_geo_loc.lat
+    assert token_a in it1.target_filename
+
+    # Troca a localização do projeto e reexecuta PlanningStage
+    project.geo_location_id = loc_b.id
+    project.save()
+    with patch("src.modules.planning.stage.shutil.which", return_value="bin_ok"):
+        assert stage.run(project) is True
+
+    it2 = project.get_item(str(staged_photo))
+    assert it2.geo_source == "preset"
+    assert pytest.approx(it2.meta_latitude) == loc_b.lat
+    assert pytest.approx(it2.meta_longitude) == loc_b.lng
+    assert token_b in it2.target_filename
+    assert token_a not in it2.target_filename
+

@@ -1,11 +1,12 @@
 """
 Estágio do Pipeline: Injeção de Metadados de Aves (BirdTagStage).
-Injeta metadados taxonômicos (IPTC, XMP e EXIF) via ExifTool nas fotos e vídeos de aves
-organizados no disco:
+Injeta metadados taxonômicos (IPTC, XMP e EXIF) via ExifTool exclusivamente nos formatos graváveis
+(`GEO_WRITABLE_EXTS`: JPEG, PNG, WEBP, TIFF, HEIC) de aves organizados no disco:
 - Palavras-chave taxonômicas (Keywords, Subject)
 - Linhagem hierárquica (HierarchicalSubject)
 - Título e legenda (Caption-Abstract, Description)
-Opera de forma graciosa e não-destrutiva sem recodificar pixels.
+Arquivos RAW e vídeos NUNCA são regravados fisicamente pelo ExifTool (Zero Data Loss);
+sua taxonomia permanece preservada no nome do arquivo, subpasta e SQLite.
 Painel Rich Live padronizado com acompanhamento em tempo real.
 """
 
@@ -18,9 +19,11 @@ from rich.console import Console
 from rich.live import Live
 
 from src.core.config import config
+from src.core.geo import GeoService, GEO_WRITABLE_EXTS
 from src.core.pipeline import PipelineStage
 from src.core.project import Project, init_central_db
 from src.core.ui import ProgressTracker, PipelineUI
+from src.modules.ingestion.strategies.base import compute_file_hash
 from .action import apply_bird_metadata
 
 console = Console()
@@ -73,6 +76,7 @@ class BirdTagStage(PipelineStage):
         # Mapear arquivos físicos a serem tagueados: dict[Path, record]
         files_to_tag: Dict[Path, Dict[str, Any]] = {}
         burst_records: Dict[str, Dict[str, Any]] = {}
+        seen_non_writable: set[Path] = set()
 
         for rec in records:
             conf = float(rec.get("confidence", 0.0))
@@ -102,7 +106,10 @@ class BirdTagStage(PipelineStage):
                     continue
                 p = Path(item.organized_path or item.staging_path or item.original_path)
                 if p.exists():
-                    files_to_tag[p] = rec
+                    if p.suffix.lower() in GEO_WRITABLE_EXTS:
+                        files_to_tag[p] = rec
+                    else:
+                        seen_non_writable.add(p.resolve())
                 b_id = getattr(item, "burst_id", "") or ""
                 if b_id:
                     burst_records[b_id] = rec
@@ -118,20 +125,28 @@ class BirdTagStage(PipelineStage):
                 if cat_s in ("timelapse", "timelapse_long_exposure", "astro_lua") or any(f in rel_s for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")) or any(f in p_s_norm for f in ("4_Timelapses", "4_Timelapses_LongaExposicao", "5_Astrofotografia")):
                     continue
                 if sib_p.exists() and sib_p not in files_to_tag:
-                    files_to_tag[sib_p] = rec
+                    if sib_p.suffix.lower() in GEO_WRITABLE_EXTS:
+                        files_to_tag[sib_p] = rec
+                    else:
+                        seen_non_writable.add(sib_p.resolve())
 
+        skipped_non_writable = len(seen_non_writable)
         total_files = len(files_to_tag)
         if total_files == 0:
-            console.print("[dim]Nenhum arquivo elegível de ave com alta certeza para injeção de metadados.[/dim]")
+            if skipped_non_writable > 0:
+                console.print(
+                    f"[green]✔ {skipped_non_writable} arquivo(s) RAW/vídeo de ave preservado(s) intacto(s) "
+                    f"(Zero Data Loss — taxonomia mantida no nome, pasta e SQLite).[/green]"
+                )
+            else:
+                console.print("[dim]Nenhum arquivo elegível de ave com alta certeza para injeção de metadados.[/dim]")
             return True
 
         # Obter tags da localização do projeto para incorporar palavras-chave geográficas
         project_loc = None
         if hasattr(project, "geo_location_id") and project.geo_location_id:
-            from src.core.geo import GeoService
             project_loc = GeoService.get_location(project.geo_location_id)
         if not project_loc:
-            from src.core.geo import GeoService
             project_loc = GeoService.get_default_location()
 
         extra_geo_tags = project_loc.get_tags() if project_loc else []
@@ -142,6 +157,7 @@ class BirdTagStage(PipelineStage):
 
         success_count = 0
         error_count = 0
+        modified_paths: List[Path] = []
 
         with Live(
             PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, "Carregando...", "Iniciando"),
@@ -155,6 +171,7 @@ class BirdTagStage(PipelineStage):
                     ok = apply_bird_metadata(file_path, rec, extra_keywords=extra_geo_tags)
                     if ok:
                         success_count += 1
+                        modified_paths.append(file_path)
                     else:
                         error_count += 1
                 except Exception:
@@ -164,8 +181,31 @@ class BirdTagStage(PipelineStage):
 
             live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, "Concluído", "Finalizando"))
 
+        if modified_paths:
+            seen_saved_keys = set()
+            with project.transaction():
+                for file_path in modified_paths:
+                    if not file_path.exists():
+                        continue
+                    it = items_by_path.get(str(file_path))
+                    if it is None:
+                        try:
+                            it = items_by_path.get(str(file_path.resolve()))
+                        except Exception:
+                            it = None
+                    if it is None:
+                        continue
+                    if it.original_path in seen_saved_keys:
+                        continue
+                    seen_saved_keys.add(it.original_path)
+                    it.file_size_bytes = file_path.stat().st_size
+                    it.file_hash = compute_file_hash(file_path)
+                    project.save_item(it)
+
         console.print(f"[bold green]OK: Injeção de metadados de aves concluída![/bold green]")
         console.print(f"  [green]• Arquivos com metadados EXIF/IPTC gravados com sucesso:[/green] [bold cyan]{success_count}[/bold cyan]")
+        if skipped_non_writable > 0:
+            console.print(f"  [dim]• Arquivos RAW/vídeo preservados intactos (Zero Data Loss):[/dim] [cyan]{skipped_non_writable}[/cyan]")
         if error_count > 0:
             console.print(f"  [yellow]• Arquivos com falha ou gravação ignorada:[/yellow] {error_count}")
 

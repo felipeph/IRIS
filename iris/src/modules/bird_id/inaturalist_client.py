@@ -478,7 +478,9 @@ class INaturalistClient:
             if isinstance(observed_on, datetime):
                 data_payload["observed_on"] = observed_on.strftime("%Y-%m-%d %H:%M:%S")
             else:
-                data_payload["observed_on"] = str(observed_on)
+                obs_str = str(observed_on).strip()
+                if obs_str:
+                    data_payload["observed_on"] = obs_str
         if taxon_id is not None:
             data_payload["taxon_id"] = str(taxon_id)
 

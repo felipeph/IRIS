@@ -104,3 +104,52 @@ def test_people_catalog_roundtrip():
     assert PeopleCatalog.rename("Beto", "Roberto")
     assert PeopleCatalog.delete("Ana")
     assert PeopleCatalog.list() == ["Roberto"]
+
+
+def test_apply_event_tags_updates_file_size_and_hash_and_checks_returncode(tmp_path):
+    """Valida que apply_event_tags checa returncode == 0 e atualiza file_size_bytes/file_hash no SQLite."""
+    from unittest.mock import MagicMock, patch
+    from PIL import Image
+    from src.core.event import apply_event_tags
+    from src.core.project import ProjectItem
+    from src.modules.ingestion.strategies.base import compute_file_hash
+
+    proj = create_project("evt_hash_proj", str(tmp_path / "src"), event=EventInfo("Casamento", ["Ana"]))
+    jpg_file = tmp_path / "foto_evento.jpg"
+    Image.new("RGB", (20, 20), color="white").save(jpg_file, "JPEG")
+    raw_file = tmp_path / "foto_evento.CR2"
+    raw_file.write_bytes(b"RAW_EVENT_BYTES")
+
+    orig_jpg_hash = compute_file_hash(jpg_file)
+    orig_raw_hash = compute_file_hash(raw_file)
+
+    proj.save_items_batch([
+        ProjectItem(str(jpg_file), str(jpg_file), organized_path=str(jpg_file), status="organized", file_size_bytes=jpg_file.stat().st_size, file_hash=orig_jpg_hash),
+        ProjectItem(str(raw_file), str(raw_file), organized_path=str(raw_file), status="organized", file_size_bytes=raw_file.stat().st_size, file_hash=orig_raw_hash),
+    ])
+
+    def fake_run_ok(cmd, **kwargs):
+        with open(jpg_file, "ab") as f:
+            f.write(b"_EVT")
+        return MagicMock(returncode=0)
+
+    with patch("src.core.event.shutil.which", return_value="exiftool"), \
+         patch("src.core.event.subprocess.run", side_effect=fake_run_ok):
+        count_ok = apply_event_tags(proj)
+
+    assert count_ok == 1
+    it_jpg = proj.get_item(str(jpg_file))
+    new_jpg_hash = compute_file_hash(jpg_file)
+    assert new_jpg_hash != orig_jpg_hash
+    assert it_jpg.file_hash == new_jpg_hash
+    assert it_jpg.file_size_bytes == jpg_file.stat().st_size
+    assert proj.get_item(str(raw_file)).file_hash == orig_raw_hash
+
+    # Em caso de falha do ExifTool (returncode != 0), não conta e não sobrescreve hash
+    with patch("src.core.event.shutil.which", return_value="exiftool"), \
+         patch("src.core.event.subprocess.run", return_value=MagicMock(returncode=1)):
+        count_fail = apply_event_tags(proj)
+
+    assert count_fail == 0
+    assert proj.get_item(str(jpg_file)).file_hash == new_jpg_hash
+

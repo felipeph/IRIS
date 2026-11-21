@@ -12,9 +12,10 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Optional
 
 from src.core.geo import GEO_WRITABLE_EXTS
+from src.modules.ingestion.strategies.base import compute_file_hash
 
 # Etapas que não fazem sentido em projetos de álbum (tratados sempre como fotos avulsas).
 ALBUM_SKIPPED_STAGE_IDS = frozenset({
@@ -172,7 +173,7 @@ def apply_event_tags(project, previous: Optional[EventInfo] = None, console=None
             console.print("[yellow]ExifTool não encontrado: tags de evento não aplicadas.[/yellow]")
         return 0
 
-    paths: List[Path] = []
+    targets: List[tuple[Path, Any]] = []
     seen = set()
     for it in project.get_items(status="organized"):
         p_str = it.organized_path or it.staging_path
@@ -183,27 +184,39 @@ def apply_event_tags(project, previous: Optional[EventInfo] = None, console=None
         if key in seen or not p.exists() or p.suffix.lower() not in GEO_WRITABLE_EXTS:
             continue
         seen.add(key)
-        paths.append(p)
+        targets.append((p, it))
 
-    if not paths:
+    if not targets:
         return 0
 
     args = build_exiftool_event_args(event, previous=previous)
     batch = 500
     done = 0
-    for i in range(0, len(paths), batch):
-        chunk = paths[i:i + batch]
+    for i in range(0, len(targets), batch):
+        chunk = targets[i:i + batch]
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
             for a in args:
                 f.write(f"{a}\n")
             f.write("-overwrite_original\n-P\n-charset\nfilename=UTF8\n")
-            for p in chunk:
+            for p, _ in chunk:
                 f.write(f"{p.resolve()}\n")
             argfile = f.name
         try:
-            subprocess.run([exiftool_bin, "-charset", "UTF8", "-@", argfile],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace")
-            done += len(chunk)
+            proc = subprocess.run(
+                [exiftool_bin, "-charset", "UTF8", "-@", argfile],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode == 0:
+                done += len(chunk)
+                with project.transaction():
+                    for p, it in chunk:
+                        if p.exists():
+                            it.file_size_bytes = p.stat().st_size
+                            it.file_hash = compute_file_hash(p)
+                            project.save_item(it)
         finally:
             try:
                 os.unlink(argfile)

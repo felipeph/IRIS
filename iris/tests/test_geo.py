@@ -382,3 +382,50 @@ def test_exiftool_geo_args_accents_utf8(tmp_path):
             os.unlink(argfile)
 
 
+def test_build_exiftool_geo_args_removes_previous_location_tags_and_clears_empty_fields():
+    """Valida remoção cirúrgica de tags antigas e limpeza de campos escalares vazios em reaplicação."""
+    loc_old = GeoLocation(
+        id="old-loc",
+        label="Parque Antigo - Cidade Antiga - MG",
+        lat=-20.45,
+        lng=-45.43,
+        city="Cidade Antiga",
+        state="Minas Gerais",
+        country="Brasil",
+        suburb="Bairro Antigo",
+        poi="Parque Antigo",
+    )
+    loc_new = GeoLocation(
+        id="new-loc",
+        label="Ponto Novo",
+        lat=-19.96,
+        lng=-43.95,
+        city="Cidade Nova",
+        state="Minas Gerais",
+        country="Brasil",
+        suburb="",
+        poi="",
+    )
+    args = build_exiftool_geo_args(loc_new, is_video=False, ext=".jpg", previous_loc=loc_old)
+
+    # Tags exclusivas do local antigo devem ser removidas antes da adição das novas
+    assert "-Keywords-=Parque Antigo" in args
+    assert "-Subject-=Parque Antigo" in args
+    assert "-Keywords-=Cidade Antiga" in args
+    assert args.index("-Keywords-=Cidade Antiga") < args.index("-Keywords+=Cidade Nova")
+
+    # Tags compartilhadas entre os dois locais NÃO devem ser removidas
+    assert "-Keywords-=Minas Gerais" not in args
+    assert "-Keywords-=Brasil" not in args
+
+    # Campos escalares vazios em reaplicação devem ser limpos explicitamente
+    loc_empty = GeoLocation(id="empty-loc", label="", lat=0.0, lng=0.0, city="", state="", country="", suburb="", poi="")
+    clear_args = build_exiftool_geo_args(loc_empty, is_video=False, ext=".jpg", previous_tags=["TagAntiga"])
+    assert "-Keywords-=TagAntiga" in clear_args
+    assert "-IPTC:City=" in clear_args
+    assert "-XMP-photoshop:City=" in clear_args
+    assert "-IPTC:Sub-location=" in clear_args
+    assert "-XPKeywords=" in clear_args
+
+
+
