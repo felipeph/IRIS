@@ -34,6 +34,7 @@ from .timelapse import (
     build_rich_youtube_description,
 )
 from .video_edit import (
+    format_chapters_block,
     build_edited_video_youtube_title,
     build_edited_video_youtube_metadata,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "build_youtube_title",
     "build_youtube_tags",
     "build_rich_youtube_description",
+    "format_chapters_block",
     "build_edited_video_youtube_title",
     "build_edited_video_youtube_metadata",
 ]

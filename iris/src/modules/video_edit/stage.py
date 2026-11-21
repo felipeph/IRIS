@@ -316,10 +316,12 @@ class VideoEditStage(PipelineStage):
 
             # Resolve caminhos físicos reais dos arquivos de entrada
             clip_paths: List[Path] = []
+            valid_items: List[ProjectItem] = []
             for it in s_items:
                 candidate = Path(it.organized_path) if it.organized_path else Path(it.staging_path)
                 if candidate.exists():
                     clip_paths.append(candidate)
+                    valid_items.append(it)
                 else:
                     console.print(f"[red]Aviso: Arquivo de vídeo de origem não encontrado: {candidate}[/red]")
 
@@ -371,6 +373,29 @@ class VideoEditStage(PipelineStage):
                     "unsharp_enabled": render_stats.get("unsharp_enabled", False),
                     "render_stats": render_stats
                 }
+
+                effective_durs = render_stats.get("clip_effective_durations") or []
+                clips_timeline = []
+                for idx, (it, c_path) in enumerate(zip(valid_items, clip_paths), 1):
+                    it_dt = parse_item_datetime(it)
+                    if (idx - 1) < len(effective_durs):
+                        dur_val = float(effective_durs[idx - 1])
+                    else:
+                        dur_val = parse_duration_seconds(it) / max(0.1, speed_factor)
+                    make_str = (it.meta_camera_make or "").strip()
+                    model_str = (it.meta_camera_model or "").strip()
+                    if make_str and model_str and not model_str.lower().startswith(make_str.lower()):
+                        item_cam = f"{make_str} {model_str}"
+                    else:
+                        item_cam = model_str or make_str or cam
+                    clips_timeline.append({
+                        "index": idx,
+                        "filename": c_path.name,
+                        "time_str": it_dt.strftime("%H:%M:%S") if it_dt else "",
+                        "camera": item_cam,
+                        "duration_seconds": round(max(0.0, dur_val), 3),
+                    })
+                rich_meta["clips_timeline"] = clips_timeline
 
                 bird_ident = sdata.get("bird_ident")
                 if bird_ident:

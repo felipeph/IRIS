@@ -638,6 +638,10 @@ def render_edited_video(
 
     total_trimmed_dur = sum(trimmed_durs) if trimmed_durs else total_orig_dur
     expected_final_dur = total_trimmed_dur / speed if speed > 0 else total_trimmed_dur
+    clip_effective_durations = [
+        round((d_trim / speed) if speed > 0 else d_trim, 3)
+        for d_trim in trimmed_durs
+    ]
     total_expected_frames = max(1, int(round(expected_final_dur * target_fps)))
 
     output_video_path.parent.mkdir(parents=True, exist_ok=True)
@@ -737,6 +741,7 @@ def render_edited_video(
                     "trim_seconds": trim_sec if trim_enabled else 0.0,
                     "two_step_concat": False,
                     "parts_rendered": 1,
+                    "clip_effective_durations": clip_effective_durations,
                 }
                 return True, encoder_name, "", stats
 
@@ -869,6 +874,7 @@ def render_edited_video(
                     "trim_seconds": trim_sec if trim_enabled else 0.0,
                     "two_step_concat": True,
                     "parts_rendered": len(part_paths),
+                    "clip_effective_durations": clip_effective_durations,
                 }
                 return True, encoder_name, "", stats
 

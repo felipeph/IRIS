@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from .formatting import (
     _extract_temporal_context,
@@ -56,6 +56,57 @@ def build_edited_video_youtube_title(
     if len(title) > 100:
         title = title[:97] + "..."
     return title
+
+
+def _format_chapter_timestamp(seconds: int, use_hours: bool) -> str:
+    """Formata segundos inteiros em MM:SS ou HH:MM:SS para capítulos do YouTube."""
+    sec = max(0, int(seconds))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if use_hours else f"{m:02d}:{s:02d}"
+
+
+def format_chapters_block(clips_timeline: List[Dict[str, Any]], max_chapters: int = 100) -> str:
+    """
+    Gera bloco de capítulos nativos do YouTube (iniciando em 00:00) para vídeos
+    concatenados com 2 ou mais tomadas. Retorna string vazia para vídeo unitário.
+    """
+    if not clips_timeline or len(clips_timeline) < 2:
+        return ""
+
+    total_sec = sum(max(0.0, float(c.get("duration_seconds") or 0.0)) for c in clips_timeline)
+    use_hours = total_sec >= 3600
+
+    distinct_cameras = {
+        str(c.get("camera") or "").strip()
+        for c in clips_timeline
+        if str(c.get("camera") or "").strip()
+    }
+    show_camera = len(distinct_cameras) > 1
+
+    lines: List[str] = []
+    offset_sec = 0.0
+    last_sec = -1
+    for idx, entry in enumerate(clips_timeline[:max_chapters], 1):
+        sec = 0 if idx == 1 else max(last_sec + 1, int(round(offset_sec)))
+        last_sec = sec
+
+        ts = _format_chapter_timestamp(sec, use_hours)
+        time_str = str(entry.get("time_str") or "").strip()
+        fname = str(entry.get("filename") or "").strip()
+        detail = time_str or (Path(fname).stem if fname else "")
+        cam_str = str(entry.get("camera") or "").strip()
+
+        line = f"{ts} Tomada {idx}"
+        if detail:
+            line += f" - {detail}"
+        if show_camera and cam_str:
+            line += f" ({cam_str})"
+        lines.append(line)
+
+        offset_sec += max(0.0, float(entry.get("duration_seconds") or 0.0))
+
+    return "📑 CAPÍTULOS (TOMADAS):\n" + "\n".join(lines)
 
 
 def build_edited_video_youtube_metadata(
@@ -236,8 +287,11 @@ def build_edited_video_youtube_metadata(
         if geo_hts:
             geo_hts_str = " ".join(geo_hts) + " "
 
+    chapters_block = format_chapters_block(meta.get("clips_timeline") or [])
+    chapters_section = f"\n\n{chapters_block}\n" if chapters_block else ""
+
     description = f"""{intro_hook}Vídeo capturado e masterizado em altíssima definição 4K UHD ({target_res}) a {target_fps} FPS.
-Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Imaging Resources and Integration System).{bird_section}{loc_section}
+Gravado em {dt_prefix}, produzido e publicado de forma automatizada pelo IRIS (Imaging Resources and Integration System).{bird_section}{loc_section}{chapters_section}
 ⏱️ TEMPO, CAPTURA E VELOCIDADE:
 • Data e Hora de Captura: {dt_prefix}
 • Duração Original da Gravação: {format_duration_human(orig_dur)} ({orig_dur:.1f}s)

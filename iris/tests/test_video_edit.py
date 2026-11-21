@@ -34,8 +34,9 @@ from src.modules.video_edit.renderer import (
 )
 from src.modules.video_edit.stage import get_stage as get_video_edit_stage
 from src.modules.youtube.describer import (
+    format_chapters_block,
     build_edited_video_youtube_metadata,
-    build_edited_video_youtube_title
+    build_edited_video_youtube_title,
 )
 
 
@@ -1404,5 +1405,211 @@ def test_group_videos_into_sessions_preloads_bird_map_once(tmp_path):
     assert get_spy.call_count == 0
     # 2 vídeos de Bem-te-vi unidos em 1 sessão + 13 individuais = 14 sessões
     assert len(sessions) == 14
+
+
+def test_render_edited_video_returns_clip_effective_durations_with_speed_and_trim(tmp_path, monkeypatch):
+    """Valida que render_edited_video retorna clip_effective_durations respeitando trim e speed."""
+    import io
+    import subprocess
+
+    c1 = tmp_path / "c1.mp4"
+    c2 = tmp_path / "c2.mp4"
+    c3 = tmp_path / "c3.mp4"
+    for c in (c1, c2, c3):
+        c.write_bytes(b"dummy")
+    out_video = tmp_path / "joined.mp4"
+
+    # c1=20s (trim 2+2 -> 16s / 2.0 = 8.0s), c2=4s (<= 2*2+1=5s, sem trim -> 4s / 2.0 = 2.0s), c3=30s (trim 2+2 -> 26s / 2.0 = 13.0s)
+    durations_by_name = {"c1.mp4": 20.0, "c2.mp4": 4.0, "c3.mp4": 30.0}
+    monkeypatch.setattr(
+        "src.modules.video_edit.renderer.get_video_stream_info",
+        lambda p: {"duration": durations_by_name[p.name], "width": 1920, "height": 1080, "has_audio": False},
+    )
+    monkeypatch.setattr(
+        "src.modules.video_edit.renderer.detect_ffmpeg_encoder",
+        lambda preset="slow", crf=16, force_cpu=False: ("libx264 (CPU)", ["-c:v", "libx264"]),
+    )
+
+    class MockPopen:
+        def __init__(self, cmd, *args, **kwargs):
+            self.stdout = []
+            self.stderr = io.StringIO("")
+            self.returncode = 0
+            Path(cmd[-1]).write_bytes(b"0" * 2000)
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self):
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", MockPopen)
+
+    ok, _, err, stats = render_edited_video(
+        clip_paths=[c1, c2, c3],
+        output_video_path=out_video,
+        config={"speed": 2.0, "trim_enabled": True, "trim_seconds": 2.0, "target_fps": 60, "render_profile": "quality"},
+    )
+
+    assert ok is True
+    assert err == ""
+    assert stats["clip_effective_durations"] == [8.0, 2.0, 13.0]
+
+
+def test_video_edit_stage_persists_clips_timeline(tmp_path, monkeypatch):
+    """Garante que VideoEditStage persiste metadata_json['clips_timeline'] pareado com os clipes reais."""
+    proj = create_project("TestClipsTimeline", str(tmp_path))
+
+    orig_dir = tmp_path / "DCIM" / "100CANON"
+    orig_dir.mkdir(parents=True)
+    v1 = orig_dir / "VID_01.mp4"
+    v2 = orig_dir / "VID_02.mp4"
+    v1.write_bytes(b"v1")
+    v2.write_bytes(b"v2")
+
+    it1 = ProjectItem(
+        original_path=str(v1),
+        staging_path=str(v1),
+        organized_path=str(v1),
+        category="video",
+        meta_camera_make="Canon",
+        meta_camera_model="SX60",
+        meta_timestamp="2026-11-21T14:30:12",
+        meta_duration_str="20s",
+    )
+    it2 = ProjectItem(
+        original_path=str(v2),
+        staging_path=str(v2),
+        organized_path=str(v2),
+        category="video",
+        meta_camera_make="Canon",
+        meta_camera_model="SX60",
+        meta_timestamp="2026-11-21T14:31:05",
+        meta_duration_str="26s",
+    )
+    proj.save_items_batch([it1, it2])
+
+    def mock_render(clip_paths, output_video_path, config):
+        output_video_path.parent.mkdir(parents=True, exist_ok=True)
+        output_video_path.write_bytes(b"0" * 2000)
+        return True, "libx264", "", {
+            "final_duration_seconds": 42.5,
+            "trim_seconds": 2.0,
+            "clip_effective_durations": [18.5, 24.0],
+        }
+
+    monkeypatch.setattr("src.modules.video_edit.stage.render_edited_video", mock_render)
+    monkeypatch.setattr("src.modules.video_edit.stage.send_windows_toast", lambda *a, **k: None)
+    monkeypatch.setattr("src.modules.video_edit.stage.send_ntfy_notification", lambda *a, **k: None)
+
+    stage = get_video_edit_stage("video_edit", "Edição de Vídeo")
+    ok = stage.run(proj, interactive=False, mode="joined")
+    assert ok is True
+
+    recs = proj.get_edited_videos()
+    assert len(recs) == 1
+    timeline = recs[0]["metadata_json"]["clips_timeline"]
+    assert timeline == [
+        {
+            "index": 1,
+            "filename": "VID_01.mp4",
+            "time_str": "14:30:12",
+            "camera": "Canon SX60",
+            "duration_seconds": 18.5,
+        },
+        {
+            "index": 2,
+            "filename": "VID_02.mp4",
+            "time_str": "14:31:05",
+            "camera": "Canon SX60",
+            "duration_seconds": 24.0,
+        },
+    ]
+
+
+def test_format_chapters_block_rules_and_edge_cases():
+    """Valida formatação MM:SS, HH:MM:SS, Multi-Camera, fallback de nome e ordem crescente."""
+    assert format_chapters_block([]) == ""
+    assert format_chapters_block([{"filename": "a.mp4", "time_str": "10:00:00", "duration_seconds": 30.0}]) == ""
+
+    # Câmera única < 1h -> MM:SS sem sufixo de câmera
+    single_cam = [
+        {"filename": "c1.mp4", "time_str": "14:30:12", "camera": "Canon SX60", "duration_seconds": 18.0},
+        {"filename": "c2.mp4", "time_str": "14:31:05", "camera": "Canon SX60", "duration_seconds": 24.0},
+        {"filename": "c3.mp4", "time_str": "14:33:10", "camera": "Canon SX60", "duration_seconds": 15.0},
+    ]
+    block_single = format_chapters_block(single_cam)
+    assert block_single == (
+        "📑 CAPÍTULOS (TOMADAS):\n"
+        "00:00 Tomada 1 - 14:30:12\n"
+        "00:18 Tomada 2 - 14:31:05\n"
+        "00:42 Tomada 3 - 14:33:10"
+    )
+
+    # Multi-Câmera + duração total >= 1h -> HH:MM:SS com modelo da câmera
+    multi_cam_long = [
+        {"filename": "m1.mp4", "time_str": "08:00:00", "camera": "Canon SX60", "duration_seconds": 2400.0},
+        {"filename": "m2.mp4", "time_str": "08:45:00", "camera": "GoPro Hero 11", "duration_seconds": 1800.0},
+        {"filename": "m3.mp4", "time_str": "", "camera": "Canon SX60", "duration_seconds": 600.0},
+    ]
+    block_long = format_chapters_block(multi_cam_long)
+    assert block_long == (
+        "📑 CAPÍTULOS (TOMADAS):\n"
+        "00:00:00 Tomada 1 - 08:00:00 (Canon SX60)\n"
+        "00:40:00 Tomada 2 - 08:45:00 (GoPro Hero 11)\n"
+        "01:10:00 Tomada 3 - m3 (Canon SX60)"
+    )
+
+    # Clipes sub-segundo mantêm timestamps estritamente crescentes
+    sub_sec = [
+        {"filename": "s1.mp4", "time_str": "09:00:00", "camera": "Cam", "duration_seconds": 0.4},
+        {"filename": "s2.mp4", "time_str": "09:00:05", "camera": "Cam", "duration_seconds": 0.4},
+    ]
+    block_sub = format_chapters_block(sub_sec)
+    assert "00:00 Tomada 1 - 09:00:00" in block_sub
+    assert "00:01 Tomada 2 - 09:00:05" in block_sub
+
+
+def test_build_edited_video_youtube_metadata_includes_chapters_for_joined_and_omits_for_single(tmp_path):
+    """Garante inserção do bloco de capítulos antes da ficha técnica apenas em vídeos concatenados."""
+    vid_path = tmp_path / "2026-11-21_14-30_SX60_3clipes_1920x1080-to-3840x2160_fps-30-to-60_1-0x_trim2-0s_audio_01m00s.mp4"
+    vid_path.write_bytes(b"dummy")
+
+    joined_rec = {
+        "output_video_path": str(vid_path),
+        "clip_count": 3,
+        "mode": "joined",
+        "metadata_json": {
+            "camera_model": "SX60",
+            "first_dt_formatted": "21/11/2026 às 14:30:12",
+            "clips_timeline": [
+                {"index": 1, "filename": "c1.mp4", "time_str": "14:30:12", "camera": "Canon SX60", "duration_seconds": 18.0},
+                {"index": 2, "filename": "c2.mp4", "time_str": "14:31:05", "camera": "Canon SX60", "duration_seconds": 24.0},
+                {"index": 3, "filename": "c3.mp4", "time_str": "14:33:10", "camera": "Canon SX60", "duration_seconds": 18.0},
+            ],
+        },
+    }
+    meta_joined = build_edited_video_youtube_metadata(vid_path, joined_rec, {})
+    desc_joined = meta_joined["description"]
+    assert len(desc_joined) <= 5000
+    assert "📑 CAPÍTULOS (TOMADAS):" in desc_joined
+    assert "00:00 Tomada 1 - 14:30:12" in desc_joined
+    assert "00:18 Tomada 2 - 14:31:05" in desc_joined
+    assert "00:42 Tomada 3 - 14:33:10" in desc_joined
+    assert desc_joined.index("📑 CAPÍTULOS (TOMADAS):") < desc_joined.index("⏱️ TEMPO, CAPTURA E VELOCIDADE:")
+
+    single_rec = {
+        "output_video_path": str(vid_path),
+        "clip_count": 1,
+        "mode": "individual",
+        "metadata_json": {
+            "camera_model": "SX60",
+            "clips_timeline": [
+                {"index": 1, "filename": "c1.mp4", "time_str": "14:30:12", "camera": "Canon SX60", "duration_seconds": 20.0},
+            ],
+        },
+    }
+    meta_single = build_edited_video_youtube_metadata(vid_path, single_rec, {})
+    assert "📑 CAPÍTULOS (TOMADAS):" not in meta_single["description"]
 
 
