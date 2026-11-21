@@ -344,9 +344,10 @@ def render_timelapse_video(
         current_frame = 0
         current_fps = 0.0
         current_speed = "0.0x"
+        stage_title = "ETAPA: RENDERIZAÇÃO DE TIMELAPSE 4K (GPU/CPU)"
 
         with Live(PipelineUI.generate_video_renderable(
-            stage_title="ETAPA 5: RENDERIZAÇÃO DE TIMELAPSE 4K (GPU/CPU)",
+            stage_title=stage_title,
             start_str=start_str,
             total_photos=photo_count,
             total_frames=total_frames,
@@ -399,7 +400,7 @@ def render_timelapse_video(
                         previsao_str = datetime.now().strftime("%H:%M:%S")
 
                     live.update(PipelineUI.generate_video_renderable(
-                        stage_title="ETAPA 5: RENDERIZAÇÃO DE TIMELAPSE 4K (GPU/CPU)",
+                        stage_title=stage_title,
                         start_str=start_str,
                         total_photos=photo_count,
                         total_frames=total_frames,
@@ -421,7 +422,7 @@ def render_timelapse_video(
 
             if process.returncode == 0 and output_video_path.exists():
                 live.update(PipelineUI.generate_video_renderable(
-                    stage_title="ETAPA 5: RENDERIZAÇÃO DE TIMELAPSE 4K (GPU/CPU)",
+                    stage_title=stage_title,
                     start_str=start_str,
                     total_photos=photo_count,
                     total_frames=total_frames,

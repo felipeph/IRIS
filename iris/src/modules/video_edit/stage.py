@@ -41,7 +41,7 @@ def parse_speed_arg(speed_input: Any, default: float = 1.0) -> float:
 
 class VideoEditStage(PipelineStage):
     """
-    Etapa 6: Edição e Upscale de Vídeos 4K UHD para 7_Video_Editado_4K.
+    Edição e Upscale de Vídeos 4K UHD para 7_Video_Editado_4K.
     Identifica arquivos categorizados como 'video', aplica seleção interativa,
     suporta processamento individual ou junção de sessão, trimming configurável,
     controle de velocidade (--speed=Nx), teto de 60 FPS, Lanczos 4K e deband 16-bit.
@@ -109,7 +109,7 @@ class VideoEditStage(PipelineStage):
         render_profile = ve_config.get("render_profile", "fast")
         auto_join_label = " | Auto-Join Aves: ATIVADO" if auto_join_birds else ""
 
-        console.print(f"\n[bold cyan]=== Etapa 6: Edição e Upscale de Vídeos 4K ({len(video_items)} clipe(s) em {total_sessions} lote(s) | Modo: {mode.upper()}{auto_join_label} | Perfil: {render_profile.upper()} | Velocidade: {speed_label} | FPS Alvo: {target_fps}) ===[/bold cyan]")
+        console.print(f"\n[bold cyan]=== {self.name} ({len(video_items)} clipe(s) em {total_sessions} lote(s) | Modo: {mode.upper()}{auto_join_label} | Perfil: {render_profile.upper()} | Velocidade: {speed_label} | FPS Alvo: {target_fps}) ===[/bold cyan]")
 
         # 3. Exibir Tabela Rich com resumo dos itens e status
         summary_table = Table(title="Vídeos Detectados para Edição e Upscale 4K", show_header=True, header_style="bold magenta")
@@ -433,10 +433,10 @@ class VideoEditStage(PipelineStage):
                 time.sleep(1.0)
 
         if error_count > 0:
-            console.print(f"[yellow]Etapa 6 finalizada com {error_count} erro(s) e {success_count} sucesso(s).[/yellow]")
+            console.print(f"[yellow]{self.name} finalizada com {error_count} erro(s) e {success_count} sucesso(s).[/yellow]")
             return False
 
-        console.print(f"[bold green]Etapa 6 concluída com sucesso! ({success_count} vídeo(s) masterizado(s) em 4K).[/bold green]")
+        console.print(f"[bold green]{self.name} concluída com sucesso! ({success_count} vídeo(s) masterizado(s) em 4K).[/bold green]")
         return True
 
 def get_stage(stage_id: str, name: str) -> PipelineStage:

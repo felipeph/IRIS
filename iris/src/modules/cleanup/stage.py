@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.prompt import Confirm
 
 from src.core.config import config
+from src.core.cleanup import clean_empty_directories
 from src.core.pipeline import PipelineStage
 from src.core.project import Project
 from src.core.reporter import ProgressReporter, RichConsoleReporter
@@ -101,7 +102,7 @@ def generate_renderable(tracker, start_str, total_files, total_gb, current_file_
         f"  [bold]• Arquivos:[/bold]  {total_files:,}\n"
         f"  [bold]• Volume:[/bold]    {total_gb:.2f} GB"
     )
-    top_panel = Panel(info_text, title="ETAPA 4: LIMPEZA DA ORIGEM (SD)", title_align="left", border_style="red", expand=False)
+    top_panel = Panel(info_text, title="ETAPA: LIMPEZA DA ORIGEM (SD)", title_align="left", border_style="red", expand=False)
     
     completed = tracker.deleted_bytes
     total = tracker.total_bytes
@@ -119,13 +120,13 @@ def generate_renderable(tracker, start_str, total_files, total_gb, current_file_
     table.add_column(style="bold red")
     table.add_column()
     
-    table.add_row("Operacao:", status_msg)
+    table.add_row("Operação:", status_msg)
     table.add_row("Arquivo atual:", f"[yellow]{current_file_name}[/yellow]")
     table.add_row("Progresso:", progress_table)
     table.add_row("Velocidade:", f"[cyan]{tracker.get_speed_str()}[/cyan]")
     table.add_row("Tempo decorrido:", tracker.get_elapsed_str())
     table.add_row("Tempo restante:", f"[magenta]{tracker.get_eta_str()}[/magenta]")
-    table.add_row("Previsao fim:", f"[bold cyan]{tracker.get_previsao_fim_str()}[/bold cyan]")
+    table.add_row("Previsão fim:", f"[bold cyan]{tracker.get_previsao_fim_str()}[/bold cyan]")
     
     return Group(top_panel, "", table)
 
@@ -289,18 +290,7 @@ class CleanupStage(PipelineStage):
                     
         # Limpar pastas vazias
         console.print("[cyan]Iniciando remoção de pastas vazias na origem...[/cyan]")
-        empty_dirs_removed = 0
-        for dirpath, dirnames, filenames in os.walk(source_dir, topdown=False):
-            # Não tentar apagar o diretório raiz da origem
-            if Path(dirpath) == source_dir:
-                continue
-                
-            try:
-                if not os.listdir(dirpath): # se estiver vazio
-                    os.rmdir(dirpath)
-                    empty_dirs_removed += 1
-            except OSError:
-                pass
+        empty_dirs_removed = clean_empty_directories(source_dir, preserve_root=True)
                 
         console.print(f"\n[green]Limpeza concluída![/green]")
         console.print(f"  • [cyan]Arquivos removidos:[/cyan] {deleted_count}")

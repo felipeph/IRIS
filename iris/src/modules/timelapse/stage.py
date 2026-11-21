@@ -21,7 +21,7 @@ console = Console()
 
 class TimelapseStage(PipelineStage):
     """
-    Etapa 5: Renderização de Timelapse 4K UHD para 6_Produzidos.
+    Renderização de Timelapse 4K UHD para 6_Produzidos.
     Identifica sequências de fotos categorizadas como 'timelapse',
     aplica filtros de corte inteligente Lanczos, aceleração por hardware
     e registra o resultado nos bancos de dados do IRIS.
@@ -54,7 +54,7 @@ class TimelapseStage(PipelineStage):
             groups[key].append(it)
 
         total_sequences = len(groups)
-        console.print(f"\n[bold cyan]=== Etapa 5: Renderização de Timelapse 4K ({total_sequences} sequência(s) encontrada(s)) ===[/bold cyan]")
+        console.print(f"\n[bold cyan]=== {self.name} ({total_sequences} sequência(s) encontrada(s)) ===[/bold cyan]")
 
         # Exibir tabela de sequências planejadas
         summary_table = Table(title="Sequências de Timelapse do Projeto", show_header=True, header_style="bold magenta")
@@ -391,11 +391,11 @@ class TimelapseStage(PipelineStage):
                 error_count += 1
 
         if error_count > 0:
-            console.print(f"[yellow]Etapa 5 finalizada com {error_count} erro(s) e {success_count} sucesso(s).[/yellow]")
+            console.print(f"[yellow]{self.name} finalizada com {error_count} erro(s) e {success_count} sucesso(s).[/yellow]")
             return False
 
         clean_empty_directories(dest_root, preserve_root=True)
-        console.print(f"[bold green]Etapa 5 concluída com sucesso! ({success_count} timelapse(s) gerado(s)).[/bold green]")
+        console.print(f"[bold green]{self.name} concluída com sucesso! ({success_count} timelapse(s) gerado(s)).[/bold green]")
         return True
 
 def get_stage(stage_id: str, name: str) -> PipelineStage:

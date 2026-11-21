@@ -1,4 +1,3 @@
-import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -6,6 +5,7 @@ import xxhash
 
 from src.core.project import Project
 from src.core.metadata import MEDIA_EXTENSIONS
+from src.core.cleanup import clean_empty_directories
 
 def is_same_volume(path_a: Path, path_b: Path) -> bool:
     """Verifica se dois caminhos residem no mesmo volume/drive de arquivos."""
@@ -31,18 +31,6 @@ def compute_file_hash(path: Path, chunk_size: int = 4 * 1024 * 1024) -> str:
                 break
             hasher.update(chunk)
     return hasher.hexdigest()
-
-def clean_empty_directories(root_dir: Path):
-    """Remove pastas vazias recursivamente na origem, preservando a raiz."""
-    if not root_dir.exists():
-        return
-    for dirpath, _, _ in os.walk(str(root_dir), topdown=False):
-        p = Path(dirpath)
-        try:
-            if p.resolve() != root_dir.resolve() and p.exists() and not any(p.iterdir()):
-                p.rmdir()
-        except OSError:
-            pass
 
 class IngestionStrategy(ABC):
     """Classe base abstrata para estratégias de ingestão de mídia do IRIS."""

@@ -346,3 +346,27 @@ def test_move_strategy_legacy_extensions(tmp_path):
     assert (src_dir / "documento.pdf").exists()
     assert not (dest_dir / "documento.pdf").exists()
 
+
+def test_move_strategy_cleans_subdir_with_only_os_junk(tmp_path):
+    """Garante que subpasta na origem contendo apenas Thumbs.db após o move é removida mantendo a raiz."""
+    from src.modules.ingestion.strategies import MoveStrategy
+
+    src_dir = tmp_path / "DCIM_JUNK"
+    dest_dir = tmp_path / "DEST_JUNK"
+    sub_dir = src_dir / "100CANON"
+    sub_dir.mkdir(parents=True)
+    dest_dir.mkdir()
+
+    (sub_dir / "IMG_0001.JPG").write_bytes(b"jpeg_data")
+    (sub_dir / "Thumbs.db").write_bytes(b"junk_cache")
+
+    project = Project("test_move_junk", str(src_dir))
+    project._init_project_db()
+
+    strategy = MoveStrategy(max_workers=2)
+    assert strategy.execute(project, src_dir, dest_dir) is True
+
+    assert (dest_dir / "100CANON" / "IMG_0001.JPG").exists()
+    assert src_dir.exists()
+    assert not sub_dir.exists()
+
