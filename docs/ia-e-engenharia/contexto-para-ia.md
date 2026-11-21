@@ -27,18 +27,20 @@ iris/
 │   ├── core/                    # Infraestrutura e Serviços Centrais
 │   │   ├── config.py            # ConfigManager (parse, persistência, auto-migração e auto-cura UTF-8)
 │   │   ├── config_menu.py       # Hub principal do menu de configurações (fachada retrocompatível)
-│   │   ├── config_menus/        # Submenus modulares por domínio:
+│   │   ├── config_menus/        # Submenus modulares por domínio (10 categorias):
 │   │   │   ├── storage_org.py   # Armazenamento, Ingestão, Organização, Classificação e Rajadas
-│   │   │   ├── timelapse.py     # Timelapse Normal e Timelapse Longa Exposição
+│   │   │   ├── timelapse.py     # Timelapse Normal, Longa Exposição e Denoise
 │   │   │   ├── video_youtube.py # Edição de Vídeo 4K e YouTube & Notificações
 │   │   │   ├── astro.py         # Astrofotografia Lunar (PSS e Wavelets)
 │   │   │   ├── bird_id.py       # Identificação Taxonômica de Aves (YOLOv8 + iNaturalist)
-│   │   │   └── geolocation.py   # CRUD de Locais Predefinidos e Geotags
+│   │   │   ├── geolocation.py   # CRUD de Locais Predefinidos e Geotags
+│   │   │   └── events.py        # Eventos & Álbuns (catálogo de participantes e tags)
+│   │   ├── event.py             # Modo Evento/Álbum, ALBUM_SKIPPED_STAGE_IDS e apply_event_tags
 │   │   ├── project.py           # Project, ProjectItem e conexões SQLite (fachada retrocompatível)
 │   │   ├── project_mixins/      # Decomposição modular da persistência SQLite (RFC 09):
 │   │   │   ├── schema.py        # CURRENT_SCHEMA_VERSION e SHARED_TABLES_DDL
 │   │   │   ├── base.py          # ProjectBase, transações SAVEPOINT e Dual-Write ATTACH
-│   │   │   ├── items.py         # Queries O(1), filtros parametrizados e batch upsert em `items`
+│   │   │   ├── items.py         # Queries O(1), lookup indexado e batch upsert em `items`
 │   │   │   ├── media.py         # Persistência de `timelapses` e `edited_videos`
 │   │   │   ├── astro.py         # Persistência de `astro_stacks` e `astro_sharpens`
 │   │   │   ├── birds.py         # Persistência de `bird_identifications`
@@ -48,11 +50,11 @@ iris/
 │   │   ├── lock.py              # ProjectLock atômico via kernel (O_CREAT | O_EXCL) com TTL
 │   │   ├── cleanup.py           # Poda ascendente de diretórios vazios e descarte de Thumbs.db
 │   │   ├── metadata.py          # Extrator EXIF/ffprobe e normalização óptica
-│   │   ├── classifier.py        # MediaClassifier (normal, longa exposição, rajadas, lua)
+│   │   ├── classifier.py        # MediaClassifier (normal, longa exposição, rajadas, eventos, lua)
 │   │   ├── namer.py             # MediaNamer (formatação semântica com {gps} e taxonomia)
 │   │   ├── ui.py                # Painéis verticais Rich Live e ProgressTracker
 │   │   └── logger.py            # Logger centralizado com rotação por projeto
-│   └── modules/                 # Implementações dos 14 Estágios do Pipeline
+│   └── modules/                 # Implementações dos 15 Estágios do Pipeline
 │       ├── ingestion/           # Etapa 1: Ingestão (MoveStrategy 5 fases e CopyStrategy)
 │       ├── cleanup/             # Etapa 2: Limpeza Hash-Guarded da origem (Send2Trash)
 │       ├── planning/            # Etapa 3: Planejamento, metadados, burst_id e categorias
@@ -62,22 +64,23 @@ iris/
 │       │   ├── detect_stage.py  # Etapa 6 (`bird_detect`): Detecção YOLOv8s e recortes em 10_Aves/
 │       │   ├── classify_stage.py# Etapa 7 (`bird_id`): Classificação iNaturalist/BioCLIP + Burst Early Exit
 │       │   ├── organize_stage.py# Etapa 8 (`bird_organize`): Subpastas por espécie e renomeação
-│       │   ├── tag_stage.py     # Etapa 9 (`bird_tag`): Injeção EXIF/IPTC/XMP UTF-8
+│       │   ├── tag_stage.py     # Etapa 9 (`bird_tag`): Injeção EXIF/IPTC/XMP em lote (GEO_WRITABLE_EXTS)
 │       │   ├── correction.py    # Atalho [B]: Fluxo interativo de revisão/correção manual em lote
 │       │   └── catalog.py       # Catálogo global `species_catalog` e curadoria regional MG
 │       ├── astro_stack/         # Etapa 10: Pré-processamento RAW e PSS Stacking Headless
 │       ├── astro_sharpen/       # Etapa 11: Wavelets À Trous e presets RegiStax
 │       ├── astro/               # CLI autônoma `iris-astro` e motor matemático `LunarWaveletEngine`
-│       ├── timelapse/           # Etapa 12: Renderização 4K (Normal e Longa Exposição)
-│       ├── video_edit/          # Etapa 13: Upscale 4K, trimming, speed e Auto-Join por Ave/Dia
-│       └── youtube/             # Etapa 14: Upload 64MB, playlists dinâmicas e `describers/` modulares:
+│       ├── timelapse_denoise/   # Etapa 12: Filtragem espaço-temporal 16-bit de timelapses noturnos
+│       ├── timelapse/           # Etapa 13: Renderização 4K (Normal e Longa Exposição)
+│       ├── video_edit/          # Etapa 14: Upscale 4K em 2 etapas (Multi-Camera), trimming, speed e Auto-Join por Ave/Dia
+│       └── youtube/             # Etapa 15: Upload 64MB, playlists dinâmicas e `describers/` modulares:
 │           ├── stage.py         # Orquestração de upload e limpeza pós-verificação
 │           ├── uploader.py      # Cliente OAuth 2.0 YouTube Data API v3
 │           ├── describer.py     # Fachada retrocompatível de metadados do YouTube
 │           └── describers/      # Módulos de formatação (`formatting`, `geo`, `birds`, `timelapse`, `video_edit`)
 ├── vendor/                      # PlanetarySystemStacker isolado (GPL-3 via subprocesso)
 ├── secrets/                     # Credenciais locais (YouTube OAuth e iNaturalist JWT)
-└── tests/                       # Bateria de 380+ testes automatizados em pytest
+└── tests/                       # Bateria de 440+ testes automatizados em pytest
 ```
 
 ---

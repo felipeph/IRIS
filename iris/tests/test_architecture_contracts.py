@@ -99,6 +99,8 @@ def test_modular_facades_export_all_contracts_and_stay_compact():
         "_menu_youtube_notifications",
         "_menu_astro",
         "_menu_bird_id",
+        "_menu_events",
+        "prompt_event_dialog",
         "_menu_geolocation",
         "_edit_location_flow",
     ]:
@@ -161,3 +163,54 @@ def test_modular_facades_export_all_contracts_and_stay_compact():
     assert cm_lines < 350, f"config_menu.py voltou a crescer demais ({cm_lines} linhas)"
     assert desc_lines < 350, f"describer.py voltou a crescer demais ({desc_lines} linhas)"
     assert proj_lines < 350, f"project.py voltou a crescer demais ({proj_lines} linhas)"
+
+
+def test_central_db_contains_all_shared_tables_and_event_columns():
+    """Garante que init_central_db cria projects (com colunas de evento) e todas as tabelas de SHARED_TABLES_DDL."""
+    import src.core.project as proj_mod
+
+    proj_mod.init_central_db(force=True)
+    with proj_mod.get_db_connection(proj_mod.CENTRAL_DB_PATH) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        project_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
+
+    expected_shared = {
+        "timelapses",
+        "edited_videos",
+        "astro_stacks",
+        "astro_sharpens",
+        "bird_identifications",
+        "species_catalog",
+        "people_catalog",
+    }
+    assert expected_shared.issubset(tables)
+    assert {"is_event", "event_name", "event_participants"}.issubset(project_cols)
+
+
+def test_project_db_creates_all_expected_items_indexes():
+    """Garante que a tabela items possui os 7 índices esperados (incluindo organized_path e staging_path)."""
+    import src.core.project as proj_mod
+
+    project = proj_mod.create_project("contract_indexes_test", source_path=".")
+    with proj_mod.get_db_connection(project._project_db_file) as conn:
+        indexes = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+        }
+
+    expected_indexes = {
+        "idx_items_original_path",
+        "idx_items_status",
+        "idx_items_category",
+        "idx_items_status_verified",
+        "idx_items_burst_id",
+        "idx_items_organized_path",
+        "idx_items_staging_path",
+    }
+    assert expected_indexes.issubset(indexes)
