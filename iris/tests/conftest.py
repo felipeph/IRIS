@@ -17,6 +17,7 @@ _SESSION_PATH = Path(_SESSION_TEMP_DIR.name)
 os.environ["IRIS_GLOBAL_DIR"] = str(_SESSION_PATH / "iris_home")
 os.environ["IRIS_CONFIG_FILE"] = str(_SESSION_PATH / "config.yaml")
 os.environ["IRIS_SECRETS_DIR"] = str(_SESSION_PATH / "secrets")
+os.environ["IRIS_DISABLE_NOTIFICATIONS"] = "1"
 
 def _cleanup_session():
     try:
@@ -45,6 +46,7 @@ from src.core.config import config
 @pytest.fixture(autouse=True)
 def isolate_iris_environment(tmp_path_factory, monkeypatch):
     """Isola completamente cada teste de ~/.iris, de C:/IRIS e de iris/config.yaml."""
+    monkeypatch.setenv("IRIS_DISABLE_NOTIFICATIONS", "1")
     fake_global = tmp_path_factory.mktemp("iris_global")
     fake_projects = fake_global / "projects"
     fake_projects.mkdir(parents=True, exist_ok=True)

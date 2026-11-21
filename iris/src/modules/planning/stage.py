@@ -53,7 +53,8 @@ class PlanningStage(PipelineStage):
             start_str = datetime.now().strftime("%H:%M:%S")
 
             batch_size = 500
-            with Live(PipelineUI.generate_renderable(tracker, "ETAPA 3: EXTRAÇÃO DE METADADOS", start_str, total_files, 0.0, "Preparando...", "Inicializando"), console=console, refresh_per_second=4) as live:
+            stage_title = "ETAPA: EXTRAÇÃO DE METADADOS"
+            with Live(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, "Preparando...", "Inicializando"), console=console, refresh_per_second=4) as live:
                 for i in range(0, total_files, batch_size):
                     chunk_paths = file_paths[i:i+batch_size]
                     chunk_items = items_to_extract[i:i+batch_size]
@@ -64,7 +65,7 @@ class PlanningStage(PipelineStage):
                         if units_added > 0:
                             tracker.update(units_added)
                             last_current[0] = current
-                        live.update(PipelineUI.generate_renderable(tracker, "ETAPA 3: EXTRAÇÃO DE METADADOS", start_str, total_files, 0.0, current_file, "Extraindo..."))
+                        live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, current_file, "Extraindo..."))
                     
                     # Extrai metadados do lote
                     chunk_metadatas = extract_metadata_batch(chunk_paths, progress_callback=progress_cb)
@@ -103,7 +104,7 @@ class PlanningStage(PipelineStage):
                                         item.geo_source = "native"
                                 project.save_item(item)
                     
-                live.update(PipelineUI.generate_renderable(tracker, "ETAPA 3: EXTRAÇÃO DE METADADOS", start_str, total_files, 0.0, "Concluído", "Finalizando"))
+                live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, "Concluído", "Finalizando"))
 
         # 2. Reconstruir a lista completa de MediaMetadata a partir do Banco
         from src.core.metadata import MediaMetadata

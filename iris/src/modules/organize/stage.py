@@ -1,4 +1,3 @@
-import os
 import shutil
 import json
 from pathlib import Path
@@ -6,7 +5,6 @@ from datetime import datetime
 from collections import defaultdict
 from typing import Optional
 
-import xxhash
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Confirm
@@ -20,35 +18,7 @@ from src.core.reporter import ProgressReporter, RichConsoleReporter
 
 console = Console()
 
-def compute_file_hash(path: Path) -> str:
-    """Calcula o hash xxHash64 de um arquivo."""
-    hasher = xxhash.xxh64()
-    chunk_size = 4 * 1024 * 1024  # 4MB
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-def is_same_volume(path_a: Path, path_b: Path) -> bool:
-    """Verifica se dois caminhos residem no mesmo volume/drive de arquivos."""
-    try:
-        p1 = path_a.resolve()
-        p2 = path_b.resolve()
-        # No Windows, compara as letras dos drives se presentes (ex: 'C:' e 'C:')
-        if p1.drive and p2.drive:
-            return p1.drive.upper() == p2.drive.upper()
-        # Se âncoras forem diferentes
-        if p1.anchor and p2.anchor and p1.anchor.upper() != p2.anchor.upper():
-            return False
-        # Fallback para st_dev se disponível
-        target_stat = p2 if p2.exists() else p2.parent
-        return p1.stat().st_dev == target_stat.stat().st_dev
-    except Exception:
-        return True
-
+from src.modules.ingestion.strategies.base import compute_file_hash, is_same_volume
 from src.core.cleanup import clean_empty_directories, clean_empty_parent_dirs
 
 
@@ -122,14 +92,15 @@ class OrganizeStage(PipelineStage):
         errors = 0
 
         batch_size = 50
-        with Live(PipelineUI.generate_renderable(tracker, "ETAPA 4: ORGANIZAÇÃO FÍSICA (SSD)", start_str, total_files, total_gb, "Preparando...", "Inicializando"), console=console, refresh_per_second=4) as live:
+        stage_title = "ETAPA: ORGANIZAÇÃO FÍSICA (SSD)"
+        with Live(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, total_gb, "Preparando...", "Inicializando"), console=console, refresh_per_second=4) as live:
             for chunk_idx in range(0, len(items_to_organize), batch_size):
                 chunk = items_to_organize[chunk_idx:chunk_idx + batch_size]
                 with project.transaction():
                     for item in chunk:
                         staging_path = Path(item.staging_path)
                         current_file_name = item.target_filename or staging_path.name
-                        live.update(PipelineUI.generate_renderable(tracker, "ETAPA 4: ORGANIZAÇÃO FÍSICA (SSD)", start_str, total_files, total_gb, current_file_name, "Organizando..."))
+                        live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, total_gb, current_file_name, "Organizando..."))
 
                         rel_dir = Path(item.relative_dest_dir)
                         target_name = item.target_filename
@@ -217,7 +188,7 @@ class OrganizeStage(PipelineStage):
                             console.print(f"[red]Erro ao organizar {staging_path.name}: {e}[/red]")
                             errors += 1
 
-            live.update(PipelineUI.generate_renderable(tracker, "ETAPA 4: ORGANIZAÇÃO FÍSICA (SSD)", start_str, total_files, total_gb, "Concluído", "Finalizando"))
+            live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, total_gb, "Concluído", "Finalizando"))
 
         # Limpeza de pastas vazias do staging do projeto e poda na raiz do IRIS caso não haja erros críticos
         if errors == 0:

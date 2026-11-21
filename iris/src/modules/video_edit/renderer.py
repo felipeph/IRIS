@@ -482,6 +482,7 @@ def _execute_ffmpeg_with_progress(
     resolution_label: str,
     output_name: str,
     status_msg: str,
+    stage_title: str = "ETAPA: EDIÇÃO E UPSCALE DE VÍDEO 4K (GPU/CPU)",
 ) -> Tuple[int, int, str]:
     """
     Executa um comando FFmpeg atualizando o painel Rich Live com progresso acumulado.
@@ -550,7 +551,7 @@ def _execute_ffmpeg_with_progress(
                     previsao_str = datetime.now().strftime("%H:%M:%S")
 
                 live.update(PipelineUI.generate_video_renderable(
-                    stage_title="ETAPA 6: EDIÇÃO E UPSCALE DE VÍDEO 4K (GPU/CPU)",
+                    stage_title=stage_title,
                     start_str=start_str,
                     total_photos=total_clips,
                     total_frames=total_expected_frames,
@@ -666,6 +667,7 @@ def render_edited_video(
         return None
 
     # Fluxo 1: Clipe único (1 etapa direta)
+    single_stage_title = "ETAPA: EDIÇÃO E UPSCALE DE VÍDEO 4K (GPU/CPU)"
     if len(clip_paths) == 1:
         cmd, unsharp_active, deband_active = build_render_cmd(
             clip_paths=clip_paths,
@@ -685,7 +687,7 @@ def render_edited_video(
         )
         try:
             with Live(PipelineUI.generate_video_renderable(
-                stage_title="ETAPA 6: EDIÇÃO E UPSCALE DE VÍDEO 4K (GPU/CPU)",
+                stage_title=single_stage_title,
                 start_str=start_str,
                 total_photos=1,
                 total_frames=total_expected_frames,
@@ -714,6 +716,7 @@ def render_edited_video(
                     resolution_label=resolution_label,
                     output_name=output_name,
                     status_msg="Renderizando vídeo 4K...",
+                    stage_title=single_stage_title,
                 )
 
             render_sec = time.time() - start_time
@@ -748,6 +751,7 @@ def render_edited_video(
             return False, encoder_name, str(e), {}
 
     # Fluxo 2: Múltiplos clipes em Duas Etapas (Upscale 4K individual + Concat Demuxer)
+    two_step_stage_title = "ETAPA: EDIÇÃO E UPSCALE DE VÍDEO 4K (2 ETAPAS)"
     temp_dir = output_video_path.parent / f".tmp_concat_{output_video_path.stem[:32]}_{os.getpid()}_{int(time.time() * 1000)}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     part_paths: List[Path] = []
@@ -759,7 +763,7 @@ def render_edited_video(
         total_clips = len(clip_paths)
 
         with Live(PipelineUI.generate_video_renderable(
-            stage_title="ETAPA 6: EDIÇÃO E UPSCALE DE VÍDEO 4K (2 ETAPAS)",
+            stage_title=two_step_stage_title,
             start_str=start_str,
             total_photos=total_clips,
             total_frames=total_expected_frames,
@@ -814,6 +818,7 @@ def render_edited_video(
                     resolution_label=resolution_label,
                     output_name=output_name,
                     status_msg=f"Etapa 1/2: Upscale 4K clipe [{idx}/{total_clips}] ({c_path.name})...",
+                    stage_title=two_step_stage_title,
                 )
 
                 if rc != 0 or not part_path.exists() or part_path.stat().st_size <= 1000:
@@ -843,6 +848,7 @@ def render_edited_video(
                 resolution_label=resolution_label,
                 output_name=output_name,
                 status_msg=f"Etapa 2/2: Unificando {total_clips} vídeos 4K (concat demuxer)...",
+                stage_title=two_step_stage_title,
             )
 
             render_sec = time.time() - start_time

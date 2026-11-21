@@ -14,6 +14,8 @@ from .base import IngestionStrategy
 
 console = Console()
 
+_COPY_STAGE_TITLE = "ETAPA: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)"
+
 def copy_and_verify(
     src_path: Path,
     dest_path: Path,
@@ -39,7 +41,7 @@ def copy_and_verify(
                 if tracker:
                     tracker.update(len(chunk))
                 if live and render_args:
-                    live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)", *render_args, "Ingestão: Copiando..."))
+                    live.update(PipelineUI.generate_renderable(tracker, _COPY_STAGE_TITLE, *render_args, "Ingestão: Copiando..."))
                 if reporter:
                     reporter.update(len(chunk), current_item=src_path.name, status_msg="Ingestão: Copiando...")
                 
@@ -52,7 +54,7 @@ def copy_and_verify(
         # 2. Ler do destino para validar o hash
         hasher_dest = xxhash.xxh64()
         if live and tracker and render_args:
-            live.update(PipelineUI.generate_renderable(tracker, "ETAPA 1: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)", *render_args, "Ingestão: Verificando disco..."))
+            live.update(PipelineUI.generate_renderable(tracker, _COPY_STAGE_TITLE, *render_args, "Ingestão: Verificando disco..."))
         if reporter:
             reporter.update(0, current_item=dest_path.name, status_msg="Ingestão: Verificando disco...")
         
@@ -135,7 +137,7 @@ class CopyStrategy(IngestionStrategy):
         tracker.last_completed_units = already_copied_bytes
         start_str = datetime.now().strftime("%H:%M:%S")
 
-        stage_title = "ETAPA 1: INGESTÃO E VALIDAÇÃO (CÓPIA SD -> SSD)"
+        stage_title = _COPY_STAGE_TITLE
 
         batch_size = 50
         with Live(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, total_gb, "Preparando...", "Inicializando"), console=console, refresh_per_second=4) as live:

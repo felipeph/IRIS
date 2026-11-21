@@ -1,3 +1,4 @@
+import os
 import sys
 import urllib.request
 import subprocess
@@ -5,8 +6,17 @@ import threading
 
 DEFAULT_NTFY_TOPIC = "timelapse-studio-2026"
 
+
+def _notifications_disabled() -> bool:
+    """Indica se alertas externos (NTFY/Toast) estão desativados via variável de ambiente."""
+    return os.environ.get("IRIS_DISABLE_NOTIFICATIONS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def send_ntfy_notification(topic=DEFAULT_NTFY_TOPIC, title="IRIS Timelapse", message="", tags=None, priority="default", actions=None):
     """Envia uma notificação push via HTTP POST para o ntfy.sh em background."""
+    if _notifications_disabled():
+        return
+
     def _do_send():
         url = f"https://ntfy.sh/{topic}"
         headers = {
@@ -42,7 +52,7 @@ def send_ntfy_notification(topic=DEFAULT_NTFY_TOPIC, title="IRIS Timelapse", mes
 
 def send_windows_toast(title: str, message: str, app_id: str = "IRIS"):
     """Emite uma notificação Toast nativa no Windows 10/11 via PowerShell WinRT."""
-    if sys.platform != "win32":
+    if sys.platform != "win32" or _notifications_disabled():
         return
 
     def _do_toast():

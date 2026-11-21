@@ -1,16 +1,8 @@
 import os
-import sys
-import json
-import time
-import socket
-import urllib.request
 from pathlib import Path
-from datetime import datetime, timedelta
 from typing import Tuple, Dict, Any, Optional, List
 
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -75,36 +67,26 @@ def get_authenticated_service():
     return build("youtube", "v3", credentials=creds)
 
 def reverse_geocode_coordinates(lat: float, lon: float, timeout: float = 4.0) -> Dict[str, str]:
-    """Geocodificação reversa usando OpenStreetMap Nominatim."""
+    """Geocodificação reversa usando OpenStreetMap Nominatim (com fallback BigDataCloud)."""
     key = (round(lat, 4), round(lon, 4))
     if key in _GEOCODE_CACHE:
         return _GEOCODE_CACHE[key]
 
-    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=14&addressdetails=1"
-    headers = {"User-Agent": "IRIS-MediaStudio/1.0"}
-
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            if response.status == 200:
-                data = json.loads(response.read().decode('utf-8'))
-                address = data.get("address", {})
-                city = address.get("city") or address.get("town") or address.get("municipality") or address.get("suburb") or ""
-                state = address.get("state") or address.get("region") or ""
-                country = address.get("country") or ""
-                parts = [p for p in [city, state, country] if p]
-                formatted = ", ".join(parts) if parts else data.get("display_name", "")
-                res = {
-                    "city": city,
-                    "state": state,
-                    "country": country,
-                    "formatted_address": formatted
-                }
-                _GEOCODE_CACHE[key] = res
-                return res
-    except Exception:
-        pass
-    return {"city": "", "state": "", "country": "", "formatted_address": ""}
+    from src.core.geo import reverse_geocode
+    info = reverse_geocode(lat, lon, timeout=timeout)
+    city = info.get("city", "")
+    state = info.get("state", "")
+    country = info.get("country", "") if info.get("source") != "offline" else ""
+    parts = [p for p in [city, state, country] if p]
+    res = {
+        "city": city,
+        "state": state,
+        "country": country,
+        "formatted_address": ", ".join(parts),
+    }
+    if parts:
+        _GEOCODE_CACHE[key] = res
+    return res
 
 _PLAYLIST_CACHE: Dict[str, Tuple[str, str]] = {}
 
