@@ -15,7 +15,9 @@ from src.core.config import config
 from src.core.geo import GeoService
 from src.modules.video_edit.namer import generate_edited_video_name, resolve_edited_output_path
 from src.modules.video_edit.session import (
+    build_bird_ident_map,
     group_videos_into_sessions,
+    lookup_bird_ident_in_map,
     parse_item_datetime,
     parse_duration_seconds,
     summarize_session_cameras,
@@ -86,14 +88,16 @@ class VideoEditStage(PipelineStage):
             console.print(f"[cyan]Nenhum arquivo de vídeo identificado no projeto '{project.name}'. Etapa concluída.[/cyan]")
             return True
 
-        # 2. Agrupar vídeos em sessões de trabalho
+        # 2. Agrupar vídeos em sessões de trabalho (pré-carrega índice de aves 1 única vez)
         mode = ve_config.get("mode", "individual")
         auto_join_birds = bool(ve_config.get("auto_join_birds", True))
         bird_min_conf = float(config.get("modules.bird_id.min_species_confidence", 0.70))
+        bird_ident_map = build_bird_ident_map(project)
         sessions = group_videos_into_sessions(
             video_items,
             mode=mode,
             project=project,
+            bird_ident_map=bird_ident_map,
             auto_join_birds=auto_join_birds,
             min_species_confidence=bird_min_conf
         )
@@ -155,14 +159,17 @@ class VideoEditStage(PipelineStage):
 
             # Identificação de aves nos clipes do lote (seleciona a espécie mais frequente)
             bird_records = []
-            if hasattr(project, "get_bird_identification"):
+            if bird_ident_map is not None or hasattr(project, "get_bird_identification"):
                 for it in s_items:
                     cand_paths = [it.organized_path, it.staging_path, it.original_path]
                     for cp_str in cand_paths:
                         if not cp_str:
                             continue
-                        p_cand = Path(cp_str)
-                        b_rec = project.get_bird_identification(str(p_cand.resolve())) or project.get_bird_identification(str(p_cand))
+                        if bird_ident_map is not None:
+                            b_rec = lookup_bird_ident_in_map(bird_ident_map, cp_str)
+                        else:
+                            p_cand = Path(cp_str)
+                            b_rec = project.get_bird_identification(str(p_cand.resolve())) or project.get_bird_identification(str(p_cand))
                         if b_rec and (b_rec.get("species_common") or b_rec.get("species_scientific")):
                             bird_records.append(b_rec)
                             break

@@ -47,16 +47,8 @@ class BirdOrganizeStage(PipelineStage):
             console.print("[dim]Execute primeiro a identificação (bird_id / bird_classify) antes de organizar fisicamente.[/dim]")
             return True
 
-        # Indexar ProjectItems por seus caminhos conhecidos
+        # Cache sob demanda de ProjectItems por caminho (evita full table scan de items)
         items_by_path = {}
-        for it in project.get_items():
-            for p_str in [it.organized_path, it.staging_path, it.original_path]:
-                if p_str:
-                    items_by_path[p_str] = it
-                    try:
-                        items_by_path[str(Path(p_str).resolve())] = it
-                    except Exception:
-                        pass
 
         organized_count = 0
         skipped_review_count = 0
@@ -76,11 +68,13 @@ class BirdOrganizeStage(PipelineStage):
             for rec in records:
                 item_path_str = rec.get("item_path", "")
                 item = items_by_path.get(item_path_str)
-                if not item:
-                    try:
-                        item = items_by_path.get(str(Path(item_path_str).resolve()))
-                    except Exception:
-                        item = None
+                if item is None and item_path_str and hasattr(project, "get_item_by_any_path"):
+                    item = project.get_item_by_any_path(item_path_str)
+                    if item is not None:
+                        items_by_path[item_path_str] = item
+                        for p_str in (item.organized_path, item.staging_path, item.original_path):
+                            if p_str:
+                                items_by_path[p_str] = item
 
                 cur_filename = Path(item_path_str).name if item_path_str else "desconhecido"
                 live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_records, 0.0, cur_filename, "Organizando..."))

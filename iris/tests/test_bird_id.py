@@ -1939,3 +1939,125 @@ def test_bird_classify_passes_observed_on_from_meta_timestamp(mock_classifier_cl
     assert datetime(2026, 11, 1, 7, 5, 0) in observed_calls
 
 
+def test_bird_tag_stage_batches_same_species_single_exiftool_call(tmp_path, monkeypatch):
+    """Garante que múltiplas fotos da mesma espécie são enviadas em 1 única chamada ExifTool via argfile UTF-8 e têm hashes sincronizados."""
+    from src.modules.bird_id.tag_stage import BirdTagStage
+    from src.modules.ingestion.strategies.base import compute_file_hash
+
+    proj = create_project("test_batch_same_species", str(tmp_path))
+
+    photos = []
+    orig_hashes = {}
+    items = []
+    for i in range(5):
+        p = tmp_path / f"bem_te_vi_{i}.jpg"
+        Image.new("RGB", (30, 30), color=(i * 40, 120, 50)).save(p, "JPEG")
+        photos.append(p)
+        h = compute_file_hash(p)
+        orig_hashes[p] = h
+        items.append(ProjectItem(
+            str(p), str(p), organized_path=str(p), status="organized",
+            file_size_bytes=p.stat().st_size, file_hash=h,
+        ))
+    proj.save_items_batch(items)
+
+    for p in photos:
+        proj.add_bird_identification({
+            "item_path": str(p),
+            "is_video": False,
+            "species_common": "Bem-te-vi",
+            "species_scientific": "Pitangus sulphuratus",
+            "species_common_en": "Great Kiskadee",
+            "family": "Tyrannidae",
+            "order": "Passeriformes",
+            "confidence": 0.94,
+            "needs_review": False,
+        })
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: True if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    captured_argfiles = []
+
+    def fake_run(cmd, **kwargs):
+        arg_path = Path(cmd[cmd.index("-@") + 1])
+        captured_argfiles.append(arg_path.read_text(encoding="utf-8"))
+        for p in photos:
+            with open(p, "ab") as f:
+                f.write(b"_TAGGED")
+        m = MagicMock()
+        m.returncode = 0
+        return m
+
+    with patch("src.modules.bird_id.tag_stage.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.subprocess.run", side_effect=fake_run) as mock_run:
+        stage = BirdTagStage("bird_tag", "Injeção de Metadados de Aves")
+        assert stage.run(proj) is True
+        assert mock_run.call_count == 1
+
+    assert len(captured_argfiles) == 1
+    arg_text = captured_argfiles[0]
+    assert "-P" in arg_text
+    assert "-overwrite_original" in arg_text
+    for p in photos:
+        assert str(p.resolve()) in arg_text
+        saved_it = proj.get_item(str(p))
+        expected_hash = compute_file_hash(p)
+        assert expected_hash != orig_hashes[p]
+        assert saved_it.file_hash == expected_hash
+        assert saved_it.file_size_bytes == p.stat().st_size
+
+
+def test_bird_tag_stage_batches_multiple_species_separately(tmp_path, monkeypatch):
+    """Garante que fotos de espécies distintas são agrupadas em 1 chamada ExifTool por espécie."""
+    from src.modules.bird_id.tag_stage import BirdTagStage
+
+    proj = create_project("test_batch_multi_species", str(tmp_path))
+
+    species_specs = [
+        ("btv", "Bem-te-vi", "Pitangus sulphuratus", 3),
+        ("sabia", "Sabiá-laranjeira", "Turdus rufiventris", 2),
+    ]
+    items = []
+    idents = []
+    for prefix, common_pt, sci, count in species_specs:
+        for i in range(count):
+            p = tmp_path / f"{prefix}_{i}.jpg"
+            Image.new("RGB", (24, 24), color="green").save(p, "JPEG")
+            items.append(ProjectItem(str(p), str(p), organized_path=str(p), status="organized"))
+            idents.append({
+                "item_path": str(p),
+                "is_video": False,
+                "species_common": common_pt,
+                "species_scientific": sci,
+                "confidence": 0.91,
+                "needs_review": False,
+            })
+
+    proj.save_items_batch(items)
+    for ident in idents:
+        proj.add_bird_identification(ident)
+
+    orig_get = config.get
+    monkeypatch.setattr(config, "get", lambda k, d=None: True if k == "modules.bird_id.write_exif_tags" else orig_get(k, d))
+
+    captured_argfiles = []
+
+    def fake_run(cmd, **kwargs):
+        arg_path = Path(cmd[cmd.index("-@") + 1])
+        captured_argfiles.append(arg_path.read_text(encoding="utf-8"))
+        m = MagicMock()
+        m.returncode = 0
+        return m
+
+    with patch("src.modules.bird_id.tag_stage.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.shutil.which", return_value="exiftool"), \
+         patch("src.modules.bird_id.action.subprocess.run", side_effect=fake_run) as mock_run:
+        stage = BirdTagStage("bird_tag", "Injeção de Metadados de Aves")
+        assert stage.run(proj) is True
+        assert mock_run.call_count == 2
+
+    assert len(captured_argfiles) == 2
+
+

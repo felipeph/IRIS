@@ -54,14 +54,30 @@ def _resolve_observed_on(p_item: Optional[Any]) -> Optional[Any]:
     return None
 
 
-def _lookup_project_item(items_by_path: Dict[str, Any], item_path_str: str) -> Optional[Any]:
-    it = items_by_path.get(item_path_str)
-    if it is None and item_path_str:
-        try:
-            it = items_by_path.get(str(Path(item_path_str).resolve()))
-        except Exception:
-            it = None
-    return it
+def _lookup_project_item(
+    items_by_path: Dict[str, Any],
+    item_path_str: str,
+    project: Optional[Any] = None,
+) -> Optional[Any]:
+    if not item_path_str:
+        return None
+    if item_path_str in items_by_path:
+        return items_by_path[item_path_str]
+    try:
+        resolved_str = str(Path(item_path_str).resolve())
+        if resolved_str in items_by_path:
+            return items_by_path[resolved_str]
+    except Exception:
+        pass
+    if project is not None and hasattr(project, "get_item_by_any_path"):
+        it = project.get_item_by_any_path(item_path_str)
+        items_by_path[item_path_str] = it
+        if it is not None:
+            for p_str in (it.organized_path, it.staging_path, it.original_path):
+                if p_str:
+                    items_by_path[p_str] = it
+        return it
+    return None
 
 
 class BirdClassifyStage(PipelineStage):
@@ -145,16 +161,8 @@ class BirdClassifyStage(PipelineStage):
                             "metadata_json": {"detection_status": "detected"}
                         })
 
-        # Mapeamento rápido de ProjectItem por item_path para resolução de GPS/EXIF
+        # Cache sob demanda de ProjectItem por item_path para resolução de GPS/EXIF
         items_by_path = {}
-        for it in project.get_items():
-            for p_str in [it.organized_path, it.staging_path, it.original_path]:
-                if p_str:
-                    items_by_path[p_str] = it
-                    try:
-                        items_by_path[str(Path(p_str).resolve())] = it
-                    except Exception:
-                        pass
 
         # Filtrar registros elegíveis excluindo timelapses e astrofotografia
         EXCLUDED_CATEGORIES = {"timelapse", "timelapse_long_exposure", "astro_lua"}
@@ -162,7 +170,7 @@ class BirdClassifyStage(PipelineStage):
         filtered_records = []
         for r in records_with_crops:
             item_p = r.get("item_path", "")
-            item_match = _lookup_project_item(items_by_path, item_p)
+            item_match = _lookup_project_item(items_by_path, item_p, project=project)
             cat = getattr(item_match, "category", "") or ""
             rel_dest = (getattr(item_match, "relative_dest_dir", "") or "").replace("\\", "/")
             p_norm = item_p.replace("\\", "/")
@@ -206,7 +214,7 @@ class BirdClassifyStage(PipelineStage):
 
         for rec in records_with_crops:
             item_path_str = rec.get("item_path", "")
-            p_item = _lookup_project_item(items_by_path, item_path_str)
+            p_item = _lookup_project_item(items_by_path, item_path_str, project=project)
             b_id = getattr(p_item, "burst_id", "") or "" if (p_item and not rec.get("is_video", False)) else ""
             if enable_burst_consensus and b_id:
                 burst_map[b_id].append(rec)
@@ -243,7 +251,7 @@ class BirdClassifyStage(PipelineStage):
 
                     for idx, rec in enumerate(rec_list):
                         item_path_str = rec.get("item_path", "")
-                        p_item = _lookup_project_item(items_by_path, item_path_str)
+                        p_item = _lookup_project_item(items_by_path, item_path_str, project=project)
                         file_name = Path(item_path_str).name if item_path_str else "Recorte"
                         curr_photo_idx = len(burst_eval_items) + 1
                         total_burst_photos = len(rec_list)
@@ -462,7 +470,7 @@ class BirdClassifyStage(PipelineStage):
                         if idx in evaluated_indices:
                             continue
                         item_path_str = rec.get("item_path", "")
-                        p_item = _lookup_project_item(items_by_path, item_path_str)
+                        p_item = _lookup_project_item(items_by_path, item_path_str, project=project)
                         crop_saved_path = rec.get("crop_saved_path", "")
                         meta_json = rec.get("metadata_json", {})
 
@@ -520,7 +528,7 @@ class BirdClassifyStage(PipelineStage):
                 else:
                     rec = rec_list[0]
                     item_path_str = rec.get("item_path", "")
-                    p_item = _lookup_project_item(items_by_path, item_path_str)
+                    p_item = _lookup_project_item(items_by_path, item_path_str, project=project)
                     file_name = Path(item_path_str).name if item_path_str else "Recorte"
                     live.update(PipelineUI.generate_renderable(tracker, "ETAPA: CLASSIFICAÇÃO TAXONÔMICA DE AVES", start_str, total_files, 0.0, file_name, "Classificando..."))
 

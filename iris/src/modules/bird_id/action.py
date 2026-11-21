@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from src.core.config import config
 from src.core.geo import GEO_WRITABLE_EXTS
@@ -104,28 +104,26 @@ def build_bird_filename(current_name: str, common_pt: str, scientific: str, comm
         return f"{bird_tag}{ext}"
 
 
-def write_bird_exif_tags(
-    file_path: Path,
+def _extract_bird_taxonomy(record: Dict[str, Any]) -> Tuple[str, str, str, str, str]:
+    """Extrai a tupla taxonômica normalizada (common_pt, scientific, common_en, family, order) de um registro."""
+    common_pt = record.get("species_common", "") or ""
+    sci = record.get("species_scientific", "") or ""
+    meta_dict = record.get("metadata_json", {}) if isinstance(record.get("metadata_json"), dict) else {}
+    common_en = record.get("species_common_en", "") or meta_dict.get("species_common_en", "") or meta_dict.get("common_en", "")
+    family = record.get("family", "") or meta_dict.get("family", "")
+    order = record.get("order", "") or meta_dict.get("order", "")
+    return (common_pt, sci, common_en, family, order)
+
+
+def _build_bird_exif_arg_lines(
     common_pt: str,
     scientific: str,
     common_en: str = "",
     family: str = "",
     order: str = "",
-    extra_keywords: Optional[List[str]] = None
-) -> bool:
-    """
-    Injeta metadados taxonômicos (IPTC, XMP e EXIF) no arquivo usando ExifTool sem recodificar pixels.
-    Utiliza argfile temporário com codificação UTF-8 explícita para compatibilidade universal
-    e preservação perfeita de acentuação e espaços no Google Fotos, Apple Fotos, Lightroom e Windows.
-    """
-    if file_path.suffix.lower() not in GEO_WRITABLE_EXTS:
-        return False
-
-    env_exif = os.getenv("IRIS_EXIFTOOL_PATH")
-    exiftool_bin = env_exif if env_exif else shutil.which("exiftool")
-    if not exiftool_bin:
-        return False
-
+    extra_keywords: Optional[List[str]] = None,
+) -> List[str]:
+    """Monta as diretivas de argfile UTF-8 do ExifTool para injeção taxonômica EXIF/IPTC/XMP."""
     keywords = ["Aves"]
     if extra_keywords:
         for ek in extra_keywords:
@@ -175,33 +173,110 @@ def write_bird_exif_tags(
     lines.append(f"-XPComment={caption}")
     lines.append(f"-XPKeywords={';'.join(keywords)}")
 
-    lines.append(str(file_path.resolve()))
+    return lines
 
-    argfile = None
-    try:
-        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
-            for line in lines:
-                f.write(line + "\n")
-            argfile = f.name
 
-        cmd = [exiftool_bin, "-charset", "UTF8", "-@", argfile]
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-        )
-        return proc.returncode == 0
-    except Exception:
-        return False
-    finally:
-        if argfile:
-            try:
-                os.unlink(argfile)
-            except OSError:
-                pass
+def write_bird_exif_tags_batch(
+    file_paths: List[Path],
+    common_pt: str,
+    scientific: str,
+    common_en: str = "",
+    family: str = "",
+    order: str = "",
+    extra_keywords: Optional[List[str]] = None,
+    batch_size: int = 500,
+) -> Tuple[List[Path], List[Path]]:
+    """
+    Injeta metadados taxonômicos (IPTC, XMP e EXIF) em lote via ExifTool usando argfile UTF-8.
+    Retorna (arquivos_processados_com_sucesso, arquivos_com_erro_ou_ignorados).
+    """
+    writable_paths: List[Path] = []
+    skipped_paths: List[Path] = []
+    for p in file_paths:
+        if p.suffix.lower() in GEO_WRITABLE_EXTS:
+            writable_paths.append(p)
+        else:
+            skipped_paths.append(p)
+
+    if not writable_paths:
+        return [], skipped_paths
+
+    env_exif = os.getenv("IRIS_EXIFTOOL_PATH")
+    exiftool_bin = env_exif if env_exif else shutil.which("exiftool")
+    if not exiftool_bin:
+        return [], list(file_paths)
+
+    header_lines = _build_bird_exif_arg_lines(
+        common_pt=common_pt,
+        scientific=scientific,
+        common_en=common_en,
+        family=family,
+        order=order,
+        extra_keywords=extra_keywords,
+    )
+    succeeded: List[Path] = []
+    failed: List[Path] = list(skipped_paths)
+
+    for i in range(0, len(writable_paths), batch_size):
+        chunk = writable_paths[i:i + batch_size]
+        argfile = None
+        try:
+            with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+                for line in header_lines:
+                    f.write(line + "\n")
+                for p in chunk:
+                    f.write(str(p.resolve()) + "\n")
+                argfile = f.name
+
+            cmd = [exiftool_bin, "-charset", "UTF8", "-@", argfile]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=max(60, len(chunk) * 2),
+            )
+            if proc.returncode == 0:
+                succeeded.extend(chunk)
+            else:
+                failed.extend(chunk)
+        except Exception:
+            failed.extend(chunk)
+        finally:
+            if argfile:
+                try:
+                    os.unlink(argfile)
+                except OSError:
+                    pass
+
+    return succeeded, failed
+
+
+def write_bird_exif_tags(
+    file_path: Path,
+    common_pt: str,
+    scientific: str,
+    common_en: str = "",
+    family: str = "",
+    order: str = "",
+    extra_keywords: Optional[List[str]] = None
+) -> bool:
+    """
+    Injeta metadados taxonômicos (IPTC, XMP e EXIF) no arquivo usando ExifTool sem recodificar pixels.
+    Utiliza argfile temporário com codificação UTF-8 explícita para compatibilidade universal
+    e preservação perfeita de acentuação e espaços no Google Fotos, Apple Fotos, Lightroom e Windows.
+    """
+    succeeded, _ = write_bird_exif_tags_batch(
+        [file_path],
+        common_pt=common_pt,
+        scientific=scientific,
+        common_en=common_en,
+        family=family,
+        order=order,
+        extra_keywords=extra_keywords,
+    )
+    return len(succeeded) == 1
 
 
 def apply_bird_metadata(
@@ -216,14 +291,43 @@ def apply_bird_metadata(
     if not file_path.exists():
         return False
 
-    common_pt = record.get("species_common", "")
-    sci = record.get("species_scientific", "")
-    meta_dict = record.get("metadata_json", {}) if isinstance(record.get("metadata_json"), dict) else {}
-    common_en = record.get("species_common_en", "") or meta_dict.get("species_common_en", "") or meta_dict.get("common_en", "")
-    family = record.get("family", "") or meta_dict.get("family", "")
-    order = record.get("order", "") or meta_dict.get("order", "")
-
+    common_pt, sci, common_en, family, order = _extract_bird_taxonomy(record)
     return write_bird_exif_tags(file_path, common_pt, sci, common_en, family, order, extra_keywords=extra_keywords)
+
+
+def apply_bird_metadata_batch(
+    file_paths: List[Path],
+    record: Dict[str, Any],
+    extra_keywords: Optional[List[str]] = None,
+    batch_size: int = 500,
+) -> Tuple[List[Path], List[Path]]:
+    """
+    Aplica metadados taxonômicos EXIF/IPTC/XMP em lote para arquivos existentes da mesma espécie.
+    Retorna (arquivos_processados_com_sucesso, arquivos_com_erro_ou_ausentes).
+    """
+    existing_paths: List[Path] = []
+    missing_paths: List[Path] = []
+    for p in file_paths:
+        if p.exists():
+            existing_paths.append(p)
+        else:
+            missing_paths.append(p)
+
+    if not existing_paths:
+        return [], missing_paths
+
+    common_pt, sci, common_en, family, order = _extract_bird_taxonomy(record)
+    succeeded, failed = write_bird_exif_tags_batch(
+        existing_paths,
+        common_pt=common_pt,
+        scientific=sci,
+        common_en=common_en,
+        family=family,
+        order=order,
+        extra_keywords=extra_keywords,
+        batch_size=batch_size,
+    )
+    return succeeded, missing_paths + failed
 
 
 def apply_bird_physical_move(

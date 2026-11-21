@@ -1363,3 +1363,46 @@ def test_build_edited_video_youtube_metadata_non_16_9_aspect(tmp_path):
     assert "1080x1920 (Proporção 9:16 ➔ Enquadramento 4K Pillarbox/Letterbox)" in meta_9_16["description"]
 
 
+def test_group_videos_into_sessions_preloads_bird_map_once(tmp_path):
+    """Garante que group_videos_into_sessions lê list_bird_identifications no máximo 1 vez mesmo com muitos vídeos sem ave."""
+    from unittest.mock import MagicMock
+
+    proj = create_project("test_preload_bird_map", str(tmp_path))
+
+    videos = []
+    for i in range(15):
+        v = tmp_path / f"clip_{i:02d}.mp4"
+        v.write_bytes(b"vid")
+        videos.append(ProjectItem(
+            original_path=str(v),
+            staging_path=str(v),
+            organized_path=str(v),
+            category="video",
+            meta_timestamp=f"2026-11-20T09:{i:02d}:00",
+        ))
+    proj.save_items_batch(videos)
+
+    # Apenas 2 vídeos têm ave identificada; os outros 13 são sem ave (cenário que antes causava N+1 full scans)
+    for idx in (0, 3):
+        proj.add_bird_identification({
+            "item_path": str(tmp_path / f"clip_{idx:02d}.mp4"),
+            "is_video": True,
+            "species_common": "Bem-te-vi",
+            "species_scientific": "Pitangus sulphuratus",
+            "confidence": 0.90,
+            "needs_review": False,
+        })
+
+    list_spy = MagicMock(wraps=proj.list_bird_identifications)
+    get_spy = MagicMock(wraps=proj.get_bird_identification)
+    proj.list_bird_identifications = list_spy
+    proj.get_bird_identification = get_spy
+
+    sessions = group_videos_into_sessions(videos, mode="individual", project=proj, auto_join_birds=True)
+
+    assert list_spy.call_count == 1
+    assert get_spy.call_count == 0
+    # 2 vídeos de Bem-te-vi unidos em 1 sessão + 13 individuais = 14 sessões
+    assert len(sessions) == 14
+
+

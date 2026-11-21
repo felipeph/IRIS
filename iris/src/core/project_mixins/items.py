@@ -6,6 +6,7 @@ Gerencia operações CRUD e consultas otimizadas da tabela 'items' no SQLite.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -181,12 +182,61 @@ class ProjectItemsMixin:
     def items(self, value: List[ProjectItem]):
         self.save_items_batch(value)
 
+    def get_item_by_any_path(self, path_str: str) -> Optional[ProjectItem]:
+        """Busca um item por organized_path, staging_path ou original_path usando índices SQLite."""
+        if not path_str:
+            return None
+        active_conn = self._get_active_conn()
+        if active_conn is None and not self._project_db_file.exists():
+            return None
+
+        candidates = [str(path_str)]
+        try:
+            resolved = str(Path(path_str).resolve())
+            if resolved not in candidates:
+                candidates.append(resolved)
+        except Exception:
+            pass
+
+        import src.core.project as p_mod
+        sql = (
+            "SELECT * FROM items "
+            "WHERE organized_path = ? OR staging_path = ? OR original_path = ? "
+            "LIMIT 1"
+        )
+
+        def _find_in_conn(conn: sqlite3.Connection) -> Optional[ProjectItem]:
+            conn.row_factory = sqlite3.Row
+            for cand in candidates:
+                row = conn.execute(sql, (cand, cand, cand)).fetchone()
+                if row:
+                    return p_mod._row_to_item(row)
+            return None
+
+        if active_conn is not None:
+            return _find_in_conn(active_conn)
+
+        with p_mod.get_db_connection(self._project_db_file) as conn:
+            return _find_in_conn(conn)
+
     def get_burst_groups(self) -> dict[str, List[ProjectItem]]:
         """Retorna todos os itens pertencentes a rajadas agrupados pelo respectivo burst_id."""
         groups: dict[str, List[ProjectItem]] = {}
-        all_items = self.get_items()
-        for it in all_items:
-            b_id = getattr(it, "burst_id", "") or ""
-            if b_id:
-                groups.setdefault(b_id, []).append(it)
+        active_conn = self._get_active_conn()
+        if active_conn is None and not self._project_db_file.exists():
+            return groups
+
+        import src.core.project as p_mod
+        sql = "SELECT * FROM items WHERE burst_id IS NOT NULL AND burst_id != ''"
+        if active_conn is not None:
+            active_conn.row_factory = sqlite3.Row
+            rows = active_conn.execute(sql).fetchall()
+        else:
+            with p_mod.get_db_connection(self._project_db_file) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(sql).fetchall()
+
+        for row in rows:
+            it = p_mod._row_to_item(row)
+            groups.setdefault(it.burst_id, []).append(it)
         return groups

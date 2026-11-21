@@ -24,7 +24,9 @@ from src.core.pipeline import PipelineStage
 from src.core.project import Project, init_central_db
 from src.core.ui import ProgressTracker, PipelineUI
 from src.modules.ingestion.strategies.base import compute_file_hash
-from .action import apply_bird_metadata
+from .action import apply_bird_metadata, apply_bird_metadata_batch, _extract_bird_taxonomy
+
+_DEFAULT_APPLY_BIRD_METADATA = apply_bird_metadata
 
 console = Console()
 
@@ -62,16 +64,9 @@ class BirdTagStage(PipelineStage):
             console.print("[yellow]Nenhum registro de identificação de aves encontrado no banco do projeto.[/yellow]")
             return True
 
-        # Indexar ProjectItems por caminhos
-        items_by_path = {}
-        for it in project.get_items():
-            for p_str in [it.organized_path, it.staging_path, it.original_path]:
-                if p_str:
-                    items_by_path[p_str] = it
-                    try:
-                        items_by_path[str(Path(p_str).resolve())] = it
-                    except Exception:
-                        pass
+        # Cache sob demanda de ProjectItems por caminho (evita full table scan de items)
+        items_by_path: Dict[str, Any] = {}
+        item_by_file_path: Dict[Path, Any] = {}
 
         # Mapear arquivos físicos a serem tagueados: dict[Path, record]
         files_to_tag: Dict[Path, Dict[str, Any]] = {}
@@ -92,11 +87,13 @@ class BirdTagStage(PipelineStage):
 
             item_path_str = rec.get("item_path", "")
             item = items_by_path.get(item_path_str)
-            if not item:
-                try:
-                    item = items_by_path.get(str(Path(item_path_str).resolve()))
-                except Exception:
-                    item = None
+            if item is None and item_path_str and hasattr(project, "get_item_by_any_path"):
+                item = project.get_item_by_any_path(item_path_str)
+                if item is not None:
+                    items_by_path[item_path_str] = item
+                    for p_str in (item.organized_path, item.staging_path, item.original_path):
+                        if p_str:
+                            items_by_path[p_str] = item
 
             if item:
                 cat = getattr(item, "category", "") or ""
@@ -108,6 +105,7 @@ class BirdTagStage(PipelineStage):
                 if p.exists():
                     if p.suffix.lower() in GEO_WRITABLE_EXTS:
                         files_to_tag[p] = rec
+                        item_by_file_path[p] = item
                     else:
                         seen_non_writable.add(p.resolve())
                 b_id = getattr(item, "burst_id", "") or ""
@@ -127,6 +125,7 @@ class BirdTagStage(PipelineStage):
                 if sib_p.exists() and sib_p not in files_to_tag:
                     if sib_p.suffix.lower() in GEO_WRITABLE_EXTS:
                         files_to_tag[sib_p] = rec
+                        item_by_file_path[sib_p] = sib
                     else:
                         seen_non_writable.add(sib_p.resolve())
 
@@ -159,25 +158,54 @@ class BirdTagStage(PipelineStage):
         error_count = 0
         modified_paths: List[Path] = []
 
+        # Agrupar arquivos elegíveis por chave taxonômica para injeção em lote via ExifTool
+        grouped: Dict[Tuple[str, str, str, str, str], List[Tuple[Path, Dict[str, Any]]]] = {}
+        for file_path, rec in files_to_tag.items():
+            tax_key = _extract_bird_taxonomy(rec)
+            grouped.setdefault(tax_key, []).append((file_path, rec))
+
         with Live(
             PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, "Carregando...", "Iniciando"),
             console=console,
             refresh_per_second=4
         ) as live:
-            for file_path, rec in files_to_tag.items():
-                live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, file_path.name, "Injetando EXIF/IPTC..."))
+            for _tax_key, entries in grouped.items():
+                group_paths = [fp for fp, _ in entries]
+                sample_rec = entries[0][1]
 
-                try:
-                    ok = apply_bird_metadata(file_path, rec, extra_keywords=extra_geo_tags)
-                    if ok:
-                        success_count += 1
-                        modified_paths.append(file_path)
-                    else:
-                        error_count += 1
-                except Exception:
-                    error_count += 1
-                finally:
-                    tracker.update(1)
+                if len(group_paths) > 1 and apply_bird_metadata is _DEFAULT_APPLY_BIRD_METADATA:
+                    species_label = sample_rec.get("species_common") or sample_rec.get("species_scientific") or "Ave"
+                    live.update(PipelineUI.generate_renderable(
+                        tracker, stage_title, start_str, total_files, 0.0,
+                        f"{species_label} ({len(group_paths)} fotos)",
+                        "Injetando EXIF/IPTC em lote..."
+                    ))
+                    try:
+                        succeeded, failed = apply_bird_metadata_batch(
+                            group_paths, sample_rec, extra_keywords=extra_geo_tags
+                        )
+                        success_count += len(succeeded)
+                        error_count += len(failed)
+                        modified_paths.extend(succeeded)
+                    except Exception:
+                        error_count += len(group_paths)
+                    finally:
+                        tracker.update(len(group_paths))
+                else:
+                    for file_path, rec in entries:
+                        live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, file_path.name, "Injetando EXIF/IPTC..."))
+
+                        try:
+                            ok = apply_bird_metadata(file_path, rec, extra_keywords=extra_geo_tags)
+                            if ok:
+                                success_count += 1
+                                modified_paths.append(file_path)
+                            else:
+                                error_count += 1
+                        except Exception:
+                            error_count += 1
+                        finally:
+                            tracker.update(1)
 
             live.update(PipelineUI.generate_renderable(tracker, stage_title, start_str, total_files, 0.0, "Concluído", "Finalizando"))
 
@@ -187,12 +215,9 @@ class BirdTagStage(PipelineStage):
                 for file_path in modified_paths:
                     if not file_path.exists():
                         continue
-                    it = items_by_path.get(str(file_path))
-                    if it is None:
-                        try:
-                            it = items_by_path.get(str(file_path.resolve()))
-                        except Exception:
-                            it = None
+                    it = item_by_file_path.get(file_path) or items_by_path.get(str(file_path))
+                    if it is None and hasattr(project, "get_item_by_any_path"):
+                        it = project.get_item_by_any_path(str(file_path))
                     if it is None:
                         continue
                     if it.original_path in seen_saved_keys:

@@ -85,6 +85,52 @@ def _validate_bird_record(rec: Dict[str, Any], min_confidence: float) -> Optiona
 
     return rec
 
+def build_bird_ident_map(project: Optional[Any]) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Pré-carrega todas as identificações de aves do projeto em um índice O(1) por caminho e nome."""
+    if project is None or not hasattr(project, "list_bird_identifications"):
+        return None
+    try:
+        records = project.list_bird_identifications()
+    except Exception:
+        return None
+
+    ident_map: Dict[str, Dict[str, Any]] = {}
+    for rec in records:
+        raw_path = str(rec.get("item_path") or "")
+        if not raw_path:
+            continue
+        ident_map[raw_path] = rec
+        try:
+            ident_map[str(Path(raw_path).resolve())] = rec
+        except Exception:
+            pass
+        fname = Path(raw_path).name
+        if fname:
+            ident_map.setdefault(fname, rec)
+            ident_map.setdefault(fname.lower(), rec)
+    return ident_map
+
+
+def lookup_bird_ident_in_map(
+    bird_ident_map: Optional[Dict[str, Dict[str, Any]]],
+    cand_path: str,
+) -> Optional[Dict[str, Any]]:
+    """Consulta um caminho no mapa pré-carregado de identificações de aves."""
+    if not bird_ident_map or not cand_path:
+        return None
+    c_str = str(cand_path)
+    rec = bird_ident_map.get(c_str)
+    if not rec:
+        try:
+            rec = bird_ident_map.get(str(Path(c_str).resolve()))
+        except Exception:
+            pass
+    if not rec:
+        p_name = Path(c_str).name
+        rec = bird_ident_map.get(p_name) or bird_ident_map.get(p_name.lower())
+    return rec
+
+
 def resolve_item_bird_info(
     item: ProjectItem,
     project: Optional[Any] = None,
@@ -101,14 +147,7 @@ def resolve_item_bird_info(
     # 1. Consulta em mapa fornecido explicitamente
     if bird_ident_map:
         for c in clean_cands:
-            rec = bird_ident_map.get(str(c))
-            if not rec:
-                try:
-                    rec = bird_ident_map.get(str(Path(c).resolve()))
-                except Exception:
-                    pass
-            if not rec:
-                rec = bird_ident_map.get(Path(c).name)
+            rec = lookup_bird_ident_in_map(bird_ident_map, c)
             if rec:
                 validated = _validate_bird_record(rec, min_confidence)
                 if validated:
@@ -232,11 +271,21 @@ def group_videos_into_sessions(
     bird_groups: Dict[Tuple[str, str], List[ProjectItem]] = defaultdict(list)
     remaining_items: List[ProjectItem] = []
 
+    effective_map = bird_ident_map
+    effective_project = project
+    if effective_map is None and project is not None and hasattr(project, "list_bird_identifications"):
+        preloaded = build_bird_ident_map(project)
+        if preloaded is not None:
+            effective_map = preloaded
+            effective_project = None
+    elif effective_map is not None:
+        effective_project = None
+
     for it in items:
         b_info = resolve_item_bird_info(
             it,
-            project=project,
-            bird_ident_map=bird_ident_map,
+            project=effective_project,
+            bird_ident_map=effective_map,
             min_confidence=min_species_confidence
         )
         if b_info:

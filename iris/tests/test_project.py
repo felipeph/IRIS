@@ -313,4 +313,76 @@ def test_project_burst_id_persistence_and_groups(mock_projects_dir):
     assert "" not in groups
 
 
+def test_get_burst_groups_uses_sql_filter_and_path_indexes_exist(mock_projects_dir):
+    """Valida que get_burst_groups filtra diretamente no SQL e que índices de caminho existem em items."""
+    p = create_project("test_burst_sql_and_indexes", "X:\\src")
+
+    items = [
+        ProjectItem(f"/orig/tl_{i}.jpg", f"/stg/tl_{i}.jpg", category="timelapse", burst_id="")
+        for i in range(100)
+    ]
+    for i in range(3):
+        items.append(
+            ProjectItem(
+                f"/orig/burst_{i}.jpg",
+                f"/stg/burst_{i}.jpg",
+                category="rajada",
+                burst_id="rajada_2026-10-25_08-00-00",
+            )
+        )
+    p.save_items_batch(items)
+
+    with patch.object(p, "get_items", side_effect=AssertionError("get_burst_groups não deve chamar get_items()!")):
+        groups = p.get_burst_groups()
+
+    assert list(groups.keys()) == ["rajada_2026-10-25_08-00-00"]
+    assert len(groups["rajada_2026-10-25_08-00-00"]) == 3
+
+    with sqlite3.connect(p._project_db_file) as conn:
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='items'"
+            ).fetchall()
+        }
+    assert "idx_items_organized_path" in indexes
+    assert "idx_items_staging_path" in indexes
+    assert "idx_items_burst_id" in indexes
+
+
+def test_get_item_by_any_path_indexed_lookup(mock_projects_dir, tmp_path):
+    """Valida recuperação por original_path, staging_path e organized_path, inclusive dentro de transação."""
+    p = create_project("test_any_path_lookup", str(tmp_path))
+
+    orig_p = tmp_path / "orig" / "foto.jpg"
+    stg_p = tmp_path / "stg" / "foto_stg.jpg"
+    org_p = tmp_path / "org" / "foto_org.jpg"
+    org_p.parent.mkdir(parents=True, exist_ok=True)
+    org_p.write_bytes(b"img")
+
+    item = ProjectItem(
+        original_path=str(orig_p),
+        staging_path=str(stg_p),
+        organized_path=str(org_p),
+        status="organized",
+    )
+    p.save_item(item)
+
+    for candidate in (str(orig_p), str(stg_p), str(org_p), str(org_p.resolve())):
+        found = p.get_item_by_any_path(candidate)
+        assert found is not None
+        assert found.original_path == str(orig_p)
+
+    assert p.get_item_by_any_path(str(tmp_path / "inexistente.jpg")) is None
+    assert p.get_item_by_any_path("") is None
+
+    # Também funciona dentro de transação ativa (SAVEPOINT / active_conn)
+    tx_org = tmp_path / "org" / "tx_foto.jpg"
+    with p.transaction():
+        p.save_item(ProjectItem(str(tmp_path / "orig" / "tx.jpg"), str(tmp_path / "stg" / "tx.jpg"), organized_path=str(tx_org)))
+        found_tx = p.get_item_by_any_path(str(tx_org))
+        assert found_tx is not None
+        assert found_tx.organized_path == str(tx_org)
+
+
 

@@ -401,14 +401,7 @@ class ProjectBirdsMixin:
             try:
                 from src.core.config import config
                 from src.modules.bird_id.action import apply_bird_physical_move, apply_bird_metadata, _sync_item_hash
-                item = None
-                for it in self.get_items():
-                    for p in [it.organized_path, it.staging_path, it.original_path]:
-                        if p and (p == old_db_path or Path(p).resolve() == Path(old_db_path).resolve()):
-                            item = it
-                            break
-                    if item:
-                        break
+                item = self.get_item_by_any_path(old_db_path)
 
                 if item:
                     bird_cfg = dict(config.get("modules.bird_id", {}))
